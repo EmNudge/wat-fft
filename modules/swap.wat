@@ -1,0 +1,6 @@
+  (func $swap (export "swap") (param $a i32) (param $b i32)
+    (local $temp f64)
+    (local.set $temp (f64.load (local.get $a)))
+    (f64.store (local.get $a) (f64.load (local.get $b)))
+    (f64.store (local.get $b) (local.get $temp))
+  )
