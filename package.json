@@ -8,11 +8,12 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "npm run test:add && npm run test:sub && npm run test:swap && npm run test:reverse_bits && npm run test:combined",
+    "test": "npm run test:add && npm run test:sub && npm run test:swap && npm run test:reverse_bits && npm run test:math_trig && npm run test:combined",
     "test:add": "node tests/add.test.js",
     "test:sub": "node tests/sub.test.js",
     "test:swap": "node tests/swap.test.js",
     "test:reverse_bits": "node tests/reverse_bits.test.js",
+    "test:math_trig": "node tests/math_trig.test.js",
     "test:combined": "node tests/combined.test.js",
     "glue": "node glue.js"
   },

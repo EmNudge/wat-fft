@@ -26,42 +26,79 @@
   (func $cos (export "cos") (param $x f64) (result f64)
     (local $normalized_x f64)
     (local $x_squared f64)
-    (local $x_fourth f64)
+    (local $term f64)
+    (local $result f64)
 
     (local.set $normalized_x (call $normalize_angle (local.get $x)))
-
-    ;; Taylor series for cos(x) = 1 - x^2/2! + x^4/4!
     (local.set $x_squared (f64.mul (local.get $normalized_x) (local.get $normalized_x)))
-    (local.set $x_fourth (f64.mul (local.get $x_squared) (local.get $x_squared)))
 
-    (f64.sub
-      (f64.add
-        (f64.const 1)
-        (f64.div (local.get $x_fourth) (f64.const 24)) ;; 4!
-      )
-      (f64.div (local.get $x_squared) (f64.const 2))  ;; 2!
-    )
+    ;; Taylor series for cos(x) = 1 - x^2/2! + x^4/4! - x^6/6! + x^8/8! - x^10/10! + x^12/12!
+    (local.set $result (f64.const 1))
+
+    ;; - x^2/2!
+    (local.set $term (f64.div (local.get $x_squared) (f64.const 2)))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^4/4!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 12))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    ;; - x^6/6!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 30))))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^8/8!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 56))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    ;; - x^10/10!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 90))))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^12/12!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 132))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    (local.get $result)
   )
 
   (func $sin (export "sin") (param $x f64) (result f64)
     (local $normalized_x f64)
     (local $x_squared f64)
-    (local $x_cubed f64)
-    (local $x_fifth f64)
+    (local $term f64)
+    (local $result f64)
 
     (local.set $normalized_x (call $normalize_angle (local.get $x)))
-
-    ;; Taylor series for sin(x) = x - x^3/3! + x^5/5!
     (local.set $x_squared (f64.mul (local.get $normalized_x) (local.get $normalized_x)))
-    (local.set $x_cubed (f64.mul (local.get $x_squared) (local.get $normalized_x)))
-    (local.set $x_fifth (f64.mul (local.get $x_cubed) (local.get $x_squared)))
 
-    (f64.sub
-      (f64.add
-        (local.get $normalized_x)
-        (f64.div (local.get $x_fifth) (f64.const 120)) ;; 5!
-      )
-      (f64.div (local.get $x_cubed) (f64.const 6))  ;; 3!
-    )
+    ;; Taylor series for sin(x) = x - x^3/3! + x^5/5! - x^7/7! + x^9/9! - x^11/11! + x^13/13!
+    (local.set $result (local.get $normalized_x))
+    (local.set $term (local.get $normalized_x))
+
+    ;; - x^3/3!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 6))))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^5/5!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 20))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    ;; - x^7/7!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 42))))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^9/9!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 72))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    ;; - x^11/11!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 110))))
+    (local.set $result (f64.sub (local.get $result) (local.get $term)))
+
+    ;; + x^13/13!
+    (local.set $term (f64.mul (local.get $term) (f64.div (local.get $x_squared) (f64.const 156))))
+    (local.set $result (f64.add (local.get $result) (local.get $term)))
+
+    (local.get $result)
   )
 )
