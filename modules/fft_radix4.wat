@@ -292,6 +292,10 @@
 
   ;; Mixed Radix-4/Radix-2 FFT for any power of 2
   ;; Uses bit-reversal and combines Radix-4 stages with optional Radix-2 cleanup
+  ;;
+  ;; Key insight: bit-reversal creates a consistent pattern where at each radix-4 stage,
+  ;; the sub-DFT groups are arranged as G_0, G_2, G_1, G_3 instead of G_0, G_1, G_2, G_3.
+  ;; We compensate by swapping load positions at quarter and 2*quarter for ALL stages.
   (func $fft_radix4_mixed (param $n i32) (param $log2n i32)
     (local $size i32)
     (local $half i32)
@@ -331,7 +335,7 @@
             (br $r2_loop)
           )
         )
-        ;; Start Radix-4 stages from size=8 (combining what would be size=4 Radix-2)
+        ;; Start Radix-4 stages from size=8
         (local.set $size (i32.const 8))
       )
       (else
@@ -340,7 +344,9 @@
       )
     )
 
-    ;; Radix-4 stages
+    ;; Radix-4 stages with swapped addressing to compensate for bit-reversal order
+    ;; Bit-reversal creates arrangement: G_0, G_2, G_1, G_3 at positions 0, quarter, 2*quarter, 3*quarter
+    ;; We load from 0, 2*quarter, quarter, 3*quarter to get G_0, G_1, G_2, G_3 order
     (block $done_r4
       (loop $r4_loop
         (br_if $done_r4 (i32.gt_u (local.get $size) (local.get $n)))
@@ -358,13 +364,13 @@
               (loop $k_loop
                 (br_if $done_k (i32.ge_u (local.get $k) (local.get $quarter)))
 
-                ;; Element addresses
+                ;; Element addresses with swap: i1 and i2 are swapped to correct for bit-reversal order
                 (local.set $i0 (i32.shl (i32.add (local.get $group_start) (local.get $k)) (i32.const 4)))
-                (local.set $i1 (i32.add (local.get $i0) (i32.shl (local.get $quarter) (i32.const 4))))
-                (local.set $i2 (i32.add (local.get $i1) (i32.shl (local.get $quarter) (i32.const 4))))
-                (local.set $i3 (i32.add (local.get $i2) (i32.shl (local.get $quarter) (i32.const 4))))
+                (local.set $i1 (i32.add (local.get $i0) (i32.shl (local.get $quarter) (i32.const 5)))) ;; +2*quarter*16 (swapped)
+                (local.set $i2 (i32.add (local.get $i0) (i32.shl (local.get $quarter) (i32.const 4)))) ;; +quarter*16 (swapped)
+                (local.set $i3 (i32.add (local.get $i0) (i32.mul (local.get $quarter) (i32.const 48)))) ;; +3*quarter*16
 
-                ;; Load elements
+                ;; Load elements (now in correct G_0, G_1, G_2, G_3 order)
                 (local.set $x0 (v128.load (local.get $i0)))
                 (local.set $x1 (v128.load (local.get $i1)))
                 (local.set $x2 (v128.load (local.get $i2)))
@@ -394,9 +400,10 @@
                 (local.set $t2 (f64x2.add (local.get $x1) (local.get $x3)))
                 (local.set $t3 (f64x2.sub (local.get $x1) (local.get $x3)))
 
+                ;; Store outputs with same swap pattern (to maintain consistency for next stage)
                 (v128.store (local.get $i0) (f64x2.add (local.get $t0) (local.get $t2)))
-                (v128.store (local.get $i1) (f64x2.add (local.get $t1) (call $mul_neg_j (local.get $t3))))
-                (v128.store (local.get $i2) (f64x2.sub (local.get $t0) (local.get $t2)))
+                (v128.store (local.get $i2) (f64x2.add (local.get $t1) (call $mul_neg_j (local.get $t3)))) ;; store to i2 (was quarter)
+                (v128.store (local.get $i1) (f64x2.sub (local.get $t0) (local.get $t2))) ;; store to i1 (was 2*quarter)
                 (v128.store (local.get $i3) (f64x2.add (local.get $t1) (call $mul_pos_j (local.get $t3))))
 
                 (local.set $k (i32.add (local.get $k) (i32.const 1)))
