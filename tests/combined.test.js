@@ -1,11 +1,11 @@
-import { loadWasm, runTest } from './utils.js';
+import { loadWasm, runTest } from "./utils.js";
 
 async function runAllTests() {
-  const wasm = await loadWasm('combined');
+  const wasm = await loadWasm("combined");
 
-  await runTest('Combined Module', async (assert) => {
-    assert.strictEqual(wasm.add(10, 5), 15, 'Add 10 + 5');
-    assert.strictEqual(wasm.sub(10, 5), 5, 'Sub 10 - 5');
+  await runTest("Combined Module", async (assert) => {
+    assert.strictEqual(wasm.add(10, 5), 15, "Add 10 + 5");
+    assert.strictEqual(wasm.sub(10, 5), 5, "Sub 10 - 5");
 
     // FFT tests
     const n = 4;
@@ -13,10 +13,14 @@ async function runAllTests() {
     const data = new Float64Array(memory.buffer, 0, n * 2);
 
     // Input: [1, 1, 1, 1] (as complex numbers)
-    data[0] = 1; data[1] = 0;
-    data[2] = 1; data[3] = 0;
-    data[4] = 1; data[5] = 0;
-    data[6] = 1; data[7] = 0;
+    data[0] = 1;
+    data[1] = 0;
+    data[2] = 1;
+    data[3] = 0;
+    data[4] = 1;
+    data[5] = 0;
+    data[6] = 1;
+    data[7] = 0;
 
     wasm.fft(n);
 
@@ -28,8 +32,14 @@ async function runAllTests() {
 
     for (let i = 0; i < n; i++) {
       const tolerance = 0.01;
-      assert.ok(Math.abs(results[i * 2] - expected_real_4[i]) < tolerance, `FFT N=4 Real[${i}]: ${results[i * 2]} ≈ ${expected_real_4[i]}`);
-      assert.ok(Math.abs(results[i * 2 + 1] - expected_imag_4[i]) < tolerance, `FFT N=4 Imag[${i}]: ${results[i * 2 + 1]} ≈ ${expected_imag_4[i]}`);
+      assert.ok(
+        Math.abs(results[i * 2] - expected_real_4[i]) < tolerance,
+        `FFT N=4 Real[${i}]: ${results[i * 2]} ≈ ${expected_real_4[i]}`,
+      );
+      assert.ok(
+        Math.abs(results[i * 2 + 1] - expected_imag_4[i]) < tolerance,
+        `FFT N=4 Imag[${i}]: ${results[i * 2 + 1]} ≈ ${expected_imag_4[i]}`,
+      );
     }
 
     const n_8 = 8;
@@ -56,8 +66,14 @@ async function runAllTests() {
     // FFT accuracy with quadrant-reduced Taylor series
     for (let i = 0; i < n_8; i++) {
       const tolerance = 0.01; // Tight tolerance - quadrant reduction gives high accuracy
-      assert.ok(Math.abs(results_8[i * 2] - expected_real_8[i]) < tolerance, `FFT N=8 Real[${i}]: ${results_8[i * 2].toFixed(6)} ≈ ${expected_real_8[i].toFixed(6)}`);
-      assert.ok(Math.abs(results_8[i * 2 + 1] - expected_imag_8[i]) < tolerance, `FFT N=8 Imag[${i}]: ${results_8[i * 2 + 1].toFixed(6)} ≈ ${expected_imag_8[i].toFixed(6)}`);
+      assert.ok(
+        Math.abs(results_8[i * 2] - expected_real_8[i]) < tolerance,
+        `FFT N=8 Real[${i}]: ${results_8[i * 2].toFixed(6)} ≈ ${expected_real_8[i].toFixed(6)}`,
+      );
+      assert.ok(
+        Math.abs(results_8[i * 2 + 1] - expected_imag_8[i]) < tolerance,
+        `FFT N=8 Imag[${i}]: ${results_8[i * 2 + 1].toFixed(6)} ≈ ${expected_imag_8[i].toFixed(6)}`,
+      );
     }
   });
 }

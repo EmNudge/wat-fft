@@ -1,9 +1,9 @@
-import { loadWasm, runTest } from './utils.js';
+import { loadWasm, runTest } from "./utils.js";
 
 async function runAllTests() {
-  const wasm = await loadWasm('swap');
+  const wasm = await loadWasm("swap");
 
-  await runTest('Swap Module', async (assert) => {
+  await runTest("Swap Module", async (assert) => {
     const memory = wasm.memory;
     const f64View = new Float64Array(memory.buffer);
 
@@ -15,8 +15,8 @@ async function runAllTests() {
     wasm.swap(0, 8);
 
     // Check if values are swapped
-    assert.strictEqual(f64View[0], 4.56, 'f64View[0] should be 4.56');
-    assert.strictEqual(f64View[1], 1.23, 'f64View[1] should be 1.23');
+    assert.strictEqual(f64View[0], 4.56, "f64View[0] should be 4.56");
+    assert.strictEqual(f64View[1], 1.23, "f64View[1] should be 1.23");
   });
 }
 
