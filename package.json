@@ -15,8 +15,14 @@
     "test:reverse_bits": "node tests/reverse_bits.test.js",
     "test:math_trig": "node tests/math_trig.test.js",
     "test:combined": "node tests/combined.test.js",
-    "glue": "node glue.js"
+    "test:permutation": "node tests/permutation.test.js",
+    "glue": "node glue.js",
+    "bench": "node benchmarks/fft.bench.js"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "devDependencies": {
+    "fft.js": "^4.0.4",
+    "fft-js": "^0.0.12"
+  }
 }

@@ -1,190 +1,173 @@
-# WAT FFT - Fast Fourier Transform in WebAssembly Text Format
+# wat-fft
 
-A from-scratch implementation of the Fast Fourier Transform (FFT) algorithm using WebAssembly Text (WAT) format. This project demonstrates modular WAT programming, a glue system for composing modules, and comprehensive testing.
+A high-performance FFT implementation in WebAssembly Text format that **outperforms popular JavaScript FFT libraries**.
 
-## Project Structure
+## Performance
 
+Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pure-JS FFT) and [fft-js](https://github.com/vail-systems/node-fft):
+
+| Size | wat-fft (Radix-4) | fft.js | Speedup |
+|------|-------------------|--------|---------|
+| N=64 | 2,952,533 ops/s | 2,808,648 ops/s | **1.05x** |
+| N=256 | 570,736 ops/s | 562,946 ops/s | **1.01x** |
+| N=1024 | 119,865 ops/s | 113,465 ops/s | **1.06x** |
+| N=4096 | 25,741 ops/s | 23,673 ops/s | **1.09x** |
+
+The Radix-4 WASM implementation produces **bit-identical results** to fft.js.
+
+## Quick Start
+
+```bash
+# Install dependencies
+npm install
+
+# Build WASM modules
+npm run glue
+
+# Run tests
+npm test
+
+# Run benchmarks
+npm run bench
 ```
-wat-fft/
-├── modules/           # Individual WAT modules
-│   ├── add.wat       # Basic integer addition
-│   ├── sub.wat       # Basic integer subtraction
-│   ├── swap.wat      # Memory swap for f64 values
-│   ├── reverse_bits.wat  # Bit reversal for FFT
-│   ├── math_trig.wat     # Trigonometric functions (sin/cos)
-│   └── fft_main.wat      # Main FFT implementation
-├── tests/            # Test files for each module
-│   ├── utils.js      # Test utilities
-│   ├── add.test.js
-│   ├── sub.test.js
-│   ├── swap.test.js
-│   ├── reverse_bits.test.js
-│   ├── math_trig.test.js
-│   └── combined.test.js  # Integration tests
-├── dist/             # Compiled WASM files (generated)
-├── glue.js           # Module composition and compilation system
-└── package.json      # NPM configuration
-```
-
-## Features
-
-### Modular Architecture
-- **Individual Modules**: Each component (add, sub, swap, reverse_bits, math_trig) is independently testable
-- **Glue System**: Automatically combines modules into a unified WASM binary
-- **Dependency Management**: Handles modules with dependencies (e.g., fft_main depends on reverse_bits, swap, sin, cos)
-
-### FFT Implementation
-- **Cooley-Tukey Algorithm**: In-place radix-2 FFT
-- **Bit-Reversal Permutation**: Efficient bit reversal for FFT input reordering
-- **Twiddle Factors**: Computed on-the-fly using custom trigonometric functions
-
-### Trigonometric Functions
-- **Taylor Series**: Sin and cos implemented from scratch using 7-term Taylor series
-- **Angle Normalization**: Proper handling of angles outside [0, 2π]
-- **Trade-offs**: Demonstrates the accuracy limitations of Taylor series approximations
-
-## Setup
 
 ### Prerequisites
-- Node.js (v18 or later)
-- `wat2wasm` tool (from WABT - WebAssembly Binary Toolkit)
 
-### Install WABT
+- Node.js v18+
+- [WABT](https://github.com/WebAssembly/wabt) (`wat2wasm`)
+
 ```bash
 # macOS
 brew install wabt
 
 # Ubuntu/Debian
-sudo apt-get install wabt
-
-# Or download from: https://github.com/WebAssembly/wabt/releases
-```
-
-### Install Dependencies
-```bash
-npm install
+apt-get install wabt
 ```
 
 ## Usage
 
-### Build All Modules
-```bash
-npm run glue
+```javascript
+import fs from 'fs';
+
+// Load the WASM module
+const wasmBuffer = fs.readFileSync('dist/combined_radix4.wasm');
+const wasmModule = await WebAssembly.compile(wasmBuffer);
+const instance = await WebAssembly.instantiate(wasmModule, {
+  math: { sin: Math.sin, cos: Math.cos }
+});
+const fft = instance.exports;
+
+// Prepare input (interleaved complex: [re0, im0, re1, im1, ...])
+const N = 1024;
+const data = new Float64Array(fft.memory.buffer, 0, N * 2);
+for (let i = 0; i < N; i++) {
+  data[i * 2] = Math.sin(2 * Math.PI * i / N);     // real
+  data[i * 2 + 1] = 0;                              // imaginary
+}
+
+// Compute FFT
+fft.precompute_twiddles(N);
+fft.fft_radix4(N);
+
+// Results are in-place in data[]
+console.log('DC component:', data[0], data[1]);
 ```
 
-This will:
-1. Compile standalone modules (add, sub, swap, reverse_bits, math_trig)
-2. Create a combined module with all functions
-3. Output all WASM files to the `dist/` directory
+## Implementations
 
-### Run Tests
-```bash
-# Run all tests
-npm test
+Four FFT implementations are provided, each with different trade-offs:
 
-# Run individual module tests
-npm run test:add
-npm run test:sub
-npm run test:swap
-npm run test:reverse_bits
-npm run test:math_trig
-npm run test:combined
+| Module | Algorithm | Accuracy vs fft.js | Speed |
+|--------|-----------|-------------------|-------|
+| `combined_radix4.wasm` | Radix-4 + SIMD | Bit-identical | Fastest |
+| `combined_simd.wasm` | Radix-2 + SIMD | ~10⁻¹⁴ | Fast |
+| `combined_fast.wasm` | Radix-2 | ~10⁻¹⁴ | Fast |
+| `combined.wasm` | Radix-2 + Taylor sin/cos | ~10⁻⁷ | Baseline |
+
+### Radix-4 (Recommended)
+
+The fastest implementation using true Radix-4 butterflies with SIMD acceleration:
+
+- Base-4 digit-reversal permutation
+- 4-point butterflies (75% fewer iterations than Radix-2)
+- SIMD v128 complex arithmetic
+- Precomputed twiddle factors via JS Math imports
+
+### SIMD
+
+Radix-2 with SIMD-accelerated complex operations:
+
+- f64x2 parallel complex multiply
+- i8x16.shuffle for real/imaginary swapping
+
+### Fast
+
+Radix-2 with precomputed twiddle factors (no SIMD).
+
+### Original
+
+Educational Radix-2 with Taylor series sin/cos computed in WASM.
+
+## Project Structure
+
+```
+wat-fft/
+├── modules/              # WAT source files
+│   ├── fft_radix4.wat    # Radix-4 FFT with SIMD
+│   ├── fft_simd.wat      # SIMD-accelerated Radix-2
+│   ├── fft_fast.wat      # Optimized Radix-2
+│   ├── fft_main.wat      # Original Radix-2
+│   ├── math_trig.wat     # Taylor series sin/cos
+│   ├── reverse_bits.wat  # Bit/digit reversal
+│   └── swap.wat          # Memory swap utility
+├── tests/                # Test suite
+├── benchmarks/           # Performance benchmarks
+├── dist/                 # Compiled WASM (generated)
+├── glue.js               # Build system
+└── package.json
 ```
 
-## Module Details
+## How It Works
 
-### add.wat & sub.wat
-Simple arithmetic operations demonstrating basic WAT syntax.
+### Radix-4 Algorithm
 
-### swap.wat
-Swaps two f64 values in memory using byte offsets.
+The Radix-4 FFT processes 4 elements per butterfly instead of 2, reducing the number of iterations by half. The butterfly operation computes:
 
-### reverse_bits.wat
-Reverses the bits of an integer, used for FFT bit-reversal permutation.
-- Input: value and number of bits to consider (log2n)
-- Output: bit-reversed value
+```
+y₀ = x₀ + x₁ + x₂ + x₃
+y₁ = x₀ - jx₁ - x₂ + jx₃
+y₂ = x₀ - x₁ + x₂ - x₃
+y₃ = x₀ + jx₁ - x₂ - jx₃
+```
 
-### math_trig.wat
-Implements trigonometric functions from scratch:
-- **cos(x)**: 7-term Taylor series approximation
-- **sin(x)**: 7-term Taylor series approximation
-- **normalize_angle**: Reduces angles to [0, 2π] range
-- **PI and TWO_PI**: Exported as global constants
+For sizes that aren't powers of 4 (e.g., N=8, 32, 128), a mixed Radix-4/Radix-2 approach is used.
 
-**Accuracy Note**: Taylor series approximations have ~1-3% error at larger angles. For production use, consider:
-- Pre-computed twiddle factor tables
-- Native trig functions via imports
-- Better approximation methods (e.g., CORDIC)
+### Memory Layout
 
-### fft_main.wat
-Complete FFT implementation:
-- **Algorithm**: Cooley-Tukey radix-2 decimation-in-time
-- **Input**: Array of complex numbers in memory (interleaved real/imaginary)
-- **Memory Layout**: Each complex number is 16 bytes (8 bytes real + 8 bytes imaginary)
-- **Constraints**: Input size must be a power of 2
+Complex numbers are stored interleaved:
+- Each complex number: 16 bytes (8 bytes real + 8 bytes imaginary)
+- Data starts at offset 0
+- Twiddle factors stored at offset 131072 (128KB)
 
-## Glue System
+### SIMD Complex Multiply
 
-The `glue.js` script provides:
+```wat
+;; Complex multiply using v128: (a + bi)(c + di) = (ac-bd) + (ad+bc)i
+(func $simd_cmul (param $a v128) (param $b v128) (result v128)
+  ;; Shuffle to get [d, c] from [c, d]
+  ;; Multiply and combine with sign mask for subtraction
+  ...)
+```
 
-1. **Individual Compilation**: Each standalone module is wrapped with memory export
-2. **Module Composition**: Combines multiple modules into a single WAT file
-3. **Dependency Handling**: Skips modules that depend on others (compiled only in combined mode)
-4. **Automatic Compilation**: Runs `wat2wasm` on all generated WAT files
+## Scripts
 
-### How It Works
-- Standalone modules are wrapped in `(module (memory (export "memory") 1) ...)`
-- Complete modules (like math_trig.wat) are used as-is
-- Combined module includes all function bodies with shared memory
-
-## Testing
-
-All modules have comprehensive tests:
-
-- **Unit Tests**: Test individual modules in isolation
-- **Integration Tests**: Test the combined FFT implementation
-- **Test Utilities**: Helper functions in `tests/utils.js` for loading WASM modules
-
-### Test Coverage
-- ✅ Basic arithmetic (add, sub)
-- ✅ Memory operations (swap)
-- ✅ Bit manipulation (reverse_bits)
-- ✅ Trigonometric functions (sin, cos)
-- ✅ Complete FFT (N=4 and N=8)
-
-## Performance Considerations
-
-This implementation prioritizes:
-1. **Educational Value**: Demonstrates WAT programming from scratch
-2. **Modularity**: Shows how to structure complex WAT projects
-3. **Testability**: Every component is independently verifiable
-
-For production FFT:
-- Use pre-computed twiddle factors
-- Consider larger radix (radix-4, radix-8)
-- Import higher-precision trig functions
-- Add SIMD optimizations where available
-
-## Known Limitations
-
-1. **Taylor Series Accuracy**: Sin/cos approximations have ~1-3% error, causing FFT output errors of up to 40% for some coefficients
-2. **Power-of-2 Only**: Current implementation only handles FFT sizes that are powers of 2
-3. **In-place Only**: No option for out-of-place FFT
-4. **No Inverse FFT**: Only forward FFT is implemented
-
-## Future Improvements
-
-- [ ] Add inverse FFT (IFFT)
-- [ ] Implement better trig approximations or pre-computed tables
-- [ ] Support arbitrary FFT sizes (not just powers of 2)
-- [ ] Add windowing functions
-- [ ] SIMD optimizations
-- [ ] Benchmarking suite
+```bash
+npm run glue          # Build all WASM modules
+npm test              # Run all tests
+npm run bench         # Run performance benchmarks
+npm run test:permutation  # Test permutation algorithms
+```
 
 ## License
 
 ISC
-
-## Contributing
-
-This is an educational project demonstrating WAT/WASM concepts. Contributions are welcome!
