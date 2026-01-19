@@ -7,7 +7,38 @@ on:
     branches: [main]
 
 jobs:
-  build-and-test:
+  js-checks:
+    name: JS Checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check formatting
+        id: format
+        run: npm run format:check
+        continue-on-error: true
+
+      - name: Lint
+        id: lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Check results
+        if: steps.format.outcome == 'failure' || steps.lint.outcome == 'failure'
+        run: exit 1
+
+  wasm-build-test:
+    name: WASM Build & Test
     runs-on: ubuntu-latest
 
     steps:
@@ -29,20 +60,26 @@ jobs:
           rm -rf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux" "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
           wasm-tools --version
 
+      - name: Install wac-cli
+        env:
+          WAC_VERSION: "0.8.1"
+        run: |
+          curl -L "https://github.com/bytecodealliance/wac/releases/download/v${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl" -o wac
+          chmod +x wac
+          sudo mv wac /usr/local/bin/
+          wac --version
+
       - name: Install dependencies
         run: npm ci
 
-      - name: Check formatting
-        run: npm run format:check
-
-      - name: Lint
-        run: npm run lint
-
       - name: Build WASM modules
-        run: npm run glue
+        run: npm run build
 
       - name: Run unit tests
         run: npm test
+
+      - name: Run component tests
+        run: node --test tests/component.test.js
 
       - name: Run property tests
         run: npm run test:property

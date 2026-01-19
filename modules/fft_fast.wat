@@ -1,3 +1,4 @@
+(module
   ;; Fast FFT implementation with precomputed twiddle factors
   ;;
   ;; Uses Radix-2 Cooley-Tukey DIT algorithm with precomputed sin/cos
@@ -6,13 +7,25 @@
   ;; Memory layout:
   ;;   [0, N*16): Input/output complex data (16 bytes per complex: 8 real + 8 imag)
   ;;   [131072, ...): Precomputed twiddle factors
-  ;;
-  ;; Note: Requires imports to be provided by glue.js:
-  ;;   (import "math" "sin" (func $js_sin (param f64) (result f64)))
-  ;;   (import "math" "cos" (func $js_cos (param f64) (result f64)))
+
+  ;; Imports
+  (import "math" "sin" (func $js_sin (param f64) (result f64)))
+  (import "math" "cos" (func $js_cos (param f64) (result f64)))
+  (import "bits" "reverse_bits" (func $reverse_bits (param i32 i32) (result i32)))
+
+  ;; Memory (3 pages = 192KB)
+  (memory (export "memory") 3)
 
   (global $TWIDDLE_OFFSET i32 (i32.const 131072))
   (global $FFT_TWO_PI f64 (f64.const 6.283185307179586))
+
+  ;; Swap two f64 values in memory (inlined for simplicity)
+  (func $swap (param $a i32) (param $b i32)
+    (local $temp f64)
+    (local.set $temp (f64.load (local.get $a)))
+    (f64.store (local.get $a) (f64.load (local.get $b)))
+    (f64.store (local.get $b) (local.get $temp))
+  )
 
   ;; Precompute twiddle factors for FFT of size N
   ;; Must be called before fft_fast() with the same N
@@ -148,3 +161,4 @@
       (br_if $fft_loop (i32.le_u (local.get $size) (local.get $n)))
     )
   )
+) ;; end module

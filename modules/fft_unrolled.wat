@@ -1,8 +1,16 @@
-;; FFT with unrolled small-N kernels
-;; Specialized fully-unrolled implementations for N=4, 8, 16
-;; Falls back to regular Radix-4 for larger sizes
+(module
+  ;; FFT with unrolled small-N kernels
+  ;; Specialized fully-unrolled implementations for N=4, 8, 16
+  ;; Falls back to regular Radix-4 for larger sizes
 
-(global $TWIDDLE_OFFSET i32 (i32.const 131072))
+  ;; Imports
+  (import "math" "sin" (func $js_sin (param f64) (result f64)))
+  (import "math" "cos" (func $js_cos (param f64) (result f64)))
+
+  ;; Memory (3 pages = 192KB)
+  (memory (export "memory") 3)
+
+  (global $TWIDDLE_OFFSET i32 (i32.const 131072))
 (global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
 ;; SIGN_MASK: used to negate first element in complex multiply
 ;; Must be [sign_bit, 0] = [-0.0, 0.0] in i64x2 representation
@@ -589,3 +597,4 @@
   )
   (local.get $result)
 )
+) ;; end module

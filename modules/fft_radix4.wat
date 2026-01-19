@@ -1,3 +1,4 @@
+(module
   ;; High-performance Radix-4 FFT with SIMD
   ;;
   ;; Uses base-4 digit reversal permutation for pure Radix-4 structure
@@ -6,6 +7,14 @@
   ;; Memory layout:
   ;;   [0, N*16): Complex data [f64 real, f64 imag] per element
   ;;   [131072, ...): Precomputed twiddle factors
+
+  ;; Imports
+  (import "math" "sin" (func $js_sin (param f64) (result f64)))
+  (import "math" "cos" (func $js_cos (param f64) (result f64)))
+  (import "bits" "reverse_bits" (func $reverse_bits (param i32 i32) (result i32)))
+
+  ;; Memory (3 pages = 192KB)
+  (memory (export "memory") 3)
 
   (global $TWIDDLE_BASE i32 (i32.const 131072))
   (global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
@@ -442,3 +451,4 @@
       )
     )
   )
+) ;; end module
