@@ -28,13 +28,28 @@ async function runAllTests() {
     assert.strictEqual(wasm.PI.value, PI, 'PI constant');
     assert.strictEqual(wasm.TWO_PI.value, 2 * PI, '2π constant');
 
-    // Test for various angles - Taylor series is most accurate for small angles
+    // Test for various positive angles
     const testAngles = [0.1, 0.5, 1.0, PI / 4, PI / 3, PI / 6];
     testAngles.forEach(angle => {
-      const tolerance = angle < 2 ? 0.001 : 0.01; // More lenient for larger angles
+      const tolerance = 0.001;
       assert.ok(Math.abs(wasm.cos(angle) - Math.cos(angle)) < tolerance, `cos(${angle.toFixed(3)}) is accurate`);
       assert.ok(Math.abs(wasm.sin(angle) - Math.sin(angle)) < tolerance, `sin(${angle.toFixed(3)}) is accurate`);
     });
+
+    // Test negative angles (important for FFT twiddle factors)
+    const negativeAngles = [-PI / 4, -PI / 2, -3 * PI / 4, -PI, -5 * PI / 4];
+    negativeAngles.forEach(angle => {
+      const tolerance = 0.001;
+      assert.ok(Math.abs(wasm.cos(angle) - Math.cos(angle)) < tolerance, `cos(${angle.toFixed(3)}) is accurate`);
+      assert.ok(Math.abs(wasm.sin(angle) - Math.sin(angle)) < tolerance, `sin(${angle.toFixed(3)}) is accurate`);
+    });
+
+    // Test normalize_angle function (reduces to [-π, π])
+    assert.ok(Math.abs(wasm.normalize_angle(0) - 0) < 0.001, 'normalize_angle(0) = 0');
+    assert.ok(Math.abs(wasm.normalize_angle(2 * PI) - 0) < 0.001, 'normalize_angle(2π) = 0');
+    // -π and π are equivalent; implementation returns π for boundary
+    assert.ok(Math.abs(Math.abs(wasm.normalize_angle(-PI)) - PI) < 0.001, 'normalize_angle(-π) = ±π');
+    assert.ok(Math.abs(Math.abs(wasm.normalize_angle(3 * PI)) - PI) < 0.001, 'normalize_angle(3π) = ±π');
   });
 }
 
