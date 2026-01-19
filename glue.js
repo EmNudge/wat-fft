@@ -23,6 +23,7 @@ const dependentModules = [
   "fft_radix4.wat",
   "fft_stockham.wat",
   "fft_unrolled.wat",
+  "fft_real.wat",
 ];
 
 // Compile individual standalone modules
@@ -82,6 +83,7 @@ const originalModuleFiles = watFiles.filter(
       "fft_radix4.wat",
       "fft_stockham.wat",
       "fft_unrolled.wat",
+      "fft_real.wat",
     ].includes(f),
 );
 
@@ -266,6 +268,42 @@ try {
 } catch (error) {
   console.error(`  Error compiling Stockham module: ${error.stderr?.toString() || error.message}`);
   console.error("  WAT file saved for inspection:", stockhamOutputWatFile);
+}
+
+// Build Real FFT combined module (uses Stockham + real FFT post-processing)
+console.log("\nCompiling Real FFT combined module...");
+const realOutputWatFile = path.join(distDir, "combined_real.wat");
+const realOutputWasmFile = path.join(distDir, "combined_real.wasm");
+
+const realModuleFiles = ["fft_stockham.wat", "fft_real.wat"];
+
+let realCombinedWat = `(module
+  (import "math" "sin" (func $js_sin (param f64) (result f64)))
+  (import "math" "cos" (func $js_cos (param f64) (result f64)))
+  ;; 5 pages = 320KB: primary buffer + secondary buffer + complex twiddles + rfft twiddles
+  (memory (export "memory") 5)\n`;
+
+realModuleFiles.forEach((file) => {
+  const filePath = path.join(modulesDir, file);
+  const content = fs.readFileSync(filePath, "utf8");
+  realCombinedWat +=
+    content
+      .trim()
+      .split("\n")
+      .map((line) => `  ${line}`)
+      .join("\n") + "\n";
+});
+
+realCombinedWat += ")\n";
+
+fs.writeFileSync(realOutputWatFile, realCombinedWat);
+
+try {
+  execSync(`wasm-tools parse ${realOutputWatFile} -o ${realOutputWasmFile}`);
+  console.log(`  combined_real.wasm ✓`);
+} catch (error) {
+  console.error(`  Error compiling Real FFT module: ${error.stderr?.toString() || error.message}`);
+  console.error("  WAT file saved for inspection:", realOutputWatFile);
 }
 
 // Build Unrolled combined module

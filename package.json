@@ -19,6 +19,7 @@
     "test:combined": "node tests/combined.test.js",
     "test:permutation": "node tests/permutation.test.js",
     "test:fft": "node tests/fft.test.js",
+    "test:rfft": "node --test tests/rfft.test.js",
     "test:property": "node tests/fft.property.test.js",
     "test:butterfly": "node tools/butterfly_tester.js",
     "debug:stockham": "node tools/wasm_compare.js",
@@ -27,6 +28,7 @@
     "debug:ref": "node tools/stockham_reference.js",
     "glue": "node glue.js",
     "bench": "node benchmarks/fft.bench.js",
+    "bench:rfft": "node benchmarks/rfft.bench.js",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."
@@ -35,6 +37,8 @@
     "fast-check": "^4.5.3",
     "fft-js": "^0.0.12",
     "fft.js": "^4.0.4",
+    "fftw-js": "^0.1.4",
+    "kissfft-wasm": "^2.0.1",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.41.0"
   }
