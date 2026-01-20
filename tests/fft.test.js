@@ -9,32 +9,14 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  referenceDFT,
+  inputGenerators as sharedInputGenerators,
+  compareResults,
+} from "./dft-reference.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Reference DFT implementation for correctness verification
-function referenceDFT(real, imag) {
-  const n = real.length;
-  const outReal = new Float64Array(n);
-  const outImag = new Float64Array(n);
-
-  for (let k = 0; k < n; k++) {
-    let sumReal = 0;
-    let sumImag = 0;
-    for (let j = 0; j < n; j++) {
-      const angle = (-2 * Math.PI * k * j) / n;
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      sumReal += real[j] * cos - imag[j] * sin;
-      sumImag += real[j] * sin + imag[j] * cos;
-    }
-    outReal[k] = sumReal;
-    outImag[k] = sumImag;
-  }
-
-  return { real: outReal, imag: outImag };
-}
 
 // Load WASM module
 async function loadWasm(name) {
@@ -62,124 +44,69 @@ async function loadOriginalWasm() {
   return instance.exports;
 }
 
-// Test input generators
-const inputGenerators = {
-  impulse: (n) => {
-    const real = new Float64Array(n);
-    const imag = new Float64Array(n);
-    real[0] = 1;
-    return { real, imag, name: "impulse" };
-  },
+// Use shared input generators from dft-reference.js
+const inputGenerators = sharedInputGenerators;
 
-  constant: (n) => {
-    const real = new Float64Array(n).fill(1);
-    const imag = new Float64Array(n);
-    return { real, imag, name: "constant" };
-  },
-
-  singleFreq: (n) => {
-    const real = new Float64Array(n);
-    const imag = new Float64Array(n);
-    for (let i = 0; i < n; i++) {
-      real[i] = Math.cos((2 * Math.PI * i) / n);
-    }
-    return { real, imag, name: "single-freq" };
-  },
-
-  random: (n) => {
-    const real = new Float64Array(n);
-    const imag = new Float64Array(n);
-    // Use seeded random for reproducibility
-    let seed = 12345;
-    const rand = () => {
-      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
-      return (seed / 0x7fffffff) * 2 - 1;
-    };
-    for (let i = 0; i < n; i++) {
-      real[i] = rand();
-      imag[i] = rand();
-    }
-    return { real, imag, name: "random" };
-  },
-};
+// Standard test sizes (powers of 2)
+const STANDARD_SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
+// Large sizes supported by 3-page modules (192KB) - max ~4096 with twiddles
+const LARGE_SIZES_3PAGE = [2048, 4096];
+// Large sizes supported by 4-page modules (256KB) - max ~4096 with secondary buffer + twiddles
+const LARGE_SIZES_4PAGE = [2048, 4096];
+// All sizes for 3-page modules (radix4, fast, simd, unrolled)
+const SIZES_3PAGE = [...STANDARD_SIZES, ...LARGE_SIZES_3PAGE];
+// All sizes for 4-page modules (stockham) - needs secondary buffer
+const SIZES_4PAGE = [...STANDARD_SIZES, ...LARGE_SIZES_4PAGE];
 
 // FFT implementation definitions
+// Memory requirements per implementation:
+// - stockham: 4 pages (256KB) - needs secondary buffer for ping-pong
+// - radix4/fast/simd/unrolled: 3 pages (192KB)
+// - original: 1 page (64KB) - uses Taylor series, no twiddle precomputation
 const implementations = [
   {
     name: "stockham",
     wasmName: "stockham",
     fftFunc: "fft_stockham",
     precompute: true,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: SIZES_4PAGE,
   },
   {
     name: "radix4",
     wasmName: "radix4",
     fftFunc: "fft_radix4",
     precompute: true,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: SIZES_3PAGE,
   },
   {
     name: "unrolled",
     wasmName: "unrolled",
     fftFunc: "fft_unrolled",
     precompute: true,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: SIZES_3PAGE,
   },
   {
     name: "simd",
     wasmName: "simd",
     fftFunc: "fft_simd",
     precompute: true,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: SIZES_3PAGE,
   },
   {
     name: "fast",
     wasmName: "fast",
     fftFunc: "fft_fast",
     precompute: true,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: SIZES_3PAGE,
   },
   {
     name: "original",
     wasmName: null, // Special case
     fftFunc: "fft",
     precompute: false,
-    sizes: [4, 8, 16, 32, 64, 128, 256, 512, 1024],
+    sizes: STANDARD_SIZES, // Original uses Taylor series, keep smaller sizes
   },
 ];
-
-// Compare FFT output with reference DFT
-function compareResults(actual, expected, tolerance = 1e-10) {
-  const n = expected.real.length;
-  const errors = [];
-
-  for (let i = 0; i < n; i++) {
-    const realDiff = Math.abs(actual.real[i] - expected.real[i]);
-    const imagDiff = Math.abs(actual.imag[i] - expected.imag[i]);
-
-    if (realDiff > tolerance) {
-      errors.push({
-        index: i,
-        component: "real",
-        actual: actual.real[i],
-        expected: expected.real[i],
-        diff: realDiff,
-      });
-    }
-    if (imagDiff > tolerance) {
-      errors.push({
-        index: i,
-        component: "imag",
-        actual: actual.imag[i],
-        expected: expected.imag[i],
-        diff: imagDiff,
-      });
-    }
-  }
-
-  return errors;
-}
 
 // Run FFT and extract results
 function runFFT(wasm, fftFunc, input, n, precompute) {
@@ -267,8 +194,18 @@ async function runTests() {
 
         totalTests++;
 
-        // Use looser tolerance for original (Taylor series has ~1e-6 error)
-        const tolerance = impl.name === "original" ? 1e-5 : 1e-10;
+        // Use size-dependent tolerance to account for accumulated floating-point errors
+        // Larger FFT sizes accumulate more rounding errors through more butterfly stages
+        let tolerance;
+        if (impl.name === "original") {
+          tolerance = 1e-5; // Taylor series has ~1e-6 error
+        } else if (size >= 4096) {
+          tolerance = 1e-8; // Relaxed for very large sizes
+        } else if (size >= 2048) {
+          tolerance = 1e-9; // Slightly relaxed for large sizes
+        } else {
+          tolerance = 1e-10; // Standard tolerance
+        }
 
         if (testError) {
           failedTests.push({
