@@ -16,6 +16,91 @@ const witDir = path.join(__dirname, "wit", "worlds");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 });
 
+// ============================================================================
+// Shared WAT Processing Utilities
+// ============================================================================
+
+/**
+ * Check if content is a complete module (starts with "(module")
+ */
+function isCompleteModule(content) {
+  return content.trim().startsWith("(module");
+}
+
+/**
+ * Extract the body of a WAT module, removing the (module wrapper,
+ * imports, and memory declarations.
+ *
+ * @param {string} content - WAT source content
+ * @param {object} options - Processing options
+ * @param {boolean} options.removeImports - Remove all import statements (default: true)
+ * @param {boolean} options.removeMemory - Remove memory declarations (default: true)
+ * @param {string[]} options.filterImportNamespaces - Only remove imports from these namespaces (if set)
+ * @returns {string} Processed module body
+ */
+function extractModuleBody(content, options = {}) {
+  const { removeImports = true, removeMemory = true, filterImportNamespaces = null } = options;
+
+  let lines = content.trim().split("\n");
+
+  // Remove opening (module line
+  if (lines[0].trim().startsWith("(module")) {
+    lines.shift();
+  }
+
+  // Remove closing ) that matches the module
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const trimmed = lines[i].trim();
+    if (trimmed === ")" || trimmed === ") ;; end module") {
+      lines.splice(i, 1);
+      break;
+    }
+  }
+
+  // Filter out imports and memory based on options
+  lines = lines.filter((line) => {
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith("(import ")) {
+      if (filterImportNamespaces !== null) {
+        // Only remove imports from specific namespaces
+        return !filterImportNamespaces.some((ns) => trimmed.includes(`"${ns}"`));
+      }
+      if (removeImports) {
+        return false;
+      }
+    }
+
+    if (removeMemory && trimmed.startsWith("(memory ")) {
+      return false;
+    }
+
+    return true;
+  });
+
+  return lines.join("\n");
+}
+
+/**
+ * Indent content by a specified number of spaces
+ */
+function indent(content, spaces = 2) {
+  const prefix = " ".repeat(spaces);
+  return content
+    .split("\n")
+    .map((line) => (line.trim() ? prefix + line : line))
+    .join("\n");
+}
+
+/**
+ * Load a dependency module and prepare it for embedding
+ */
+function loadDependency(depName) {
+  const depPath = path.join(modulesDir, `${depName}.wat`);
+  const content = fs.readFileSync(depPath, "utf8");
+  return indent(content.trim(), 2);
+}
+
 // Module definitions
 const modules = {
   // Standalone modules - no dependencies, can be built as simple wasm or components
@@ -126,28 +211,6 @@ modules.standalone.forEach((mod) => {
 // Build combined FFT modules (legacy format - what glue.js did)
 console.log("\nBuilding combined FFT modules (legacy format)...");
 
-function isCompleteModule(content) {
-  return content.trim().startsWith("(module");
-}
-
-function extractModuleBody(content) {
-  // Remove (module wrapper and closing paren, preserving inner content
-  const lines = content.trim().split("\n");
-
-  // Remove first line if it's "(module"
-  if (lines[0].trim().startsWith("(module")) {
-    lines.shift();
-  }
-
-  // Remove last line if it's just ")" or ") ;; end module"
-  const lastLine = lines[lines.length - 1].trim();
-  if (lastLine === ")" || lastLine === ") ;; end module") {
-    lines.pop();
-  }
-
-  return lines.join("\n");
-}
-
 function buildCombinedModule(fft, outputName) {
   const srcPath = path.join(modulesDir, `${fft.name}.wat`);
   const content = fs.readFileSync(srcPath, "utf8");
@@ -156,35 +219,22 @@ function buildCombinedModule(fft, outputName) {
 
   if (isCompleteModule(content)) {
     // Module is already complete with imports and memory
-    // For legacy builds with deps, we need to inject the dependency code
     if (fft.deps.length === 0) {
       // No deps - use as-is
       combined = content;
     } else {
-      // Has deps - need to inject them into the module
-      let body = extractModuleBody(content);
+      // Has deps - extract body and inject dependency code
+      // Remove "bits" imports (will be replaced by actual dependency code)
+      let body = extractModuleBody(content, {
+        removeImports: false,
+        removeMemory: false,
+        filterImportNamespaces: ["bits"],
+      });
 
-      // Remove dependency imports (they'll be replaced by actual functions)
-      // Remove "bits" import for reverse_bits
-      body = body
-        .split("\n")
-        .filter((line) => !line.trim().startsWith('(import "bits"'))
-        .join("\n");
+      // Load and format dependencies
+      const deps = fft.deps.map((dep) => loadDependency(dep)).join("\n");
 
-      // Include dependencies
-      let deps = "";
-      for (const dep of fft.deps) {
-        const depPath = path.join(modulesDir, `${dep}.wat`);
-        const depContent = fs.readFileSync(depPath, "utf8");
-        deps +=
-          depContent
-            .trim()
-            .split("\n")
-            .map((l) => `  ${l}`)
-            .join("\n") + "\n";
-      }
-
-      // Find where to inject deps (after memory declaration)
+      // Inject deps after memory declaration
       const lines = body.split("\n");
       const memoryLineIdx = lines.findIndex((l) => l.includes("(memory"));
       if (memoryLineIdx >= 0) {
@@ -194,7 +244,7 @@ function buildCombinedModule(fft, outputName) {
       combined = `(module\n${lines.join("\n")}\n)\n`;
     }
   } else {
-    // Fragment - wrap with imports, memory, and deps (old behavior)
+    // Fragment - wrap with imports, memory, and deps
     let imports = "";
     if (fft.imports) {
       if (fft.imports.sin) {
@@ -205,27 +255,13 @@ function buildCombinedModule(fft, outputName) {
       }
     }
 
-    let deps = "";
-    for (const dep of fft.deps) {
-      const depPath = path.join(modulesDir, `${dep}.wat`);
-      const depContent = fs.readFileSync(depPath, "utf8");
-      deps +=
-        depContent
-          .trim()
-          .split("\n")
-          .map((l) => `  ${l}`)
-          .join("\n") + "\n";
-    }
-
-    const mainContent = content
-      .trim()
-      .split("\n")
-      .map((l) => `  ${l}`)
-      .join("\n");
+    const deps = fft.deps.map((dep) => loadDependency(dep)).join("\n");
+    const mainContent = indent(content.trim(), 2);
 
     combined = `(module
 ${imports}  (memory (export "memory") ${fft.memory})
-${deps}${mainContent}
+${deps}
+${mainContent}
 )
 `;
   }
@@ -248,74 +284,36 @@ modules.fft.forEach((fft) => {
 
 // Also build the original combined.wat (radix-2 with embedded trig)
 console.log("\nBuilding original combined module (radix-2 with embedded trig)...");
-let originalCombined = '(module\n  (memory (export "memory") 1)\n';
 
-// Extract body from complete modules, removing their wrapper/imports/memory
-function extractFunctionBody(content) {
-  let lines = content.split("\n");
+function buildOriginalCombined() {
+  let combined = '(module\n  (memory (export "memory") 1)\n';
 
-  // Find and remove the opening (module line
-  const moduleLineIdx = lines.findIndex((l) => l.trim().startsWith("(module"));
-  if (moduleLineIdx >= 0) {
-    lines.splice(moduleLineIdx, 1);
-  }
+  // math_trig.wat provides embedded sin/cos (Taylor series)
+  const mathTrigContent = fs.readFileSync(path.join(modulesDir, "math_trig.wat"), "utf8");
+  combined += indent(extractModuleBody(mathTrigContent), 2) + "\n";
 
-  // Find and remove the closing ) that matches the module
-  // It's typically the last line that is just ")" or ") ;; end module"
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const trimmed = lines[i].trim();
-    if (trimmed === ")" || trimmed === ") ;; end module") {
-      lines.splice(i, 1);
-      break;
-    }
-  }
+  // reverse_bits.wat - utility function used by fft_main
+  combined += loadDependency("reverse_bits") + "\n";
 
-  // Remove import and memory statements
-  lines = lines.filter((line) => {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("(import ")) return false;
-    if (trimmed.startsWith("(memory ")) return false;
+  // fft_main.wat - extract just the functions
+  const fftMainContent = fs.readFileSync(path.join(modulesDir, "fft_main.wat"), "utf8");
+  combined += indent(extractModuleBody(fftMainContent), 2) + "\n";
+
+  combined += ")\n";
+
+  fs.writeFileSync(path.join(distDir, "combined.wat"), combined);
+  if (
+    run(
+      `wasm-tools parse ${path.join(distDir, "combined.wat")} -o ${path.join(distDir, "combined.wasm")}`,
+    )
+  ) {
+    console.log("  combined.wasm ✓");
     return true;
-  });
-
-  return lines.join("\n");
+  }
+  return false;
 }
 
-// math_trig.wat provides embedded sin/cos (Taylor series)
-const mathTrigContent = fs.readFileSync(path.join(modulesDir, "math_trig.wat"), "utf8");
-originalCombined +=
-  extractFunctionBody(mathTrigContent)
-    .split("\n")
-    .map((l) => `  ${l}`)
-    .join("\n") + "\n";
-
-// reverse_bits.wat - utility function used by fft_main
-const reverseBitsContent = fs.readFileSync(path.join(modulesDir, "reverse_bits.wat"), "utf8");
-originalCombined +=
-  reverseBitsContent
-    .trim()
-    .split("\n")
-    .map((l) => `  ${l}`)
-    .join("\n") + "\n";
-
-// fft_main.wat now uses $sin/$cos from math_trig and $reverse_bits
-// Extract just the functions (skip imports/memory since it's now a complete module)
-const fftMainContent = fs.readFileSync(path.join(modulesDir, "fft_main.wat"), "utf8");
-originalCombined +=
-  extractFunctionBody(fftMainContent)
-    .split("\n")
-    .map((l) => `  ${l}`)
-    .join("\n") + "\n";
-
-originalCombined += ")\n";
-fs.writeFileSync(path.join(distDir, "combined.wat"), originalCombined);
-if (
-  run(
-    `wasm-tools parse ${path.join(distDir, "combined.wat")} -o ${path.join(distDir, "combined.wasm")}`,
-  )
-) {
-  console.log("  combined.wasm ✓");
-}
+buildOriginalCombined();
 
 // Build components (new format for testing with mocked dependencies)
 console.log("\nBuilding components (new format)...");
@@ -331,28 +329,41 @@ const exportRenames = {
   reverse_bits: "reverse-bits",
 };
 
+/**
+ * Apply export renames (snake_case to kebab-case) for component model
+ */
+function applyExportRenames(content, renames) {
+  let result = content;
+  for (const [snakeCase, kebabCase] of Object.entries(renames)) {
+    const exportRegex = new RegExp(`\\(export\\s+"${snakeCase}"\\)`, "g");
+    result = result.replace(exportRegex, `(export "${kebabCase}")`);
+  }
+  return result;
+}
+
+/**
+ * Replace import namespaces for component model ($root namespace)
+ */
+function convertToComponentImports(content) {
+  return content
+    .replace(/\(import\s+"math"\s+"([^"]+)"/g, '(import "$root" "$1"')
+    .replace(/\(import\s+"bits"\s+"reverse_bits"/g, '(import "$root" "reverse-bits"')
+    .replace(/\(import\s+"stockham"\s+"([^"]+)"/g, '(import "$root" "$1"');
+}
+
 // Generate component module from source WAT file
 function generateComponentModule(fft) {
   const srcPath = path.join(modulesDir, `${fft.name}.wat`);
-  let content = fs.readFileSync(srcPath, "utf8");
+  const content = fs.readFileSync(srcPath, "utf8");
 
-  // Rename exports from snake_case to kebab-case
-  let processedContent = content;
-  for (const [snakeCase, kebabCase] of Object.entries(exportRenames)) {
-    const exportRegex = new RegExp(`\\(export\\s+"${snakeCase}"\\)`, "g");
-    processedContent = processedContent.replace(exportRegex, `(export "${kebabCase}")`);
-  }
+  // Apply export renames
+  const renamedContent = applyExportRenames(content, exportRenames);
 
-  if (isCompleteModule(processedContent)) {
-    // Complete module - replace namespaces with "$root" for component model
-    let moduleWat = processedContent
-      .replace(/\(import\s+"math"\s+"([^"]+)"/g, '(import "$root" "$1"')
-      .replace(/\(import\s+"bits"\s+"reverse_bits"/g, '(import "$root" "reverse-bits"')
-      .replace(/\(import\s+"stockham"\s+"([^"]+)"/g, '(import "$root" "$1"');
-
-    return moduleWat;
+  if (isCompleteModule(renamedContent)) {
+    // Complete module - convert imports to component model format
+    return convertToComponentImports(renamedContent);
   } else {
-    // Fragment - wrap with imports, memory (old behavior)
+    // Fragment - wrap with component model imports and memory
     let imports = "";
     if (fft.imports?.cos) {
       imports += '  (import "$root" "cos" (func $js_cos (param f64) (result f64)))\n';
@@ -368,15 +379,9 @@ function generateComponentModule(fft) {
       imports += '  (import "$root" "swap" (func $swap (param i32 i32)))\n';
     }
 
-    const mainContent = processedContent
-      .trim()
-      .split("\n")
-      .map((l) => `  ${l}`)
-      .join("\n");
-
     return `(module
 ${imports}  (memory (export "memory") ${fft.memory})
-${mainContent}
+${indent(renamedContent.trim(), 2)}
 )
 `;
   }
@@ -429,19 +434,14 @@ function buildStandaloneComponent(name, witFile, worldName, exportRename = null)
   const componentPath = path.join(buildDir, `${name}.component.wasm`);
   const witPath = path.join(witDir, witFile);
 
-  // Read source and create module with kebab-case export
+  // Read source and apply export rename if needed
   let content = fs.readFileSync(srcPath, "utf8");
   if (exportRename) {
-    content = content.replace(
-      new RegExp(`\\(export "${exportRename.from}"\\)`),
-      `(export "${exportRename.to}")`,
-    );
+    content = applyExportRenames(content, { [exportRename.from]: exportRename.to });
   }
-  const moduleWat = `(module\n${content
-    .trim()
-    .split("\n")
-    .map((l) => `  ${l}`)
-    .join("\n")}\n)\n`;
+
+  // Wrap as module
+  const moduleWat = `(module\n${indent(content.trim(), 2)}\n)\n`;
   fs.writeFileSync(moduleWatPath, moduleWat);
 
   if (!run(`wasm-tools parse ${moduleWatPath} -o ${corePath}`)) return false;

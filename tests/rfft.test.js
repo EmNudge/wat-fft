@@ -12,31 +12,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { test, describe } from "node:test";
 import assert from "node:assert";
+import { referenceRealDFT, compareResults } from "./dft-reference.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-// Reference DFT for real input (returns only positive frequencies)
-function referenceRealDFT(real) {
-  const n = real.length;
-  const n2 = n / 2;
-  const outReal = new Float64Array(n2 + 1);
-  const outImag = new Float64Array(n2 + 1);
-
-  for (let k = 0; k <= n2; k++) {
-    let sumReal = 0;
-    let sumImag = 0;
-    for (let j = 0; j < n; j++) {
-      const angle = (-2 * Math.PI * k * j) / n;
-      sumReal += real[j] * Math.cos(angle);
-      sumImag += real[j] * Math.sin(angle);
-    }
-    outReal[k] = sumReal;
-    outImag[k] = sumImag;
-  }
-
-  return { real: outReal, imag: outImag };
-}
 
 // Load Real FFT WASM module
 async function loadRealWasm() {
@@ -122,42 +101,10 @@ function runComplexFFT(wasm, realInput) {
   return { real, imag };
 }
 
-// Compare results with tolerance
-function compareResults(actual, expected, tolerance = 1e-10) {
-  const n = expected.real.length;
-  const errors = [];
-
-  for (let i = 0; i < n; i++) {
-    const realDiff = Math.abs(actual.real[i] - expected.real[i]);
-    const imagDiff = Math.abs(actual.imag[i] - expected.imag[i]);
-
-    if (realDiff > tolerance) {
-      errors.push({
-        index: i,
-        component: "real",
-        actual: actual.real[i],
-        expected: expected.real[i],
-        diff: realDiff,
-      });
-    }
-    if (imagDiff > tolerance) {
-      errors.push({
-        index: i,
-        component: "imag",
-        actual: actual.imag[i],
-        expected: expected.imag[i],
-        diff: imagDiff,
-      });
-    }
-  }
-
-  return errors;
-}
-
 describe("Real FFT", async () => {
   const realWasm = await loadRealWasm();
   const stockhamWasm = await loadStockhamWasm();
-  const sizes = [8, 16, 32, 64, 128, 256, 512, 1024];
+  const sizes = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
   describe("Impulse response", () => {
     for (const n of sizes) {
