@@ -32,37 +32,22 @@ async function loadWasm(name) {
   return instance.exports;
 }
 
-// Load original WASM (different structure)
-async function loadOriginalWasm() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined.wasm");
-  if (!fs.existsSync(wasmPath)) {
-    return null;
-  }
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
-
 // Use shared input generators from dft-reference.js
 const inputGenerators = sharedInputGenerators;
 
 // Standard test sizes (powers of 2)
 const STANDARD_SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
-// Large sizes supported by 3-page modules (192KB) - max ~4096 with twiddles
-const LARGE_SIZES_3PAGE = [2048, 4096];
-// Large sizes supported by 4-page modules (256KB) - max ~4096 with secondary buffer + twiddles
-const LARGE_SIZES_4PAGE = [2048, 4096];
-// All sizes for 3-page modules (radix4, fast, simd, unrolled)
-const SIZES_3PAGE = [...STANDARD_SIZES, ...LARGE_SIZES_3PAGE];
+// Large sizes supported by modules - max ~4096 with twiddles
+const LARGE_SIZES = [2048, 4096];
+// All sizes for 3-page modules (fast)
+const SIZES_3PAGE = [...STANDARD_SIZES, ...LARGE_SIZES];
 // All sizes for 4-page modules (stockham) - needs secondary buffer
-const SIZES_4PAGE = [...STANDARD_SIZES, ...LARGE_SIZES_4PAGE];
+const SIZES_4PAGE = [...STANDARD_SIZES, ...LARGE_SIZES];
 
 // FFT implementation definitions
 // Memory requirements per implementation:
 // - stockham: 4 pages (256KB) - needs secondary buffer for ping-pong
-// - radix4/fast/simd/unrolled: 3 pages (192KB)
-// - original: 1 page (64KB) - uses Taylor series, no twiddle precomputation
+// - fast: 3 pages (192KB) - non-SIMD fallback
 const implementations = [
   {
     name: "stockham",
@@ -72,39 +57,11 @@ const implementations = [
     sizes: SIZES_4PAGE,
   },
   {
-    name: "radix4",
-    wasmName: "radix4",
-    fftFunc: "fft_radix4",
-    precompute: true,
-    sizes: SIZES_3PAGE,
-  },
-  {
-    name: "unrolled",
-    wasmName: "unrolled",
-    fftFunc: "fft_unrolled",
-    precompute: true,
-    sizes: SIZES_3PAGE,
-  },
-  {
-    name: "simd",
-    wasmName: "simd",
-    fftFunc: "fft_simd",
-    precompute: true,
-    sizes: SIZES_3PAGE,
-  },
-  {
     name: "fast",
     wasmName: "fast",
     fftFunc: "fft_fast",
     precompute: true,
     sizes: SIZES_3PAGE,
-  },
-  {
-    name: "original",
-    wasmName: null, // Special case
-    fftFunc: "fft",
-    precompute: false,
-    sizes: STANDARD_SIZES, // Original uses Taylor series, keep smaller sizes
   },
 ];
 
@@ -153,11 +110,7 @@ async function runTests() {
   // Load all WASM modules
   const modules = {};
   for (const impl of implementations) {
-    if (impl.wasmName === null) {
-      modules[impl.name] = await loadOriginalWasm();
-    } else {
-      modules[impl.name] = await loadWasm(impl.wasmName);
-    }
+    modules[impl.name] = await loadWasm(impl.wasmName);
     if (!modules[impl.name]) {
       console.log(`⚠ Skipping ${impl.name}: WASM not found`);
     }
@@ -197,9 +150,7 @@ async function runTests() {
         // Use size-dependent tolerance to account for accumulated floating-point errors
         // Larger FFT sizes accumulate more rounding errors through more butterfly stages
         let tolerance;
-        if (impl.name === "original") {
-          tolerance = 1e-5; // Taylor series has ~1e-6 error
-        } else if (size >= 4096) {
+        if (size >= 4096) {
           tolerance = 1e-8; // Relaxed for very large sizes
         } else if (size >= 2048) {
           tolerance = 1e-9; // Slightly relaxed for large sizes
@@ -284,7 +235,7 @@ async function testSingleImpl(implName, size, inputType = "random") {
     process.exit(1);
   }
 
-  const wasm = impl.wasmName === null ? await loadOriginalWasm() : await loadWasm(impl.wasmName);
+  const wasm = await loadWasm(impl.wasmName);
 
   if (!wasm) {
     console.error(`Could not load WASM for ${implName}`);
@@ -305,7 +256,7 @@ async function testSingleImpl(implName, size, inputType = "random") {
   console.log("Index".padEnd(8) + "Expected".padEnd(30) + "Actual".padEnd(30) + "Match");
   console.log("-".repeat(80));
 
-  const tolerance = impl.name === "original" ? 1e-6 : 1e-10;
+  const tolerance = 1e-10;
   let allMatch = true;
 
   for (let i = 0; i < Math.min(8, size); i++) {
@@ -343,12 +294,12 @@ if (args.length === 0) {
   console.log("  node fft.test.js --impl NAME SIZE [INPUT]");
   console.log("                                      Test single implementation");
   console.log("");
-  console.log("Implementations: stockham, radix4, unrolled, simd, fast, original");
+  console.log("Implementations: stockham, fast");
   console.log("Input types: impulse, constant, singleFreq, random");
   console.log("");
   console.log("Examples:");
   console.log("  node fft.test.js --impl stockham 64 random");
-  console.log("  node fft.test.js --impl radix4 256 impulse");
+  console.log("  node fft.test.js --impl fast 256 impulse");
 } else {
   console.error("Unknown arguments. Use --help for usage.");
   process.exit(1);

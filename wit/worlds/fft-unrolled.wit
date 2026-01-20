@@ -1,8 +1,0 @@
-package wat-fft:fft-unrolled@0.1.0;
-
-world fft-unrolled {
-    import sin: func(x: f64) -> f64;
-    import cos: func(x: f64) -> f64;
-    export precompute-twiddles: func(n: u32);
-    export fft-unrolled: func(n: u32);
-}

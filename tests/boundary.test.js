@@ -57,9 +57,6 @@ describe("Boundary Conditions", async () => {
   // Test multiple implementations
   const implementations = [
     { name: "stockham", fftFunc: "fft_stockham" },
-    { name: "radix4", fftFunc: "fft_radix4" },
-    { name: "unrolled", fftFunc: "fft_unrolled" },
-    { name: "simd", fftFunc: "fft_simd" },
     { name: "fast", fftFunc: "fft_fast" },
   ];
 
