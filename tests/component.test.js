@@ -17,8 +17,6 @@ import {
   loadCoreModule,
   loadFFTComponent,
   createStockhamImports,
-  createRadix4Imports,
-  createSimdImports,
   createFastImports,
   writeComplexArray,
   readComplexArray,
@@ -206,120 +204,7 @@ if (coreModuleExists("fft_stockham")) {
 }
 console.log("");
 
-// Test 2: Load radix4 (now self-contained with internal reverse-bits)
-console.log("Testing fft_radix4 (self-contained module)...");
-
-if (coreModuleExists("fft_radix4")) {
-  await testAsync("radix4: loads with createRadix4Imports", async () => {
-    const imports = createRadix4Imports();
-    const instance = await loadCoreModule("fft_radix4", imports);
-    assertEqual(typeof instance.exports["fft-radix4"], "function");
-  });
-
-  await testAsync("radix4: impulse response", async () => {
-    const imports = createRadix4Imports();
-    const instance = await loadCoreModule("fft_radix4", imports);
-    const memory = instance.exports.memory;
-    const precompute = instance.exports["precompute-twiddles"];
-    const fft = instance.exports["fft-radix4"];
-
-    const n = 8;
-    writeComplexArray(memory, [1, 0, 0, 0, 0, 0, 0, 0]);
-
-    precompute(n);
-    fft(n);
-
-    const result = readComplexArray(memory, n);
-    // Impulse -> all ones in frequency domain
-    for (let i = 0; i < n; i++) {
-      assertApprox(result.real[i], 1, 1e-10, `real[${i}]`);
-      assertApprox(result.imag[i], 0, 1e-10, `imag[${i}]`);
-    }
-  });
-
-  await testAsync("radix4: random input matches reference DFT", async () => {
-    const imports = createRadix4Imports();
-    const instance = await loadCoreModule("fft_radix4", imports);
-    const memory = instance.exports.memory;
-    const precompute = instance.exports["precompute-twiddles"];
-    const fft = instance.exports["fft-radix4"];
-
-    const n = 16;
-    const real = Array.from({ length: n }, () => Math.random() * 2 - 1);
-    const imag = Array.from({ length: n }, () => Math.random() * 2 - 1);
-
-    writeComplexArray(memory, real, imag);
-    precompute(n);
-    fft(n);
-
-    const result = readComplexArray(memory, n);
-    const expected = referenceDFT(real, imag);
-
-    assertArrayApprox(result.real, Array.from(expected.real), 1e-10, "real");
-    assertArrayApprox(result.imag, Array.from(expected.imag), 1e-10, "imag");
-  });
-} else {
-  console.log("  (skipped - fft_radix4.core.wasm not found)");
-}
-console.log("");
-
-// Test 3: Load simd (now self-contained with internal reverse-bits)
-console.log("Testing fft_simd (self-contained module)...");
-
-if (coreModuleExists("fft_simd")) {
-  await testAsync("simd: loads with createSimdImports", async () => {
-    const imports = createSimdImports();
-    const instance = await loadCoreModule("fft_simd", imports);
-    assertEqual(typeof instance.exports["fft-simd"], "function");
-  });
-
-  await testAsync("simd: impulse response", async () => {
-    const imports = createSimdImports();
-    const instance = await loadCoreModule("fft_simd", imports);
-    const memory = instance.exports.memory;
-    const precompute = instance.exports["precompute-twiddles"];
-    const fft = instance.exports["fft-simd"];
-
-    const n = 8;
-    writeComplexArray(memory, [1, 0, 0, 0, 0, 0, 0, 0]);
-
-    precompute(n);
-    fft(n);
-
-    const result = readComplexArray(memory, n);
-    for (let i = 0; i < n; i++) {
-      assertApprox(result.real[i], 1, 1e-10, `real[${i}]`);
-      assertApprox(result.imag[i], 0, 1e-10, `imag[${i}]`);
-    }
-  });
-
-  await testAsync("simd: random input matches reference DFT", async () => {
-    const imports = createSimdImports();
-    const instance = await loadCoreModule("fft_simd", imports);
-    const memory = instance.exports.memory;
-    const precompute = instance.exports["precompute-twiddles"];
-    const fft = instance.exports["fft-simd"];
-
-    const n = 16;
-    const real = Array.from({ length: n }, () => Math.random() * 2 - 1);
-    const imag = Array.from({ length: n }, () => Math.random() * 2 - 1);
-
-    writeComplexArray(memory, real, imag);
-    precompute(n);
-    fft(n);
-
-    const result = readComplexArray(memory, n);
-    const expected = referenceDFT(real, imag);
-
-    assertArrayApprox(result.real, Array.from(expected.real), 1e-10, "real");
-    assertArrayApprox(result.imag, Array.from(expected.imag), 1e-10, "imag");
-  });
-} else {
-  console.log("  (skipped - fft_simd.core.wasm not found)");
-}
-console.log("");
-
-// Test 4: Test fast variant (self-contained with internal swap and reverse-bits)
+// Test 2: Test fast variant (self-contained with internal swap and reverse-bits)
 console.log("Testing fft_fast (self-contained module)...");
 
 if (coreModuleExists("fft_fast")) {
@@ -354,7 +239,7 @@ if (coreModuleExists("fft_fast")) {
 }
 console.log("");
 
-// Test 5: Demonstrate mocking for fault injection
+// Test 3: Demonstrate mocking for fault injection
 console.log("Testing fault injection via mocks...");
 
 if (coreModuleExists("fft_stockham")) {
@@ -404,7 +289,7 @@ if (coreModuleExists("fft_stockham")) {
 }
 console.log("");
 
-// Test 6: Verify helper utilities
+// Test 4: Verify helper utilities
 console.log("Testing helper utilities...");
 
 test("writeComplexArray/readComplexArray roundtrip", () => {

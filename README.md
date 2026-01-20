@@ -8,14 +8,14 @@ A high-performance FFT implementation in WebAssembly Text format that **outperfo
 
 Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pure-JS FFT) and [fft-js](https://github.com/vail-systems/node-fft):
 
-| Size   | wat-fft (Stockham)  | wat-fft (Radix-4) | fft.js          | Speedup vs fft.js |
-| ------ | ------------------- | ----------------- | --------------- | ----------------- |
-| N=64   | **3,157,512 ops/s** | 2,942,236 ops/s   | 2,788,955 ops/s | **1.13x**         |
-| N=256  | **723,490 ops/s**   | 570,225 ops/s     | 555,166 ops/s   | **1.30x**         |
-| N=1024 | **149,126 ops/s**   | 117,337 ops/s     | 110,807 ops/s   | **1.35x**         |
-| N=4096 | **28,308 ops/s**    | 25,088 ops/s      | 23,515 ops/s    | **1.20x**         |
+| Size   | wat-fft (Stockham)  | fft.js          | Speedup vs fft.js |
+| ------ | ------------------- | --------------- | ----------------- |
+| N=64   | **3,157,512 ops/s** | 2,788,955 ops/s | **1.13x**         |
+| N=256  | **723,490 ops/s**   | 555,166 ops/s   | **1.30x**         |
+| N=1024 | **149,126 ops/s**   | 110,807 ops/s   | **1.35x**         |
+| N=4096 | **28,308 ops/s**    | 23,515 ops/s    | **1.20x**         |
 
-The Stockham implementation is the fastest for N≥64, using ping-pong buffers to avoid bit-reversal overhead.
+The Stockham implementation is the fastest, using ping-pong buffers to avoid bit-reversal overhead.
 
 ### Real FFT
 
@@ -86,17 +86,15 @@ console.log("DC component:", data[0], data[1]);
 
 ## Implementations
 
-Seven FFT implementations are provided, each with different trade-offs:
+Three FFT implementations are provided:
 
-| Module                   | Algorithm                   | Accuracy vs fft.js | Speed       |
-| ------------------------ | --------------------------- | ------------------ | ----------- |
-| `combined_stockham.wasm` | Stockham Radix-2 + SIMD     | ~10⁻¹⁴             | **Fastest** |
-| `combined_real.wasm`     | Real FFT (r2c) + Stockham   | ~10⁻¹⁴             | **Fastest** |
-| `combined_radix4.wasm`   | Radix-4 + SIMD              | Bit-identical      | Very Fast   |
-| `combined_unrolled.wasm` | Unrolled butterflies + SIMD | ~10⁻¹⁴             | Fast        |
-| `combined_simd.wasm`     | Radix-2 + SIMD              | ~10⁻¹⁴             | Medium      |
-| `combined_fast.wasm`     | Radix-2                     | ~10⁻¹⁴             | Medium      |
-| `combined.wasm`          | Radix-2 + Taylor sin/cos    | ~10⁻⁷              | Baseline    |
+| Module                   | Algorithm                 | Accuracy vs fft.js | Speed       |
+| ------------------------ | ------------------------- | ------------------ | ----------- |
+| `combined_stockham.wasm` | Stockham Radix-2 + SIMD   | ~10⁻¹⁴             | **Fastest** |
+| `combined_real.wasm`     | Real FFT (r2c) + Stockham | ~10⁻¹⁴             | **Fastest** |
+| `combined_fast.wasm`     | Radix-2 (no SIMD)         | ~10⁻¹⁴             | Medium      |
+
+Use `combined_stockham.wasm` for best performance. Use `combined_fast.wasm` as a fallback for environments without SIMD support.
 
 ### Stockham (Recommended)
 
@@ -142,36 +140,9 @@ console.log("DC:", output[0], output[1]);
 console.log("Nyquist:", output[N], output[N + 1]);
 ```
 
-### Radix-4
+### Fast (Non-SIMD Fallback)
 
-True Radix-4 butterflies with SIMD acceleration:
-
-- Base-4 digit-reversal permutation
-- 4-point butterflies (75% fewer iterations than Radix-2)
-- SIMD v128 complex arithmetic
-- Bit-identical results to fft.js
-
-### Unrolled
-
-Hand-unrolled small butterflies (FFT-4, FFT-8, FFT-16) with general fallback:
-
-- Reduced loop overhead for small transforms
-- SIMD v128 complex arithmetic
-
-### SIMD
-
-Radix-2 with SIMD-accelerated complex operations:
-
-- f64x2 parallel complex multiply
-- i8x16.shuffle for real/imaginary swapping
-
-### Fast
-
-Radix-2 with precomputed twiddle factors (no SIMD).
-
-### Original
-
-Educational Radix-2 with Taylor series sin/cos computed in WASM.
+Radix-2 with precomputed twiddle factors. Use this for environments without WebAssembly SIMD support (older browsers/runtimes).
 
 ## Project Structure
 
@@ -180,14 +151,10 @@ wat-fft/
 ├── modules/              # WAT source files
 │   ├── fft_stockham.wat  # Stockham Radix-2 FFT with SIMD (fastest)
 │   ├── fft_real.wat      # Real FFT (r2c) using Stockham
-│   ├── fft_radix4.wat    # Radix-4 FFT with SIMD
-│   ├── fft_unrolled.wat  # Unrolled butterflies with SIMD
-│   ├── fft_simd.wat      # SIMD-accelerated Radix-2
-│   ├── fft_fast.wat      # Optimized Radix-2
-│   ├── fft_main.wat      # Original Radix-2
-│   ├── math_trig.wat     # Taylor series sin/cos
-│   ├── reverse_bits.wat  # Bit/digit reversal
-│   └── swap.wat          # Memory swap utility
+│   ├── fft_fast.wat      # Radix-2 FFT (non-SIMD fallback)
+│   ├── reverse_bits.wat  # Bit reversal utility
+│   ├── swap.wat          # Memory swap utility
+│   └── shared.wat        # Shared SIMD helpers
 ├── tests/                # Test suite
 ├── tools/                # Debug and analysis tools
 ├── benchmarks/           # Performance benchmarks
@@ -213,19 +180,6 @@ X[k] = 0.5*(Z[k] + conj(Z[N/2-k])) - 0.5i*W_N^k*(Z[k] - conj(Z[N/2-k]))
 ```
 
 Special cases: `X[0] = Z[0].re + Z[0].im`, `X[N/2] = Z[0].re - Z[0].im`
-
-### Radix-4 Algorithm
-
-The Radix-4 FFT processes 4 elements per butterfly instead of 2, reducing the number of iterations by half. The butterfly operation computes:
-
-```
-y₀ = x₀ + x₁ + x₂ + x₃
-y₁ = x₀ - jx₁ - x₂ + jx₃
-y₂ = x₀ - x₁ + x₂ - x₃
-y₃ = x₀ + jx₁ - x₂ - jx₃
-```
-
-For sizes that aren't powers of 4 (e.g., N=8, 32, 128), a mixed Radix-4/Radix-2 approach is used.
 
 ### Memory Layout
 
@@ -272,8 +226,8 @@ npm run test:fft
 ### Test a single implementation (useful for debugging)
 
 ```bash
-node tests/fft.test.js --impl radix4 64 random
-node tests/fft.test.js --impl unrolled 256 impulse
+node tests/fft.test.js --impl stockham 64 random
+node tests/fft.test.js --impl fast 256 impulse
 ```
 
 ### Input patterns
@@ -285,8 +239,7 @@ node tests/fft.test.js --impl unrolled 256 impulse
 
 ### Test sizes
 
-Powers of 4: 4, 16, 64, 256, 1024
-Non-powers-of-4: 8, 32, 128, 512
+Powers of 2: 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
 
 ## License
 

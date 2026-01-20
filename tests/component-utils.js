@@ -73,30 +73,6 @@ export function createStockhamImports(overrides = {}) {
 }
 
 /**
- * Create imports for fft_radix4 component testing
- * @param {object} overrides - Override specific imports
- * @returns {object} Import object for fft_radix4
- */
-export function createRadix4Imports(overrides = {}) {
-  const defaultReverseBits = (x, log2n) => {
-    let rev = 0;
-    for (let i = 0; i < log2n; i++) {
-      rev = (rev << 1) | (x & 1);
-      x >>= 1;
-    }
-    return rev;
-  };
-
-  return {
-    $root: {
-      sin: overrides.sin || Math.sin,
-      cos: overrides.cos || Math.cos,
-      "reverse-bits": overrides["reverse-bits"] || defaultReverseBits,
-    },
-  };
-}
-
-/**
  * Create imports for fft_fast component testing
  * @param {object} overrides - Override specific imports
  * @returns {object} Import object for fft_fast
@@ -121,32 +97,8 @@ export function createFastImports(overrides = {}) {
 }
 
 /**
- * Create imports for fft_simd component testing
- * @param {object} overrides - Override specific imports
- * @returns {object} Import object for fft_simd
- */
-export function createSimdImports(overrides = {}) {
-  const defaultReverseBits = (x, log2n) => {
-    let rev = 0;
-    for (let i = 0; i < log2n; i++) {
-      rev = (rev << 1) | (x & 1);
-      x >>= 1;
-    }
-    return rev;
-  };
-
-  return {
-    $root: {
-      sin: overrides.sin || Math.sin,
-      cos: overrides.cos || Math.cos,
-      "reverse-bits": overrides["reverse-bits"] || defaultReverseBits,
-    },
-  };
-}
-
-/**
  * Test helper: Load an FFT component and return a test harness
- * @param {string} variant - FFT variant name (stockham, radix4, fast, simd, unrolled)
+ * @param {string} variant - FFT variant name (stockham, fast)
  * @param {object} importOverrides - Override default imports
  * @returns {Promise<object>} Test harness with exports and memory access
  */
@@ -158,17 +110,8 @@ export async function loadFFTComponent(variant, importOverrides = {}) {
     case "stockham":
       imports = createStockhamImports(importOverrides);
       break;
-    case "radix4":
-      imports = createRadix4Imports(importOverrides);
-      break;
     case "fast":
       imports = createFastImports(importOverrides);
-      break;
-    case "simd":
-      imports = createSimdImports(importOverrides);
-      break;
-    case "unrolled":
-      imports = createStockhamImports(importOverrides); // Same imports as stockham
       break;
     default:
       throw new Error(`Unknown FFT variant: ${variant}`);

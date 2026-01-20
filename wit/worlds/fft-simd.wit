@@ -1,9 +1,0 @@
-package wat-fft:fft-simd@0.1.0;
-
-world fft-simd {
-    import sin: func(x: f64) -> f64;
-    import cos: func(x: f64) -> f64;
-    import reverse-bits: func(x: u32, log2n: u32) -> u32;
-    export precompute-twiddles: func(n: u32);
-    export fft-simd: func(n: u32);
-}

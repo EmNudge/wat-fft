@@ -29,15 +29,6 @@ const IMPLEMENTATIONS = [
     precompute: true,
     sizes: STOCKHAM_SIZES,
   },
-  { name: "radix4", wasmName: "radix4", fftFunc: "fft_radix4", precompute: true, sizes: FFT_SIZES },
-  {
-    name: "unrolled",
-    wasmName: "unrolled",
-    fftFunc: "fft_unrolled",
-    precompute: true,
-    sizes: FFT_SIZES,
-  },
-  { name: "simd", wasmName: "simd", fftFunc: "fft_simd", precompute: true, sizes: FFT_SIZES },
   { name: "fast", wasmName: "fast", fftFunc: "fft_fast", precompute: true, sizes: FFT_SIZES },
 ];
 

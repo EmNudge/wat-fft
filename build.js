@@ -256,10 +256,6 @@ const modules = {
       exports: ["swap"],
       memory: 1,
     },
-    {
-      name: "math_trig",
-      isComplete: true, // Already a complete module
-    },
   ],
 
   // FFT variants with their dependencies and imports
@@ -274,15 +270,6 @@ const modules = {
       deps: [],
     },
     {
-      name: "fft_radix4",
-      wit: "fft-radix4.wit",
-      world: "fft-radix4",
-      imports: { sin: "f64->f64", cos: "f64->f64" },
-      exports: ["precompute-twiddles", "fft-radix4"],
-      memory: 3,
-      deps: ["reverse_bits"],
-    },
-    {
       name: "fft_fast",
       wit: "fft-fast.wit",
       world: "fft-fast",
@@ -290,24 +277,6 @@ const modules = {
       exports: ["precompute-twiddles", "fft-fast"],
       memory: 3,
       deps: ["reverse_bits"],
-    },
-    {
-      name: "fft_simd",
-      wit: "fft-simd.wit",
-      world: "fft-simd",
-      imports: { sin: "f64->f64", cos: "f64->f64" },
-      exports: ["precompute-twiddles", "fft-simd"],
-      memory: 3,
-      deps: ["reverse_bits"],
-    },
-    {
-      name: "fft_unrolled",
-      wit: "fft-unrolled.wit",
-      world: "fft-unrolled",
-      imports: { sin: "f64->f64", cos: "f64->f64" },
-      exports: ["precompute-twiddles", "fft-unrolled"],
-      memory: 3,
-      deps: [],
     },
   ],
 };
@@ -423,39 +392,6 @@ modules.fft.forEach((fft) => {
   buildCombinedModule(fft, `combined_${fft.name.replace("fft_", "")}`);
 });
 
-// Also build the original combined.wat (radix-2 with embedded trig)
-console.log("\nBuilding original combined module (radix-2 with embedded trig)...");
-
-function buildOriginalCombined() {
-  let combined = '(module\n  (memory (export "memory") 1)\n';
-
-  // math_trig.wat provides embedded sin/cos (Taylor series)
-  const mathTrigContent = fs.readFileSync(path.join(modulesDir, "math_trig.wat"), "utf8");
-  combined += indent(extractModuleBody(mathTrigContent), 2) + "\n";
-
-  // reverse_bits.wat - utility function used by fft_main
-  combined += loadDependency("reverse_bits") + "\n";
-
-  // fft_main.wat - extract just the functions
-  const fftMainContent = fs.readFileSync(path.join(modulesDir, "fft_main.wat"), "utf8");
-  combined += indent(extractModuleBody(fftMainContent), 2) + "\n";
-
-  combined += ")\n";
-
-  fs.writeFileSync(path.join(distDir, "combined.wat"), combined);
-  if (
-    run(
-      `wasm-tools parse ${path.join(distDir, "combined.wat")} -o ${path.join(distDir, "combined.wasm")}`,
-    )
-  ) {
-    console.log("  combined.wasm ✓");
-    return true;
-  }
-  return false;
-}
-
-buildOriginalCombined();
-
 // Build components (new format for testing with mocked dependencies)
 console.log("\nBuilding components (new format)...");
 
@@ -463,10 +399,7 @@ console.log("\nBuilding components (new format)...");
 const exportRenames = {
   precompute_twiddles: "precompute-twiddles",
   fft_stockham: "fft-stockham",
-  fft_radix4: "fft-radix4",
   fft_fast: "fft-fast",
-  fft_simd: "fft-simd",
-  fft_unrolled: "fft-unrolled",
   reverse_bits: "reverse-bits",
 };
 
@@ -625,18 +558,14 @@ function composeComponent(fftName, plugComponents, outputName) {
 }
 
 // Compose FFT variants that need reverse_bits
-composeComponent("fft_radix4", ["reverse_bits"], "fft_radix4_composed");
 composeComponent("fft_fast", ["reverse_bits"], "fft_fast_composed");
-composeComponent("fft_simd", ["reverse_bits"], "fft_simd_composed");
 
 // These don't need composition (no external deps)
-for (const name of ["fft_stockham", "fft_unrolled"]) {
-  fs.copyFileSync(
-    path.join(buildDir, `${name}.component.wasm`),
-    path.join(distDir, `${name}_composed.wasm`),
-  );
-  console.log(`  ${name}_composed.wasm ✓ (no deps)`);
-}
+fs.copyFileSync(
+  path.join(buildDir, "fft_stockham.component.wasm"),
+  path.join(distDir, "fft_stockham_composed.wasm"),
+);
+console.log("  fft_stockham_composed.wasm ✓ (no deps)");
 
 console.log("\n✓ Build complete!");
 console.log("\nLegacy modules in dist/:");
