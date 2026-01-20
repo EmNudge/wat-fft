@@ -13,6 +13,10 @@
   (import "math" "sin" (func $js_sin (param f64) (result f64)))
   (import "math" "cos" (func $js_cos (param f64) (result f64)))
 
+  ;; Shared utilities (inlined at build time from shared.wat)
+  (import "shared" "SIGN_MASK" (global $SIGN_MASK v128))
+  (import "shared" "simd_cmul" (func $simd_cmul (param v128 v128) (result v128)))
+
   ;; Memory (4 pages = 256KB)
   (memory (export "memory") 4)
 
@@ -20,9 +24,6 @@
   (global $SECONDARY_OFFSET i32 (i32.const 65536))
   (global $TWIDDLE_OFFSET i32 (i32.const 131072))
   (global $NEG_PI f64 (f64.const -3.141592653589793))
-
-  ;; SIMD sign masks for complex multiply
-  (global $SIGN_MASK v128 (v128.const i64x2 0x8000000000000000 0x0000000000000000))
 
   ;; Precompute twiddle factors for size N
   ;; Stores W_N^k = e^{-2*pi*i*k/N} for k = 0 to N-1
@@ -56,18 +57,6 @@
         (br $loop)
       )
     )
-  )
-
-  ;; SIMD complex multiply: (a + bi)(c + di) = (ac-bd) + (ad+bc)i
-  (func $simd_cmul (param $a v128) (param $b v128) (result v128)
-    (local $ar v128) (local $ai v128) (local $bd v128)
-    (local.set $ar (f64x2.splat (f64x2.extract_lane 0 (local.get $a))))
-    (local.set $ai (f64x2.splat (f64x2.extract_lane 1 (local.get $a))))
-    (local.set $bd (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
-                                  (local.get $b) (local.get $b)))
-    (f64x2.add
-      (f64x2.mul (local.get $ar) (local.get $b))
-      (f64x2.mul (v128.xor (local.get $ai) (global.get $SIGN_MASK)) (local.get $bd)))
   )
 
   ;; Stockham Radix-2 FFT

@@ -15,14 +15,15 @@
   (import "math" "cos" (func $js_cos (param f64) (result f64)))
   (import "bits" "reverse_bits" (func $reverse_bits (param i32 i32) (result i32)))
 
+  ;; Shared utilities (inlined at build time from shared.wat)
+  (import "shared" "SIGN_MASK" (global $SIGN_MASK v128))
+  (import "shared" "simd_cmul" (func $simd_cmul (param v128 v128) (result v128)))
+
   ;; Memory (3 pages = 192KB)
   (memory (export "memory") 3)
 
   (global $TWIDDLE_BASE i32 (i32.const 131072))
   (global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
-
-  ;; Sign mask for complex multiply: negate first lane for [ac-bd, ad+bc]
-  (global $SIGN_MASK v128 (v128.const i64x2 0x8000000000000000 0x0000000000000000))
 
   ;; Precompute twiddle factors W_N^k = e^(-2πik/N) for k = 0..N/2-1
   (func $precompute_twiddles (export "precompute_twiddles") (param $n i32)
@@ -54,34 +55,6 @@
         (local.set $k (i32.add (local.get $k) (i32.const 1)))
         (br $loop)
       )
-    )
-  )
-
-  ;; SIMD complex multiply: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
-  ;; v1 = [a, b], v2 = [c, d] -> [ac-bd, ad+bc]
-  (func $simd_cmul (param $v1 v128) (param $v2 v128) (result v128)
-    (local $aa v128)
-    (local $bb v128)
-    (local $dc v128)
-    (local $ac_ad v128)
-    (local $bd_bc v128)
-
-    ;; aa = [a, a], bb = [b, b]
-    (local.set $aa (f64x2.splat (f64x2.extract_lane 0 (local.get $v1))))
-    (local.set $bb (f64x2.splat (f64x2.extract_lane 1 (local.get $v1))))
-
-    ;; dc = [d, c] (swap lanes of v2)
-    (local.set $dc (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
-                                  (local.get $v2) (local.get $v2)))
-
-    ;; [ac, ad] and [bd, bc]
-    (local.set $ac_ad (f64x2.mul (local.get $aa) (local.get $v2)))
-    (local.set $bd_bc (f64x2.mul (local.get $bb) (local.get $dc)))
-
-    ;; [ac-bd, ad+bc] = [ac, ad] + [-bd, bc]
-    (f64x2.add
-      (local.get $ac_ad)
-      (v128.xor (local.get $bd_bc) (global.get $SIGN_MASK))
     )
   )
 
