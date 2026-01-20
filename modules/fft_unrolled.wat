@@ -7,14 +7,21 @@
   (import "math" "sin" (func $js_sin (param f64) (result f64)))
   (import "math" "cos" (func $js_cos (param f64) (result f64)))
 
+  ;; Shared utilities (inlined at build time from shared.wat)
+  (import "shared" "SIGN_MASK" (global $SIGN_MASK v128))
+  (import "shared" "simd_cmul" (func $simd_cmul (param v128 v128) (result v128)))
+  (import "shared" "mul_neg_j" (func $mul_neg_j (param v128) (result v128)))
+  (import "shared" "mul_pos_j" (func $mul_pos_j (param v128) (result v128)))
+  (import "shared" "bit_reverse" (func $bit_reverse (param i32 i32) (result i32)))
+  (import "shared" "bit_reverse_permute" (func $bit_reverse_permute (param i32 i32)))
+  (import "shared" "digit_reverse4" (func $digit_reverse4 (param i32 i32) (result i32)))
+  (import "shared" "digit_reverse_permute4" (func $digit_reverse_permute4 (param i32 i32)))
+
   ;; Memory (3 pages = 192KB)
   (memory (export "memory") 3)
 
   (global $TWIDDLE_OFFSET i32 (i32.const 131072))
-(global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
-;; SIGN_MASK: used to negate first element in complex multiply
-;; Must be [sign_bit, 0] = [-0.0, 0.0] in i64x2 representation
-(global $SIGN_MASK v128 (v128.const i64x2 0x8000000000000000 0x0000000000000000))
+  (global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
 
 ;; Precompute twiddle factors
 (func $precompute_twiddles (export "precompute_twiddles") (param $n i32)
@@ -37,32 +44,6 @@
       (br $loop)
     )
   )
-)
-
-;; SIMD complex multiply
-(func $simd_cmul (param $a v128) (param $b v128) (result v128)
-  (local $ar v128) (local $ai v128) (local $bd v128)
-  (local.set $ar (f64x2.splat (f64x2.extract_lane 0 (local.get $a))))
-  (local.set $ai (f64x2.splat (f64x2.extract_lane 1 (local.get $a))))
-  (local.set $bd (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
-                                (local.get $b) (local.get $b)))
-  (f64x2.add
-    (f64x2.mul (local.get $ar) (local.get $b))
-    (f64x2.mul (v128.xor (local.get $ai) (global.get $SIGN_MASK)) (local.get $bd)))
-)
-
-;; Multiply by -j: (a+bi)*(-j) = b - ai
-(func $mul_neg_j (param $z v128) (result v128)
-  (f64x2.mul
-    (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $z) (local.get $z))
-    (v128.const f64x2 1.0 -1.0))
-)
-
-;; Multiply by +j: (a+bi)*j = -b + ai
-(func $mul_pos_j (param $z v128) (result v128)
-  (f64x2.mul
-    (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $z) (local.get $z))
-    (v128.const f64x2 -1.0 1.0))
 )
 
 ;; ============================================
@@ -500,101 +481,5 @@
       (br $stage_loop)
     )
   )
-)
-
-;; Digit-reverse permutation for powers of 4
-(func $digit_reverse_permute4 (param $n i32) (param $num_digits i32)
-  (local $i i32)
-  (local $j i32)
-  (local $addr_i i32)
-  (local $addr_j i32)
-  (local $tmp v128)
-
-  (local.set $i (i32.const 0))
-  (block $done
-    (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-      (local.set $j (call $digit_reverse4 (local.get $i) (local.get $num_digits)))
-      (if (i32.lt_u (local.get $i) (local.get $j))
-        (then
-          (local.set $addr_i (i32.shl (local.get $i) (i32.const 4)))
-          (local.set $addr_j (i32.shl (local.get $j) (i32.const 4)))
-          (local.set $tmp (v128.load (local.get $addr_i)))
-          (v128.store (local.get $addr_i) (v128.load (local.get $addr_j)))
-          (v128.store (local.get $addr_j) (local.get $tmp))
-        )
-      )
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $loop)
-    )
-  )
-)
-
-;; Digit reverse for base-4
-(func $digit_reverse4 (param $x i32) (param $num_digits i32) (result i32)
-  (local $result i32)
-  (local $i i32)
-  (local.set $result (i32.const 0))
-  (local.set $i (i32.const 0))
-  (block $done
-    (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (local.get $num_digits)))
-      (local.set $result (i32.or
-        (i32.shl (local.get $result) (i32.const 2))
-        (i32.and (local.get $x) (i32.const 3))))
-      (local.set $x (i32.shr_u (local.get $x) (i32.const 2)))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $loop)
-    )
-  )
-  (local.get $result)
-)
-
-;; Bit-reverse permutation
-(func $bit_reverse_permute (param $n i32) (param $log2n i32)
-  (local $i i32)
-  (local $j i32)
-  (local $addr_i i32)
-  (local $addr_j i32)
-  (local $tmp v128)
-
-  (local.set $i (i32.const 0))
-  (block $done
-    (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-      (local.set $j (call $bit_reverse (local.get $i) (local.get $log2n)))
-      (if (i32.lt_u (local.get $i) (local.get $j))
-        (then
-          (local.set $addr_i (i32.shl (local.get $i) (i32.const 4)))
-          (local.set $addr_j (i32.shl (local.get $j) (i32.const 4)))
-          (local.set $tmp (v128.load (local.get $addr_i)))
-          (v128.store (local.get $addr_i) (v128.load (local.get $addr_j)))
-          (v128.store (local.get $addr_j) (local.get $tmp))
-        )
-      )
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $loop)
-    )
-  )
-)
-
-;; Bit reverse
-(func $bit_reverse (param $x i32) (param $num_bits i32) (result i32)
-  (local $result i32)
-  (local $i i32)
-  (local.set $result (i32.const 0))
-  (local.set $i (i32.const 0))
-  (block $done
-    (loop $loop
-      (br_if $done (i32.ge_u (local.get $i) (local.get $num_bits)))
-      (local.set $result (i32.or
-        (i32.shl (local.get $result) (i32.const 1))
-        (i32.and (local.get $x) (i32.const 1))))
-      (local.set $x (i32.shr_u (local.get $x) (i32.const 1)))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $loop)
-    )
-  )
-  (local.get $result)
 )
 ) ;; end module

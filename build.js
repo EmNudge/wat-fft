@@ -101,6 +101,144 @@ function loadDependency(depName) {
   return indent(content.trim(), 2);
 }
 
+// ============================================================================
+// Shared Snippet System
+// ============================================================================
+
+/**
+ * Parse shared.wat and extract snippets marked with @snippet
+ * Returns { snippets: {name: code}, requires: {name: dependencyName} }
+ */
+function parseSharedSnippets() {
+  const sharedPath = path.join(modulesDir, "shared.wat");
+  if (!fs.existsSync(sharedPath)) {
+    return { snippets: {}, requires: {} };
+  }
+
+  const content = fs.readFileSync(sharedPath, "utf8");
+  const snippets = {};
+  const requires = {};
+
+  // Match @snippet markers and extract code until next marker or end of file
+  // Format: ;; @snippet NAME\n[;; @requires DEP\n]CODE
+  const lines = content.split("\n");
+  let currentSnippet = null;
+  let currentCode = [];
+
+  for (const line of lines) {
+    const snippetMatch = line.match(/^;;\s*@snippet\s+(\w+)/);
+    const requiresMatch = line.match(/^;;\s*@requires\s+(\w+)/);
+
+    if (snippetMatch) {
+      // Save previous snippet if any
+      if (currentSnippet) {
+        snippets[currentSnippet] = currentCode.join("\n").trim();
+      }
+      currentSnippet = snippetMatch[1];
+      currentCode = [];
+    } else if (requiresMatch && currentSnippet) {
+      requires[currentSnippet] = requiresMatch[1];
+    } else if (currentSnippet) {
+      // Skip comment-only lines at the start of a snippet
+      if (currentCode.length === 0 && line.trim().startsWith(";;")) {
+        continue;
+      }
+      currentCode.push(line);
+    }
+  }
+
+  // Save last snippet
+  if (currentSnippet) {
+    snippets[currentSnippet] = currentCode.join("\n").trim();
+  }
+
+  return { snippets, requires };
+}
+
+/**
+ * Load requested snippets with their dependencies resolved
+ * Returns concatenated WAT code for all snippets in dependency order
+ */
+function loadSnippets(snippetNames) {
+  const { snippets, requires } = parseSharedSnippets();
+  const result = [];
+  const added = new Set();
+
+  function addSnippet(name) {
+    if (added.has(name)) return;
+    if (!snippets[name]) {
+      console.warn(`  Warning: snippet "${name}" not found in shared.wat`);
+      return;
+    }
+    // Add dependencies first
+    if (requires[name]) {
+      addSnippet(requires[name]);
+    }
+    added.add(name);
+    result.push(snippets[name]);
+  }
+
+  snippetNames.forEach(addSnippet);
+  return result.join("\n\n");
+}
+
+/**
+ * Extract shared import names from WAT content
+ * Returns array of imported names from "shared" namespace
+ */
+function extractSharedImports(content) {
+  const imports = [];
+  // Match both function and global imports from "shared" namespace
+  const importRegex = /\(import\s+"shared"\s+"([^"]+)"/g;
+  let match;
+  while ((match = importRegex.exec(content)) !== null) {
+    imports.push(match[1]);
+  }
+  return imports;
+}
+
+/**
+ * Strip shared imports from WAT content
+ * Removes import lines that import from "shared" namespace
+ */
+function stripSharedImports(content) {
+  const lines = content.split("\n");
+  const filteredLines = lines.filter((line) => {
+    const trimmed = line.trim();
+    return !trimmed.startsWith('(import "shared"');
+  });
+  return filteredLines.join("\n");
+}
+
+/**
+ * Process WAT content to replace shared imports with actual implementations
+ */
+function inlineSharedImports(content) {
+  // Extract what shared imports are used
+  const sharedImports = extractSharedImports(content);
+  if (sharedImports.length === 0) {
+    return content;
+  }
+
+  // Strip the import declarations
+  let processed = stripSharedImports(content);
+
+  // Load the actual implementations
+  const snippetCode = loadSnippets(sharedImports);
+
+  if (snippetCode) {
+    // Inject snippets after memory declaration
+    const lines = processed.split("\n");
+    const memoryLineIdx = lines.findIndex((l) => l.trim().startsWith("(memory"));
+    if (memoryLineIdx >= 0) {
+      lines.splice(memoryLineIdx + 1, 0, indent(snippetCode, 2));
+      processed = lines.join("\n");
+    }
+  }
+
+  return processed;
+}
+
 // Module definitions
 const modules = {
   // Standalone modules - no dependencies, can be built as simple wasm or components
@@ -133,7 +271,7 @@ const modules = {
       imports: { sin: "f64->f64", cos: "f64->f64" },
       exports: ["precompute-twiddles", "fft-stockham"],
       memory: 4,
-      deps: [], // No wasm dependencies
+      deps: [],
     },
     {
       name: "fft_radix4",
@@ -213,7 +351,10 @@ console.log("\nBuilding combined FFT modules (legacy format)...");
 
 function buildCombinedModule(fft, outputName) {
   const srcPath = path.join(modulesDir, `${fft.name}.wat`);
-  const content = fs.readFileSync(srcPath, "utf8");
+  let content = fs.readFileSync(srcPath, "utf8");
+
+  // First, inline any shared imports
+  content = inlineSharedImports(content);
 
   let combined;
 
@@ -234,10 +375,10 @@ function buildCombinedModule(fft, outputName) {
       // Load and format dependencies
       const deps = fft.deps.map((dep) => loadDependency(dep)).join("\n");
 
-      // Inject deps after memory declaration
+      // Inject after memory declaration
       const lines = body.split("\n");
       const memoryLineIdx = lines.findIndex((l) => l.includes("(memory"));
-      if (memoryLineIdx >= 0) {
+      if (memoryLineIdx >= 0 && deps) {
         lines.splice(memoryLineIdx + 1, 0, deps);
       }
 
@@ -354,14 +495,17 @@ function convertToComponentImports(content) {
 // Generate component module from source WAT file
 function generateComponentModule(fft) {
   const srcPath = path.join(modulesDir, `${fft.name}.wat`);
-  const content = fs.readFileSync(srcPath, "utf8");
+  let content = fs.readFileSync(srcPath, "utf8");
 
   // Apply export renames
-  const renamedContent = applyExportRenames(content, exportRenames);
+  content = applyExportRenames(content, exportRenames);
 
-  if (isCompleteModule(renamedContent)) {
+  // Inline shared imports (replaces "shared" namespace imports with actual implementations)
+  content = inlineSharedImports(content);
+
+  if (isCompleteModule(content)) {
     // Complete module - convert imports to component model format
-    return convertToComponentImports(renamedContent);
+    return convertToComponentImports(content);
   } else {
     // Fragment - wrap with component model imports and memory
     let imports = "";
@@ -381,7 +525,7 @@ function generateComponentModule(fft) {
 
     return `(module
 ${imports}  (memory (export "memory") ${fft.memory})
-${indent(renamedContent.trim(), 2)}
+${indent(content.trim(), 2)}
 )
 `;
   }

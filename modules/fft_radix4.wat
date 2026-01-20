@@ -13,12 +13,17 @@
   (import "math" "cos" (func $js_cos (param f64) (result f64)))
   (import "bits" "reverse_bits" (func $reverse_bits (param i32 i32) (result i32)))
 
+  ;; Shared utilities (inlined at build time from shared.wat)
+  (import "shared" "SIGN_MASK" (global $SIGN_MASK v128))
+  (import "shared" "simd_cmul" (func $simd_cmul (param v128 v128) (result v128)))
+  (import "shared" "mul_neg_j" (func $mul_neg_j (param v128) (result v128)))
+  (import "shared" "mul_pos_j" (func $mul_pos_j (param v128) (result v128)))
+
   ;; Memory (3 pages = 192KB)
   (memory (export "memory") 3)
 
   (global $TWIDDLE_BASE i32 (i32.const 131072))
   (global $NEG_TWO_PI f64 (f64.const -6.283185307179586))
-  (global $SIGN_MASK v128 (v128.const i64x2 0x8000000000000000 0x0000000000000000))
 
   ;; Base-4 digit reversal: reverse the base-4 digits of x
   ;; numDigits = log4(N) = log2(N)/2
@@ -79,37 +84,6 @@
         (local.set $k (i32.add (local.get $k) (i32.const 1)))
         (br $loop)
       )
-    )
-  )
-
-  ;; SIMD complex multiply
-  (func $simd_cmul (param $a v128) (param $b v128) (result v128)
-    (local $ar v128) (local $ai v128) (local $bd v128)
-
-    (local.set $ar (f64x2.splat (f64x2.extract_lane 0 (local.get $a))))
-    (local.set $ai (f64x2.splat (f64x2.extract_lane 1 (local.get $a))))
-    (local.set $bd (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
-                                  (local.get $b) (local.get $b)))
-
-    (f64x2.add
-      (f64x2.mul (local.get $ar) (local.get $b))
-      (v128.xor (f64x2.mul (local.get $ai) (local.get $bd)) (global.get $SIGN_MASK))
-    )
-  )
-
-  ;; Multiply by -j: [a,b] -> [b, -a]
-  (func $mul_neg_j (param $v v128) (result v128)
-    (f64x2.mul
-      (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $v) (local.get $v))
-      (v128.const f64x2 1.0 -1.0)
-    )
-  )
-
-  ;; Multiply by +j: [a,b] -> [-b, a]
-  (func $mul_pos_j (param $v v128) (result v128)
-    (f64x2.mul
-      (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $v) (local.get $v))
-      (v128.const f64x2 -1.0 1.0)
     )
   )
 
