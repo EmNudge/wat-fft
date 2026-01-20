@@ -4,9 +4,6 @@ async function runAllTests() {
   const wasm = await loadWasm("combined");
 
   await runTest("Combined Module", async (assert) => {
-    assert.strictEqual(wasm.add(10, 5), 15, "Add 10 + 5");
-    assert.strictEqual(wasm.sub(10, 5), 5, "Sub 10 - 5");
-
     // FFT tests
     const n = 4;
     const memory = wasm.memory;

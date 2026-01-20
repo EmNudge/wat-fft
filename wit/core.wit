@@ -1,0 +1,27 @@
+package wat-fft:core@0.1.0;
+
+/// Trigonometric functions - satisfied by JS Math or math_trig.wat
+interface trig {
+    sin: func(x: f64) -> f64;
+    cos: func(x: f64) -> f64;
+}
+
+/// Bit manipulation utilities
+interface bit-reversal {
+    /// Reverse the bottom `log2n` bits of `x`
+    reverse-bits: func(x: u32, log2n: u32) -> u32;
+}
+
+/// Memory swap for f64 values at given byte offsets
+interface mem-swap {
+    /// Swap two f64 values at byte offsets a and b
+    swap: func(a: u32, b: u32);
+}
+
+/// Core FFT interface - all variants export this
+interface fft {
+    /// Precompute twiddle factors for size n
+    precompute-twiddles: func(n: u32);
+    /// Run FFT in-place on n complex numbers starting at offset 0
+    fft: func(n: u32);
+}

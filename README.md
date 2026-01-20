@@ -37,7 +37,7 @@ Note: wat-fft uses double precision (f64), while kissfft-wasm and fftw-js use si
 npm install
 
 # Build WASM modules
-npm run glue
+npm run build
 
 # Run tests
 npm test
@@ -192,7 +192,7 @@ wat-fft/
 ├── tools/                # Debug and analysis tools
 ├── benchmarks/           # Performance benchmarks
 ├── dist/                 # Compiled WASM (generated)
-├── glue.js               # Build system
+├── build.js              # Build system
 └── package.json
 ```
 
@@ -250,7 +250,7 @@ Complex numbers are stored interleaved:
 ## Scripts
 
 ```bash
-npm run glue          # Build all WASM modules
+npm run build         # Build all WASM modules
 npm test              # Run all tests
 npm run bench         # Run complex FFT benchmarks
 npm run bench:rfft    # Run real FFT benchmarks
