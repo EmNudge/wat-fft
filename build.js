@@ -270,6 +270,13 @@ const modules = {
       deps: [],
     },
     {
+      name: "fft_stockham_f32",
+      imports: {},
+      exports: ["precompute-twiddles", "fft-stockham"],
+      memory: 2,
+      deps: [],
+    },
+    {
       name: "fft_fast",
       wit: "fft-fast.wit",
       world: "fft-fast",
@@ -287,6 +294,12 @@ const modules = {
       stockham: "fft_stockham",
       imports: { sin: "f64->f64", cos: "f64->f64" },
       memory: 5, // extra page for rfft twiddles
+    },
+    {
+      name: "fft_real_f32",
+      stockham: "fft_stockham_f32",
+      imports: {},
+      memory: 3, // smaller for f32
     },
   ],
 };
@@ -427,12 +440,57 @@ function buildRfftModule(rfft, outputName) {
     removeMemory: true,
   });
 
-  // Filter out duplicate globals that are already defined in stockham
-  const duplicateGlobals = ["$SECONDARY_OFFSET", "$TWIDDLE_OFFSET", "$NEG_PI", "$SIGN_MASK"];
+  // Filter out duplicate globals and functions that are already defined in stockham
+  const duplicateGlobals = [
+    "$SECONDARY_OFFSET",
+    "$TWIDDLE_OFFSET",
+    "$NEG_PI",
+    "$SIGN_MASK",
+    "$PI",
+    "$HALF_PI",
+    "$SIGN_MASK_F32",
+    "$SIGN_MASK_F32_DUAL",
+  ];
+  const duplicateFuncs = ["$sin", "$cos", "$simd_cmul_f32", "$simd_cmul_f32_dual"]; // For f32 version which has inline trig/SIMD in both modules
+
+  // Track if we're inside a function we want to skip
+  let parenDepth = 0;
+  let skipFunc = false;
+
   rfftBody = rfftBody
     .split("\n")
     .filter((line) => {
       const trimmed = line.trim();
+
+      // If we're skipping a function, count parens to find the end
+      if (skipFunc) {
+        for (const ch of line) {
+          if (ch === "(") parenDepth++;
+          if (ch === ")") parenDepth--;
+        }
+        if (parenDepth <= 0) {
+          skipFunc = false;
+          parenDepth = 0;
+        }
+        return false;
+      }
+
+      // Check if we're starting a duplicate function
+      if (trimmed.startsWith("(func ")) {
+        if (duplicateFuncs.some((f) => trimmed.includes(f + " ") || trimmed.includes(f + "("))) {
+          skipFunc = true;
+          parenDepth = 0;
+          for (const ch of line) {
+            if (ch === "(") parenDepth++;
+            if (ch === ")") parenDepth--;
+          }
+          if (parenDepth <= 0) {
+            skipFunc = false; // Single-line function
+          }
+          return false;
+        }
+      }
+
       if (trimmed.startsWith("(global ")) {
         return !duplicateGlobals.some((g) => trimmed.includes(g));
       }
@@ -440,11 +498,18 @@ function buildRfftModule(rfft, outputName) {
     })
     .join("\n");
 
+  // Build imports based on rfft.imports
+  let imports = "";
+  if (rfft.imports?.sin) {
+    imports += '  (import "math" "sin" (func $js_sin (param f64) (result f64)))\n';
+  }
+  if (rfft.imports?.cos) {
+    imports += '  (import "math" "cos" (func $js_cos (param f64) (result f64)))\n';
+  }
+
   // Build combined module
   const combined = `(module
-  (import "math" "sin" (func $js_sin (param f64) (result f64)))
-  (import "math" "cos" (func $js_cos (param f64) (result f64)))
-  ;; ${rfft.memory} pages = ${rfft.memory * 64}KB: primary buffer + secondary buffer + complex twiddles + rfft twiddles
+${imports}  ;; ${rfft.memory} pages = ${rfft.memory * 64}KB: primary buffer + secondary buffer + complex twiddles + rfft twiddles
   (memory (export "memory") ${rfft.memory})
 ${indent(stockhamBody, 2)}
 ${rfftBody}
@@ -541,6 +606,12 @@ ${indent(content.trim(), 2)}
 }
 
 function buildFFTComponent(fft) {
+  // Skip if no WIT file defined
+  if (!fft.wit) {
+    console.log(`  ${fft.name} (skipped - no WIT defined)`);
+    return false;
+  }
+
   const witPath = path.join(witDir, fft.wit);
   const moduleWatPath = path.join(buildDir, `${fft.name}_module.wat`);
   const corePath = path.join(buildDir, `${fft.name}.core.wasm`);

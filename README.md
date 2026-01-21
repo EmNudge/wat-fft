@@ -20,16 +20,16 @@ The Stockham implementation is fastest for N≥64, using ping-pong buffers to av
 
 ### Real FFT
 
-Benchmarked against [kissfft-wasm](https://github.com/nicholaswmin/kissfft-wasm) and [fftw-js](https://github.com/nicholaswmin/fftw-js):
+Benchmarked against [kissfft-wasm](https://www.npmjs.com/package/kissfft-wasm) and [fftw-js](https://www.npmjs.com/package/fftw-js):
 
-| Size   | wat-fft rfft (f64)  | kissfft-wasm (f32) | fftw-js (f32)   |
-| ------ | ------------------- | ------------------ | --------------- |
-| N=64   | **4,454,257 ops/s** | 3,448,822 ops/s    | 6,927,853 ops/s |
-| N=256  | **1,061,203 ops/s** | 1,005,964 ops/s    | 1,497,623 ops/s |
-| N=1024 | **236,412 ops/s**   | 241,045 ops/s      | 472,625 ops/s   |
-| N=4096 | **52,922 ops/s**    | 55,874 ops/s       | 107,580 ops/s   |
+| Size   | wat-fft rfft (f64)  | wat-fft rfft (f32) | kissfft-wasm (f32) | fftw-js (f32)   |
+| ------ | ------------------- | ------------------ | ------------------ | --------------- |
+| N=64   | **5,052,654 ops/s** | 4,557,213 ops/s    | 3,467,219 ops/s    | 6,918,197 ops/s |
+| N=256  | **1,242,945 ops/s** | 1,102,350 ops/s    | 1,018,967 ops/s    | 1,494,750 ops/s |
+| N=1024 | **281,152 ops/s**   | 249,718 ops/s      | 242,823 ops/s      | 474,662 ops/s   |
+| N=4096 | **61,887 ops/s**    | 54,553 ops/s       | 56,587 ops/s       | 107,878 ops/s   |
 
-Note: wat-fft uses double precision (f64), while kissfft-wasm and fftw-js use single precision (f32). The real FFT is ~1.5-2x faster than the complex FFT for the same input size.
+Note: wat-fft provides both double precision (f64) and single precision (f32) implementations. kissfft-wasm and fftw-js use single precision only. The real FFT is ~2x faster than the complex FFT for the same input size, achieving the theoretical optimum by computing only N/2 complex FFT internally.
 
 ## Quick Start
 
