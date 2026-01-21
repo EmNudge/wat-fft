@@ -264,7 +264,7 @@ const modules = {
       name: "fft_stockham",
       wit: "fft-stockham.wit",
       world: "fft-stockham",
-      imports: { sin: "f64->f64", cos: "f64->f64" },
+      imports: {},
       exports: ["precompute-twiddles", "fft-stockham"],
       memory: 4,
       deps: [],
@@ -277,6 +277,16 @@ const modules = {
       exports: ["precompute-twiddles", "fft-fast"],
       memory: 3,
       deps: ["reverse_bits"],
+    },
+  ],
+
+  // Real FFT variants that need stockham inlined
+  rfft: [
+    {
+      name: "fft_real",
+      stockham: "fft_stockham",
+      imports: { sin: "f64->f64", cos: "f64->f64" },
+      memory: 5, // extra page for rfft twiddles
     },
   ],
 };
@@ -391,6 +401,72 @@ ${mainContent}
 modules.fft.forEach((fft) => {
   buildCombinedModule(fft, `combined_${fft.name.replace("fft_", "")}`);
 });
+
+// Build RFFT modules (need stockham inlined)
+console.log("\nBuilding real FFT modules (legacy format)...");
+
+function buildRfftModule(rfft, outputName) {
+  const rfftPath = path.join(modulesDir, `${rfft.name}.wat`);
+  const stockhamPath = path.join(modulesDir, `${rfft.stockham}.wat`);
+
+  let rfftContent = fs.readFileSync(rfftPath, "utf8");
+  let stockhamContent = fs.readFileSync(stockhamPath, "utf8");
+
+  // Inline shared imports in stockham
+  stockhamContent = inlineSharedImports(stockhamContent);
+
+  // Extract stockham body (remove module wrapper, imports, memory)
+  const stockhamBody = extractModuleBody(stockhamContent, {
+    removeImports: true,
+    removeMemory: true,
+  });
+
+  // Extract rfft body (remove all imports since they're added to combined module)
+  let rfftBody = extractModuleBody(rfftContent, {
+    removeImports: true,
+    removeMemory: true,
+  });
+
+  // Filter out duplicate globals that are already defined in stockham
+  const duplicateGlobals = ["$SECONDARY_OFFSET", "$TWIDDLE_OFFSET", "$NEG_PI", "$SIGN_MASK"];
+  rfftBody = rfftBody
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("(global ")) {
+        return !duplicateGlobals.some((g) => trimmed.includes(g));
+      }
+      return true;
+    })
+    .join("\n");
+
+  // Build combined module
+  const combined = `(module
+  (import "math" "sin" (func $js_sin (param f64) (result f64)))
+  (import "math" "cos" (func $js_cos (param f64) (result f64)))
+  ;; ${rfft.memory} pages = ${rfft.memory * 64}KB: primary buffer + secondary buffer + complex twiddles + rfft twiddles
+  (memory (export "memory") ${rfft.memory})
+${indent(stockhamBody, 2)}
+${rfftBody}
+)
+`;
+
+  const outputWat = path.join(distDir, `${outputName}.wat`);
+  const outputWasm = path.join(distDir, `${outputName}.wasm`);
+
+  fs.writeFileSync(outputWat, combined);
+  if (run(`wasm-tools parse ${outputWat} -o ${outputWasm}`)) {
+    console.log(`  ${outputName}.wasm ✓`);
+    return true;
+  }
+  return false;
+}
+
+if (modules.rfft) {
+  modules.rfft.forEach((rfft) => {
+    buildRfftModule(rfft, `combined_${rfft.name.replace("fft_", "")}`);
+  });
+}
 
 // Build components (new format for testing with mocked dependencies)
 console.log("\nBuilding components (new format)...");
@@ -569,6 +645,7 @@ console.log("  fft_stockham_composed.wasm ✓ (no deps)");
 
 console.log("\n✓ Build complete!");
 console.log("\nLegacy modules in dist/:");
-console.log("  - combined_*.wasm (for WebAssembly.instantiate with {math: {sin, cos}})");
+console.log("  - combined_stockham.wasm (self-contained, no imports needed)");
+console.log("  - combined_fast.wasm, combined_real.wasm (need {math: {sin, cos}} imports)");
 console.log("\nComposed components in dist/:");
 console.log("  - *_composed.wasm (only need sin/cos imports, reverse-bits composed in)");

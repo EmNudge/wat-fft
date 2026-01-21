@@ -8,14 +8,15 @@ A high-performance FFT implementation in WebAssembly Text format that **outperfo
 
 Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pure-JS FFT) and [fft-js](https://github.com/vail-systems/node-fft):
 
-| Size   | wat-fft (Stockham)  | fft.js          | Speedup vs fft.js |
-| ------ | ------------------- | --------------- | ----------------- |
-| N=64   | **3,157,512 ops/s** | 2,788,955 ops/s | **1.13x**         |
-| N=256  | **723,490 ops/s**   | 555,166 ops/s   | **1.30x**         |
-| N=1024 | **149,126 ops/s**   | 110,807 ops/s   | **1.35x**         |
-| N=4096 | **28,308 ops/s**    | 23,515 ops/s    | **1.20x**         |
+| Size   | wat-fft (Stockham)  | fft.js           | Speedup vs fft.js |
+| ------ | ------------------- | ---------------- | ----------------- |
+| N=16   | 11,423,263 ops/s    | 11,542,941 ops/s | 0.99x             |
+| N=64   | **3,491,570 ops/s** | 2,815,344 ops/s  | **1.24x**         |
+| N=256  | **797,698 ops/s**   | 563,025 ops/s    | **1.42x**         |
+| N=1024 | **171,373 ops/s**   | 113,735 ops/s    | **1.51x**         |
+| N=4096 | **30,139 ops/s**    | 23,641 ops/s     | **1.27x**         |
 
-The Stockham implementation is the fastest, using ping-pong buffers to avoid bit-reversal overhead.
+The Stockham implementation is fastest for N≥64, using ping-pong buffers to avoid bit-reversal overhead. At N=16, both implementations are equally fast (~11M ops/s).
 
 ### Real FFT
 
@@ -61,11 +62,10 @@ cargo install wasm-tools
 import fs from "fs";
 
 // Load the WASM module (Stockham is recommended for best performance)
+// No JavaScript imports needed - trig functions are computed inline
 const wasmBuffer = fs.readFileSync("dist/combined_stockham.wasm");
 const wasmModule = await WebAssembly.compile(wasmBuffer);
-const instance = await WebAssembly.instantiate(wasmModule, {
-  math: { sin: Math.sin, cos: Math.cos },
-});
+const instance = await WebAssembly.instantiate(wasmModule);
 const fft = instance.exports;
 
 // Prepare input (interleaved complex: [re0, im0, re1, im1, ...])
@@ -90,9 +90,25 @@ Three FFT implementations are provided:
 
 | Module                   | Algorithm                 | Accuracy vs fft.js | Speed       |
 | ------------------------ | ------------------------- | ------------------ | ----------- |
-| `combined_stockham.wasm` | Stockham Radix-2 + SIMD   | ~10⁻¹⁴             | **Fastest** |
-| `combined_real.wasm`     | Real FFT (r2c) + Stockham | ~10⁻¹⁴             | **Fastest** |
+| `combined_stockham.wasm` | Stockham Radix-2 + SIMD   | ~10⁻⁹              | **Fastest** |
+| `combined_real.wasm`     | Real FFT (r2c) + Stockham | ~10⁻⁹              | **Fastest** |
 | `combined_fast.wasm`     | Radix-2 (no SIMD)         | ~10⁻¹⁴             | Medium      |
+
+### Numerical Accuracy
+
+The accuracy difference between implementations comes from trigonometric function computation:
+
+- **Stockham/Real (~10⁻⁹)**: Uses inline 8-term Taylor series for sin/cos to avoid JavaScript import overhead. The Taylor series achieves ~10⁻¹⁰ accuracy per twiddle factor after range reduction to [-π/2, π/2]. Errors accumulate through log₂(N) butterfly stages, resulting in ~10⁻⁹ overall accuracy for typical FFT sizes.
+
+- **Fast (~10⁻¹⁴)**: Uses JavaScript's `Math.sin`/`Math.cos` which provide full double-precision accuracy (~10⁻¹⁵), resulting in ~10⁻¹⁴ overall FFT accuracy.
+
+**Test tolerances** are derived from these characteristics:
+
+- Relative tolerance: `1e-9` (matches Taylor series single-operation error)
+- Size scaling: `max(1e-9, N × 2e-11)` accounts for error accumulation in larger transforms
+- Absolute floor: `5e-4` for property tests handles near-zero values where relative error is meaningless
+
+For most signal processing applications, ~10⁻⁹ accuracy is more than sufficient. Use `combined_fast.wasm` if you need higher precision and can accept the ~30% performance penalty from JavaScript trig calls.
 
 Use `combined_stockham.wasm` for best performance. Use `combined_fast.wasm` as a fallback for environments without SIMD support.
 
@@ -103,6 +119,9 @@ Radix-2 Stockham FFT with SIMD acceleration - the fastest implementation:
 - No bit-reversal needed - implicit reordering via ping-pong buffers
 - Sequential memory access patterns for better cache performance
 - SIMD v128 complex arithmetic
+- **Loop Strength Reduction** - pointer increments instead of index multiplications
+- **Inline trig functions** - Taylor series sin/cos (no JS imports needed)
+- **Specialized N=4 kernel** - fully unrolled for ~16% speedup at small sizes
 - Works for all power-of-2 sizes
 
 Based on the algorithm from [scientificgo/fft](https://github.com/scientificgo/fft).

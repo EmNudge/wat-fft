@@ -4,8 +4,6 @@
  * Compares our WAT/WASM FFT implementations against popular JS libraries:
  * - fft.js (indutny) - Fastest pure JS, Radix-4 implementation
  * - fft-js - Simple Cooley-Tukey implementation
- * - wat-fft (WASM) - Our original Radix-2 implementation
- * - wat-fft-fast (WASM) - Our optimized Radix-4 with precomputed twiddles
  */
 
 import fs from "fs";
@@ -17,16 +15,16 @@ import * as fftJs from "fft-js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load our original WASM FFT (Radix-2)
-async function loadWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined.wasm");
+// Load Stockham WASM FFT (self-contained, no imports needed)
+async function loadStockhamWasmFFT() {
+  const wasmPath = path.join(__dirname, "..", "dist", "combined_stockham.wasm");
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
   const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
-// Load our fast WASM FFT (precomputed twiddles)
+// Load Fast WASM FFT (non-SIMD fallback)
 async function loadFastWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "combined_fast.wasm");
   const wasmBuffer = fs.readFileSync(wasmPath);
@@ -37,53 +35,9 @@ async function loadFastWasmFFT() {
   return instance.exports;
 }
 
-// Load our SIMD WASM FFT
-async function loadSimdWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_simd.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
-// Load our Radix-4 WASM FFT
-async function loadRadix4WasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_radix4.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
-// Load our Stockham WASM FFT
-async function loadStockhamWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_stockham.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
-// Load our Unrolled WASM FFT
-async function loadUnrolledWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_unrolled.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
 // Benchmark configuration
 const WARMUP_ITERATIONS = 100;
-const BENCHMARK_DURATION_MS = 2000; // Run each benchmark for 2 seconds
+const BENCHMARK_DURATION_MS = 2000;
 const SIZES = [16, 64, 256, 1024, 4096];
 
 // Generate random complex input data
@@ -97,16 +51,13 @@ function generateComplexInput(n) {
   return { real, imag };
 }
 
-// Benchmark runner - runs for a fixed duration and counts operations
-function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
-  // Warmup
+// Benchmark runner
+function runBenchmark(name, setupFn, benchFn) {
   const ctx = setupFn();
   for (let i = 0; i < WARMUP_ITERATIONS; i++) {
     benchFn(ctx);
   }
-  if (teardownFn) teardownFn(ctx);
 
-  // Actual benchmark
   const freshCtx = setupFn();
   const startTime = performance.now();
   let iterations = 0;
@@ -116,21 +67,16 @@ function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
     iterations++;
   }
 
-  const endTime = performance.now();
-  const elapsed = endTime - startTime;
+  const elapsed = performance.now() - startTime;
   const opsPerSec = (iterations / elapsed) * 1000;
-
-  if (teardownFn) teardownFn(freshCtx);
 
   return { name, iterations, elapsed, opsPerSec };
 }
 
-// Format number with thousands separator
 function formatNumber(num) {
   return num.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
-// Main benchmark suite
 async function runBenchmarks() {
   console.log("=".repeat(70));
   console.log("FFT Performance Benchmarks");
@@ -139,12 +85,8 @@ async function runBenchmarks() {
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
 
-  const wasmExports = await loadWasmFFT();
-  const fastWasmExports = await loadFastWasmFFT();
-  const simdWasmExports = await loadSimdWasmFFT();
-  const radix4WasmExports = await loadRadix4WasmFFT();
-  const stockhamWasmExports = await loadStockhamWasmFFT();
-  const unrolledWasmExports = await loadUnrolledWasmFFT();
+  const stockhamExports = await loadStockhamWasmFFT();
+  const fastExports = await loadFastWasmFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -154,110 +96,13 @@ async function runBenchmarks() {
     const input = generateComplexInput(size);
     const results = [];
 
-    // 1. Our original WASM FFT (Radix-2)
-    const wasmResult = runBenchmark(
-      "wat-fft (Radix-2)",
-      () => {
-        const memory = wasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Copy input to WASM memory
-        for (let i = 0; i < size; i++) {
-          data[i * 2] = input.real[i];
-          data[i * 2 + 1] = input.imag[i];
-        }
-        return { data, size };
-      },
-      (ctx) => {
-        // Reset input before each FFT (since it's in-place)
-        for (let i = 0; i < ctx.size; i++) {
-          ctx.data[i * 2] = input.real[i];
-          ctx.data[i * 2 + 1] = input.imag[i];
-        }
-        wasmExports.fft(ctx.size);
-      },
-    );
-    results.push(wasmResult);
-
-    // 2. Our fast WASM FFT (precomputed twiddles)
-    const fastWasmResult = runBenchmark(
-      "wat-fft (fast)",
-      () => {
-        const memory = fastWasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Precompute twiddle factors once
-        fastWasmExports.precompute_twiddles(size);
-        // Prepare interleaved input buffer for fast copy
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        // Fast copy using TypedArray.set
-        ctx.data.set(ctx.inputBuffer);
-        fastWasmExports.fft_fast(ctx.size);
-      },
-    );
-    results.push(fastWasmResult);
-
-    // 3. Our SIMD WASM FFT (v128 parallel complex ops)
-    const simdWasmResult = runBenchmark(
-      "wat-fft (SIMD)",
-      () => {
-        const memory = simdWasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Precompute twiddle factors once
-        simdWasmExports.precompute_twiddles(size);
-        // Prepare interleaved input buffer for fast copy
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        // Fast copy using TypedArray.set (zero-copy style)
-        ctx.data.set(ctx.inputBuffer);
-        simdWasmExports.fft_simd(ctx.size);
-      },
-    );
-    results.push(simdWasmResult);
-
-    // 4. Our Radix-4 WASM FFT (true Radix-4 algorithm with SIMD)
-    const radix4WasmResult = runBenchmark(
-      "wat-fft (Radix-4)",
-      () => {
-        const memory = radix4WasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Precompute twiddle factors once
-        radix4WasmExports.precompute_twiddles(size);
-        // Prepare interleaved input buffer for fast copy
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        radix4WasmExports.fft_radix4(ctx.size);
-      },
-    );
-    results.push(radix4WasmResult);
-
-    // 5. Our Stockham WASM FFT (ping-pong buffers, no bit-reversal)
-    const stockhamWasmResult = runBenchmark(
+    // wat-fft Stockham (recommended)
+    const stockhamResult = runBenchmark(
       "wat-fft (Stockham)",
       () => {
-        const memory = stockhamWasmExports.memory;
+        const memory = stockhamExports.memory;
         const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Precompute twiddle factors once
-        stockhamWasmExports.precompute_twiddles(size);
-        // Prepare interleaved input buffer for fast copy
+        stockhamExports.precompute_twiddles(size);
         const inputBuffer = new Float64Array(size * 2);
         for (let i = 0; i < size; i++) {
           inputBuffer[i * 2] = input.real[i];
@@ -267,20 +112,18 @@ async function runBenchmarks() {
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        stockhamWasmExports.fft_stockham(ctx.size);
+        stockhamExports.fft_stockham(ctx.size);
       },
     );
-    results.push(stockhamWasmResult);
+    results.push(stockhamResult);
 
-    // 6. Our Unrolled WASM FFT (unrolled small butterflies)
-    const unrolledWasmResult = runBenchmark(
-      "wat-fft (Unrolled)",
+    // wat-fft Fast (non-SIMD fallback)
+    const fastResult = runBenchmark(
+      "wat-fft (fast)",
       () => {
-        const memory = unrolledWasmExports.memory;
+        const memory = fastExports.memory;
         const data = new Float64Array(memory.buffer, 0, size * 2);
-        // Precompute twiddle factors once
-        unrolledWasmExports.precompute_twiddles(size);
-        // Prepare interleaved input buffer for fast copy
+        fastExports.precompute_twiddles(size);
         const inputBuffer = new Float64Array(size * 2);
         for (let i = 0; i < size; i++) {
           inputBuffer[i * 2] = input.real[i];
@@ -290,18 +133,17 @@ async function runBenchmarks() {
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        unrolledWasmExports.fft_unrolled(ctx.size);
+        fastExports.fft_fast(ctx.size);
       },
     );
-    results.push(unrolledWasmResult);
+    results.push(fastResult);
 
-    // fft.js (indutny) - Radix-4, highly optimized
+    // fft.js (indutny)
     const fftJsResult = runBenchmark(
       "fft.js (Radix-4)",
       () => {
         const fft = new FFT(size);
         const out = fft.createComplexArray();
-        // fft.js expects interleaved [re, im, re, im, ...]
         const complexInput = fft.createComplexArray();
         for (let i = 0; i < size; i++) {
           complexInput[i * 2] = input.real[i];
@@ -315,11 +157,10 @@ async function runBenchmarks() {
     );
     results.push(fftJsResult);
 
-    // 6. fft-js - Simple Cooley-Tukey
+    // fft-js
     const fftJsSimpleResult = runBenchmark(
       "fft-js (Cooley-Tukey)",
       () => {
-        // fft-js expects array of [real, imag] pairs
         const signal = [];
         for (let i = 0; i < size; i++) {
           signal.push([input.real[i], input.imag[i]]);
@@ -332,11 +173,10 @@ async function runBenchmarks() {
     );
     results.push(fftJsSimpleResult);
 
-    // Sort by performance (highest ops/sec first)
+    // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
     const fastest = results[0].opsPerSec;
 
-    // Print results
     console.log("");
     console.log("Library                   ops/sec        relative");
     console.log("─".repeat(50));
@@ -356,12 +196,8 @@ async function runBenchmarks() {
   console.log("Benchmark complete!");
   console.log("");
   console.log("Notes:");
-  console.log("- wat-fft (Radix-2): Original WASM, Taylor series sin/cos");
-  console.log("- wat-fft (fast): Precomputed twiddles via JS Math");
-  console.log("- wat-fft (SIMD): v128 parallel complex ops + precomputed twiddles");
-  console.log("- wat-fft (Radix-4): True Radix-4 with digit reversal + SIMD");
-  console.log("- wat-fft (Stockham): Radix-2 Stockham, ping-pong buffers, no bit-reversal");
-  console.log("- wat-fft (Unrolled): Unrolled small butterflies + SIMD");
+  console.log("- wat-fft (Stockham): SIMD + inline trig + LSR optimization (recommended)");
+  console.log("- wat-fft (fast): Non-SIMD fallback for older environments");
   console.log("- fft.js: Highly optimized Radix-4 JS (Fedor Indutny)");
   console.log("- fft-js: Simple Cooley-Tukey JS (educational)");
   console.log("=".repeat(70));
