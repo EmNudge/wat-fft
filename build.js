@@ -415,6 +415,28 @@ modules.fft.forEach((fft) => {
   buildCombinedModule(fft, `combined_${fft.name.replace("fft_", "")}`);
 });
 
+// Build Radix-4 modules (self-contained, no imports)
+console.log("\nBuilding Radix-4 FFT modules...");
+
+function buildSelfContainedModule(name) {
+  const srcPath = path.join(modulesDir, `${name}.wat`);
+  if (!fs.existsSync(srcPath)) {
+    console.log(`  ${name}.wasm (skipped - file not found)`);
+    return false;
+  }
+
+  const outputWasm = path.join(distDir, `${name}.wasm`);
+
+  if (run(`wasm-tools parse ${srcPath} -o ${outputWasm}`)) {
+    console.log(`  ${name}.wasm ✓`);
+    return true;
+  }
+  return false;
+}
+
+buildSelfContainedModule("fft_radix4");
+buildSelfContainedModule("fft_real_radix4");
+
 // Build RFFT modules (need stockham inlined)
 console.log("\nBuilding real FFT modules (legacy format)...");
 
