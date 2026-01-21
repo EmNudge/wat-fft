@@ -18,7 +18,7 @@ import fftwJs from "fftw-js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load our Real FFT WASM module
+// Load our Real FFT WASM module (f64)
 async function loadRealWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "combined_real.wasm");
   const wasmBuffer = fs.readFileSync(wasmPath);
@@ -26,6 +26,15 @@ async function loadRealWasmFFT() {
   const instance = await WebAssembly.instantiate(wasmModule, {
     math: { sin: Math.sin, cos: Math.cos },
   });
+  return instance.exports;
+}
+
+// Load our Real FFT WASM module (f32)
+async function loadRealWasmFFT_f32() {
+  const wasmPath = path.join(__dirname, "..", "dist", "combined_real_f32.wasm");
+  const wasmBuffer = fs.readFileSync(wasmPath);
+  const wasmModule = await WebAssembly.compile(wasmBuffer);
+  const instance = await WebAssembly.instantiate(wasmModule, {});
   return instance.exports;
 }
 
@@ -99,6 +108,7 @@ async function runBenchmarks() {
   console.log("");
 
   const realWasmExports = await loadRealWasmFFT();
+  const realWasmExports_f32 = await loadRealWasmFFT_f32();
   const stockhamWasmExports = await loadStockhamWasmFFT();
 
   for (const size of SIZES) {
@@ -124,6 +134,22 @@ async function runBenchmarks() {
       },
     );
     results.push(watRfftResult);
+
+    // 1b. Our WASM Real FFT (single precision f32)
+    const watRfftF32Result = runBenchmark(
+      "wat-fft rfft (f32)",
+      () => {
+        const memory = realWasmExports_f32.memory;
+        const data = new Float32Array(memory.buffer, 0, size);
+        realWasmExports_f32.precompute_rfft_twiddles(size);
+        return { data, inputBuffer: input.real32 };
+      },
+      (ctx) => {
+        ctx.data.set(ctx.inputBuffer);
+        realWasmExports_f32.rfft(size);
+      },
+    );
+    results.push(watRfftF32Result);
 
     // 2. Our WASM complex FFT on real input (for comparison)
     const watCfftResult = runBenchmark(
@@ -222,8 +248,13 @@ async function runBenchmarks() {
   console.log("Benchmark complete!");
   console.log("");
   console.log("Notes:");
-  console.log("- wat-fft rfft: Our real FFT using N/2 complex FFT + post-processing (f64)");
-  console.log("- wat-fft cfft: Complex FFT on real input with im=0 for comparison (f64)");
+  console.log(
+    "- wat-fft rfft (f64): Our real FFT using N/2 complex FFT + post-processing (double precision)",
+  );
+  console.log(
+    "- wat-fft rfft (f32): Our real FFT in single precision (same precision as competitors)",
+  );
+  console.log("- wat-fft cfft (f64): Complex FFT on real input with im=0 for comparison");
   console.log("- kissfft-wasm rfft: KissFFT WASM with stateful API (f32)");
   console.log("- kissfft-wasm simple: KissFFT WASM simple API with allocation (f32)");
   console.log("- fftw-js: FFTW via Emscripten (f32)");
