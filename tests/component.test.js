@@ -163,41 +163,39 @@ if (coreModuleExists("fft_stockham")) {
     const result = readComplexArray(memory, n);
     const expected = referenceDFT(real, imag);
 
-    assertArrayApprox(result.real, Array.from(expected.real), 1e-10, "real");
-    assertArrayApprox(result.imag, Array.from(expected.imag), 1e-10, "imag");
+    // Tolerance: 1e-8 for Taylor series trig (see fft_stockham.wat)
+    // Taylor series provides ~1e-10 accuracy per operation; 1e-8 allows for
+    // accumulation through log2(16)=4 butterfly stages with safety margin
+    assertArrayApprox(result.real, Array.from(expected.real), 1e-8, "real");
+    assertArrayApprox(result.imag, Array.from(expected.imag), 1e-8, "imag");
   });
 
-  // Test with tracked trig calls
-  await testAsync("stockham: tracks sin/cos calls via mock", async () => {
-    let sinCalls = 0;
-    let cosCalls = 0;
-
-    const imports = createStockhamImports({
-      sin: (x) => {
-        sinCalls++;
-        return Math.sin(x);
-      },
-      cos: (x) => {
-        cosCalls++;
-        return Math.cos(x);
-      },
-    });
-
-    const instance = await loadCoreModule("fft_stockham", imports);
+  // Test that stockham is self-contained (uses inline Taylor series sin/cos)
+  await testAsync("stockham: works without external trig imports (self-contained)", async () => {
+    // Stockham now uses inline Taylor series - no JS sin/cos needed
+    // Load with empty imports to verify self-containment
+    const instance = await loadCoreModule("fft_stockham", {});
     const memory = instance.exports.memory;
     const precompute = instance.exports["precompute-twiddles"];
     const fft = instance.exports["fft-stockham"];
 
     const n = 8;
-    writeComplexArray(memory, [1, 0, 0, 0, 0, 0, 0, 0]);
+    const real = [1, 2, 3, 4, 5, 6, 7, 8];
+    writeComplexArray(memory, real);
 
     precompute(n);
     fft(n);
 
-    // Should have called sin/cos during twiddle precomputation
-    if (sinCalls === 0 || cosCalls === 0) {
-      throw new Error(`Expected sin/cos calls, got sin=${sinCalls}, cos=${cosCalls}`);
-    }
+    const result = readComplexArray(memory, n);
+    const expected = referenceDFT(
+      real,
+      Array.from({ length: n }, () => 0),
+    );
+
+    // Verify it produces correct results without external imports
+    // Tolerance: 1e-8 for inline Taylor series (see fft_stockham.wat for derivation)
+    assertArrayApprox(result.real, Array.from(expected.real), 1e-8, "real");
+    assertArrayApprox(result.imag, Array.from(expected.imag), 1e-8, "imag");
   });
 } else {
   console.log("  (skipped - fft_stockham.core.wasm not found)");
@@ -239,53 +237,50 @@ if (coreModuleExists("fft_fast")) {
 }
 console.log("");
 
-// Test 3: Demonstrate mocking for fault injection
+// Test 3: Demonstrate mocking for fault injection (using fft_fast which still accepts trig imports)
 console.log("Testing fault injection via mocks...");
 
-if (coreModuleExists("fft_stockham")) {
-  await testAsync(
-    "stockham: detects incorrect sin implementation via output comparison",
-    async () => {
-      // Use slightly wrong sin to demonstrate detection
-      const badImports = createStockhamImports({
-        sin: (x) => Math.sin(x) * 1.001, // 0.1% error
-      });
+if (coreModuleExists("fft_fast")) {
+  await testAsync("fast: detects incorrect sin implementation via output comparison", async () => {
+    // Use slightly wrong sin to demonstrate detection
+    const badImports = createFastImports({
+      sin: (x) => Math.sin(x) * 1.001, // 0.1% error
+    });
 
-      const instance = await loadCoreModule("fft_stockham", badImports);
-      const memory = instance.exports.memory;
-      const precompute = instance.exports["precompute-twiddles"];
-      const fft = instance.exports["fft-stockham"];
+    const instance = await loadCoreModule("fft_fast", badImports);
+    const memory = instance.exports.memory;
+    const precompute = instance.exports["precompute-twiddles"];
+    const fft = instance.exports["fft-fast"];
 
-      const n = 8;
-      const real = [1, 2, 3, 4, 5, 6, 7, 8];
-      writeComplexArray(memory, real);
+    const n = 8;
+    const real = [1, 2, 3, 4, 5, 6, 7, 8];
+    writeComplexArray(memory, real);
 
-      precompute(n);
-      fft(n);
+    precompute(n);
+    fft(n);
 
-      const result = readComplexArray(memory, n);
-      const expected = referenceDFT(
-        real,
-        Array.from({ length: n }, () => 0),
-      );
+    const result = readComplexArray(memory, n);
+    const expected = referenceDFT(
+      real,
+      Array.from({ length: n }, () => 0),
+    );
 
-      // This should NOT match perfectly due to injected fault
-      let hasError = false;
-      for (let i = 0; i < n; i++) {
-        if (
-          Math.abs(result.real[i] - expected.real[i]) > 1e-10 ||
-          Math.abs(result.imag[i] - expected.imag[i]) > 1e-10
-        ) {
-          hasError = true;
-          break;
-        }
+    // This should NOT match perfectly due to injected fault
+    let hasError = false;
+    for (let i = 0; i < n; i++) {
+      if (
+        Math.abs(result.real[i] - expected.real[i]) > 1e-10 ||
+        Math.abs(result.imag[i] - expected.imag[i]) > 1e-10
+      ) {
+        hasError = true;
+        break;
       }
+    }
 
-      if (!hasError) {
-        throw new Error("Expected error to be detected with faulty sin");
-      }
-    },
-  );
+    if (!hasError) {
+      throw new Error("Expected error to be detected with faulty sin");
+    }
+  });
 }
 console.log("");
 

@@ -60,16 +60,14 @@ export function createMockTrigImports(overrides = {}) {
 
 /**
  * Create imports for fft_stockham component testing
- * @param {object} overrides - Override specific imports
- * @returns {object} Import object for fft_stockham
+ * Note: Stockham is now self-contained with inline Taylor series sin/cos,
+ * so no trig imports are needed. This returns an empty import object.
+ * @param {object} overrides - Override specific imports (unused, kept for API compatibility)
+ * @returns {object} Empty import object for fft_stockham
  */
-export function createStockhamImports(overrides = {}) {
-  return {
-    $root: {
-      sin: overrides.sin || Math.sin,
-      cos: overrides.cos || Math.cos,
-    },
-  };
+export function createStockhamImports(_overrides = {}) {
+  // Stockham now uses inline Taylor series - no external imports needed
+  return {};
 }
 
 /**
@@ -169,6 +167,10 @@ export function readComplexArray(memory, n, offset = 0) {
  * @param {number[]} actual - Actual values
  * @param {number[]} expected - Expected values
  * @param {number} tolerance - Comparison tolerance (default: 1e-10)
+ *   Recommended values:
+ *   - 1e-10: JS Math.sin/cos (full f64 precision)
+ *   - 1e-8: Taylor series trig (see fft_stockham.wat)
+ *   - max(1e-9, N*2e-11): size-dependent for large N
  * @returns {boolean}
  */
 export function compareResults(actual, expected, tolerance = 1e-10) {
