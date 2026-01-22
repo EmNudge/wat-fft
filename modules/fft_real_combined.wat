@@ -156,6 +156,291 @@
   )
 
   ;; ============================================================================
+  ;; Fused Real FFT N=8: 8 real inputs -> 5 complex outputs
+  ;; Combines FFT-4 + post-processing with hardcoded twiddles
+  ;; ============================================================================
+  (func $rfft_8
+    (local $z0 v128) (local $z1 v128) (local $z2 v128) (local $z3 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    ;; Post-processing temporaries (scalars)
+    (local $z0_re f64) (local $z0_im f64)
+    (local $z1_re f64) (local $z1_im f64) (local $z3_re f64) (local $z3_im f64)
+    (local $z2_re f64) (local $z2_im f64)
+    (local $sum_re f64) (local $sum_im f64) (local $diff_re f64) (local $diff_im f64)
+    (local $wd_re f64) (local $wd_im f64)
+
+    ;; Load 4 complex values (8 real values interpreted as complex)
+    (local.set $z0 (v128.load (i32.const 0)))
+    (local.set $z1 (v128.load (i32.const 16)))
+    (local.set $z2 (v128.load (i32.const 32)))
+    (local.set $z3 (v128.load (i32.const 48)))
+
+    ;; FFT-4 butterfly (same as $fft_4)
+    (local.set $t0 (f64x2.add (local.get $z0) (local.get $z2)))
+    (local.set $t1 (f64x2.sub (local.get $z0) (local.get $z2)))
+    (local.set $t2 (f64x2.add (local.get $z1) (local.get $z3)))
+    (local.set $t3 (f64x2.sub (local.get $z1) (local.get $z3)))
+    ;; t3 = t3 * -i = (im, -re) -> swap and negate im
+    (local.set $t3 (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t3) (local.get $t3)) (v128.const f64x2 1.0 -1.0)))
+    ;; FFT-4 outputs: z0 = t0+t2, z1 = t1+t3, z2 = t0-t2, z3 = t1-t3
+    (local.set $z0 (f64x2.add (local.get $t0) (local.get $t2)))
+    (local.set $z1 (f64x2.add (local.get $t1) (local.get $t3)))
+    (local.set $z2 (f64x2.sub (local.get $t0) (local.get $t2)))
+    (local.set $z3 (f64x2.sub (local.get $t1) (local.get $t3)))
+
+    ;; ---- Post-processing with hardcoded twiddles ----
+    ;; Extract scalar components
+    (local.set $z0_re (f64x2.extract_lane 0 (local.get $z0)))
+    (local.set $z0_im (f64x2.extract_lane 1 (local.get $z0)))
+    (local.set $z1_re (f64x2.extract_lane 0 (local.get $z1)))
+    (local.set $z1_im (f64x2.extract_lane 1 (local.get $z1)))
+    (local.set $z2_re (f64x2.extract_lane 0 (local.get $z2)))
+    (local.set $z2_im (f64x2.extract_lane 1 (local.get $z2)))
+    (local.set $z3_re (f64x2.extract_lane 0 (local.get $z3)))
+    (local.set $z3_im (f64x2.extract_lane 1 (local.get $z3)))
+
+    ;; X[0] = (Z[0].re + Z[0].im, 0) - DC component
+    (f64.store (i32.const 0) (f64.add (local.get $z0_re) (local.get $z0_im)))
+    (f64.store (i32.const 8) (f64.const 0.0))
+
+    ;; X[4] = (Z[0].re - Z[0].im, 0) - Nyquist component
+    (f64.store (i32.const 64) (f64.sub (local.get $z0_re) (local.get $z0_im)))
+    (f64.store (i32.const 72) (f64.const 0.0))
+
+    ;; X[1] using Z[1] and Z[3] with W_8^1 = (0.7071067811865476, -0.7071067811865476)
+    (local.set $sum_re (f64.add (local.get $z1_re) (local.get $z3_re)))
+    (local.set $sum_im (f64.sub (local.get $z1_im) (local.get $z3_im)))
+    (local.set $diff_re (f64.sub (local.get $z1_re) (local.get $z3_re)))
+    (local.set $diff_im (f64.add (local.get $z1_im) (local.get $z3_im)))
+    ;; wd = W.im * diff_re + W.re * diff_im, W.im * diff_im - W.re * diff_re
+    ;; W_8^1.re = 0.7071067811865476, W_8^1.im = -0.7071067811865476
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re))
+                               (f64.mul (f64.const 0.7071067811865476) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im))
+                               (f64.mul (f64.const 0.7071067811865476) (local.get $diff_re))))
+    (f64.store (i32.const 16) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 24) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; X[3] using Z[3] and Z[1] with W_8^3 = (-0.7071067811865476, -0.7071067811865476)
+    (local.set $sum_re (f64.add (local.get $z3_re) (local.get $z1_re)))
+    (local.set $sum_im (f64.sub (local.get $z3_im) (local.get $z1_im)))
+    (local.set $diff_re (f64.sub (local.get $z3_re) (local.get $z1_re)))
+    (local.set $diff_im (f64.add (local.get $z3_im) (local.get $z1_im)))
+    ;; W_8^3.re = -0.7071067811865476, W_8^3.im = -0.7071067811865476
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re))
+                               (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im))
+                               (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re))))
+    (f64.store (i32.const 48) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 56) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; X[2] = conj(Z[2]) - middle element simplifies with W_8^2 = (0, -1)
+    (f64.store (i32.const 32) (local.get $z2_re))
+    (f64.store (i32.const 40) (f64.neg (local.get $z2_im)))
+  )
+
+  ;; ============================================================================
+  ;; Fused Real FFT N=32: 32 real inputs -> 17 complex outputs
+  ;; Calls fft_16 then does hardcoded post-processing (no twiddle memory loads)
+  ;; ============================================================================
+  (func $rfft_32
+    (local $z0_re f64) (local $z0_im f64)
+    (local $zk_re f64) (local $zk_im f64) (local $zn2k_re f64) (local $zn2k_im f64)
+    (local $sum_re f64) (local $sum_im f64) (local $diff_re f64) (local $diff_im f64)
+    (local $wd_re f64) (local $wd_im f64)
+    (local $xk_re f64) (local $xk_im f64) (local $xn2k_re f64) (local $xn2k_im f64)
+    ;; W_32^k twiddles hardcoded as pairs (re, im)
+    ;; k=1: (0.9807852804032304, -0.19509032201612825)
+    ;; k=2: (0.9238795325112867, -0.3826834323650898)
+    ;; k=3: (0.8314696123025452, -0.5555702330196022)
+    ;; k=4: (0.7071067811865476, -0.7071067811865476)
+    ;; k=5: (0.5555702330196023, -0.8314696123025452)
+    ;; k=6: (0.38268343236508984, -0.9238795325112867)
+    ;; k=7: (0.19509032201612833, -0.9807852804032304)
+    ;; k=8: (0, -1)  - middle element
+    ;; k=9: (-0.19509032201612833, -0.9807852804032304)
+    ;; ... conjugate symmetry for k=9..15
+
+    ;; Run 16-point complex FFT
+    (call $fft_16)
+
+    ;; Post-processing: DC and Nyquist
+    (local.set $z0_re (f64.load (i32.const 0)))
+    (local.set $z0_im (f64.load (i32.const 8)))
+    (f64.store (i32.const 0) (f64.add (local.get $z0_re) (local.get $z0_im)))
+    (f64.store (i32.const 8) (f64.const 0.0))
+    (f64.store (i32.const 256) (f64.sub (local.get $z0_re) (local.get $z0_im)))  ;; X[16] at offset 16*16=256
+    (f64.store (i32.const 264) (f64.const 0.0))
+
+    ;; k=1: Z[1] at 16, Z[15] at 240, W_32^1=(0.9807852804032304, -0.19509032201612825), W_32^15=(-0.19509032201612833, -0.9807852804032304)
+    (local.set $zk_re (f64.load (i32.const 16)))
+    (local.set $zk_im (f64.load (i32.const 24)))
+    (local.set $zn2k_re (f64.load (i32.const 240)))
+    (local.set $zn2k_im (f64.load (i32.const 248)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.19509032201612825) (local.get $diff_re)) (f64.mul (f64.const 0.9807852804032304) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.19509032201612825) (local.get $diff_im)) (f64.mul (f64.const 0.9807852804032304) (local.get $diff_re))))
+    (f64.store (i32.const 16) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 24) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[15]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.9807852804032304) (local.get $diff_re)) (f64.mul (f64.const -0.19509032201612833) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.9807852804032304) (local.get $diff_im)) (f64.mul (f64.const -0.19509032201612833) (local.get $diff_re))))
+    (f64.store (i32.const 240) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 248) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=2: Z[2] at 32, Z[14] at 224, W_32^2=(0.9238795325112867, -0.3826834323650898), W_32^14=(-0.3826834323650898, -0.9238795325112867)
+    (local.set $zk_re (f64.load (i32.const 32)))
+    (local.set $zk_im (f64.load (i32.const 40)))
+    (local.set $zn2k_re (f64.load (i32.const 224)))
+    (local.set $zn2k_im (f64.load (i32.const 232)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.3826834323650898) (local.get $diff_re)) (f64.mul (f64.const 0.9238795325112867) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.3826834323650898) (local.get $diff_im)) (f64.mul (f64.const 0.9238795325112867) (local.get $diff_re))))
+    (f64.store (i32.const 32) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 40) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[14]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.9238795325112867) (local.get $diff_re)) (f64.mul (f64.const -0.3826834323650898) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.9238795325112867) (local.get $diff_im)) (f64.mul (f64.const -0.3826834323650898) (local.get $diff_re))))
+    (f64.store (i32.const 224) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 232) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=3: Z[3] at 48, Z[13] at 208, W_32^3=(0.8314696123025452, -0.5555702330196022), W_32^13=(-0.5555702330196022, -0.8314696123025452)
+    (local.set $zk_re (f64.load (i32.const 48)))
+    (local.set $zk_im (f64.load (i32.const 56)))
+    (local.set $zn2k_re (f64.load (i32.const 208)))
+    (local.set $zn2k_im (f64.load (i32.const 216)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.5555702330196022) (local.get $diff_re)) (f64.mul (f64.const 0.8314696123025452) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.5555702330196022) (local.get $diff_im)) (f64.mul (f64.const 0.8314696123025452) (local.get $diff_re))))
+    (f64.store (i32.const 48) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 56) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[13]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.8314696123025452) (local.get $diff_re)) (f64.mul (f64.const -0.5555702330196022) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.8314696123025452) (local.get $diff_im)) (f64.mul (f64.const -0.5555702330196022) (local.get $diff_re))))
+    (f64.store (i32.const 208) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 216) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=4: Z[4] at 64, Z[12] at 192, W_32^4=(0.7071067811865476, -0.7071067811865476), W_32^12=(-0.7071067811865476, -0.7071067811865476)
+    (local.set $zk_re (f64.load (i32.const 64)))
+    (local.set $zk_im (f64.load (i32.const 72)))
+    (local.set $zn2k_re (f64.load (i32.const 192)))
+    (local.set $zn2k_im (f64.load (i32.const 200)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re)) (f64.mul (f64.const 0.7071067811865476) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im)) (f64.mul (f64.const 0.7071067811865476) (local.get $diff_re))))
+    (f64.store (i32.const 64) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 72) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[12]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re)) (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.7071067811865476) (local.get $diff_im)) (f64.mul (f64.const -0.7071067811865476) (local.get $diff_re))))
+    (f64.store (i32.const 192) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 200) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=5: Z[5] at 80, Z[11] at 176, W_32^5=(0.5555702330196023, -0.8314696123025452), W_32^11=(-0.8314696123025452, -0.5555702330196023)
+    (local.set $zk_re (f64.load (i32.const 80)))
+    (local.set $zk_im (f64.load (i32.const 88)))
+    (local.set $zn2k_re (f64.load (i32.const 176)))
+    (local.set $zn2k_im (f64.load (i32.const 184)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.8314696123025452) (local.get $diff_re)) (f64.mul (f64.const 0.5555702330196023) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.8314696123025452) (local.get $diff_im)) (f64.mul (f64.const 0.5555702330196023) (local.get $diff_re))))
+    (f64.store (i32.const 80) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 88) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[11]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.5555702330196023) (local.get $diff_re)) (f64.mul (f64.const -0.8314696123025452) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.5555702330196023) (local.get $diff_im)) (f64.mul (f64.const -0.8314696123025452) (local.get $diff_re))))
+    (f64.store (i32.const 176) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 184) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=6: Z[6] at 96, Z[10] at 160, W_32^6=(0.38268343236508984, -0.9238795325112867), W_32^10=(-0.9238795325112867, -0.38268343236508984)
+    (local.set $zk_re (f64.load (i32.const 96)))
+    (local.set $zk_im (f64.load (i32.const 104)))
+    (local.set $zn2k_re (f64.load (i32.const 160)))
+    (local.set $zn2k_im (f64.load (i32.const 168)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.9238795325112867) (local.get $diff_re)) (f64.mul (f64.const 0.38268343236508984) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.9238795325112867) (local.get $diff_im)) (f64.mul (f64.const 0.38268343236508984) (local.get $diff_re))))
+    (f64.store (i32.const 96) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 104) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[10]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.38268343236508984) (local.get $diff_re)) (f64.mul (f64.const -0.9238795325112867) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.38268343236508984) (local.get $diff_im)) (f64.mul (f64.const -0.9238795325112867) (local.get $diff_re))))
+    (f64.store (i32.const 160) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 168) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=7: Z[7] at 112, Z[9] at 144, W_32^7=(0.19509032201612833, -0.9807852804032304), W_32^9=(-0.9807852804032304, -0.19509032201612833)
+    (local.set $zk_re (f64.load (i32.const 112)))
+    (local.set $zk_im (f64.load (i32.const 120)))
+    (local.set $zn2k_re (f64.load (i32.const 144)))
+    (local.set $zn2k_im (f64.load (i32.const 152)))
+    (local.set $sum_re (f64.add (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $sum_im (f64.sub (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $diff_re (f64.sub (local.get $zk_re) (local.get $zn2k_re)))
+    (local.set $diff_im (f64.add (local.get $zk_im) (local.get $zn2k_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.9807852804032304) (local.get $diff_re)) (f64.mul (f64.const 0.19509032201612833) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.9807852804032304) (local.get $diff_im)) (f64.mul (f64.const 0.19509032201612833) (local.get $diff_re))))
+    (f64.store (i32.const 112) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 120) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+    ;; X[9]
+    (local.set $sum_re (f64.add (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $sum_im (f64.sub (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $diff_re (f64.sub (local.get $zn2k_re) (local.get $zk_re)))
+    (local.set $diff_im (f64.add (local.get $zn2k_im) (local.get $zk_im)))
+    (local.set $wd_re (f64.add (f64.mul (f64.const -0.19509032201612833) (local.get $diff_re)) (f64.mul (f64.const -0.9807852804032304) (local.get $diff_im))))
+    (local.set $wd_im (f64.sub (f64.mul (f64.const -0.19509032201612833) (local.get $diff_im)) (f64.mul (f64.const -0.9807852804032304) (local.get $diff_re))))
+    (f64.store (i32.const 144) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_re) (local.get $wd_re))))
+    (f64.store (i32.const 152) (f64.mul (f64.const 0.5) (f64.add (local.get $sum_im) (local.get $wd_im))))
+
+    ;; k=8 (middle): Z[8] at 128, W_32^8=(0, -1) -> simplifies to X[8] = conj(Z[8])
+    (local.set $zk_re (f64.load (i32.const 128)))
+    (local.set $zk_im (f64.load (i32.const 136)))
+    (f64.store (i32.const 128) (local.get $zk_re))
+    (f64.store (i32.const 136) (f64.neg (local.get $zk_im)))
+  )
+
+  ;; ============================================================================
   ;; Radix-4: N=16 Fully Unrolled
   ;; ============================================================================
   (func $fft_16
@@ -521,6 +806,10 @@
     (local $xk_re f64) (local $xk_im f64) (local $xn2k_re f64) (local $xn2k_im f64)
     (local $addr_k i32) (local $addr_n2k i32)
     (local $z0_re f64) (local $z0_im f64)
+
+    ;; Dispatch to fused codelets for small sizes
+    (if (i32.eq (local.get $n) (i32.const 8)) (then (call $rfft_8) (return)))
+    (if (i32.eq (local.get $n) (i32.const 32)) (then (call $rfft_32) (return)))
 
     (local.set $n2 (i32.shr_u (local.get $n) (i32.const 1)))
 

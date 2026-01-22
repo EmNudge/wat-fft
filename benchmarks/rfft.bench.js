@@ -42,7 +42,7 @@ const BENCHMARK_DURATION_MS = 2000;
 // Test sizes: include both radix-4 eligible (N/2 is power-of-4) and radix-2 sizes
 // Radix-4 eligible: N=8,32,128,512,2048 (N/2=4,16,64,256,1024)
 // Radix-2 only: N=16,64,256,1024,4096 (N/2=8,32,128,512,2048)
-const SIZES = [32, 64, 128, 256, 512, 1024, 2048, 4096];
+const SIZES = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 // Generate random real input data
 function generateRealInput(n) {

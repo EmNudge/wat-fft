@@ -48,16 +48,18 @@ xychart-beta
 
 Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft rfft (f64)   | fftw-js (f32)       | Comparison |
-| ------ | -------------------- | ------------------- | ---------- |
-| N=32   | **13,079,000 ops/s** | 9,280,000 ops/s     | **+40.9%** |
-| N=64   | 4,894,000 ops/s      | **7,113,000 ops/s** | -31.2%     |
-| N=128  | 2,909,000 ops/s      | **4,413,000 ops/s** | -34.1%     |
-| N=256  | 1,256,000 ops/s      | **1,519,000 ops/s** | -17.3%     |
-| N=512  | 734,000 ops/s        | **918,000 ops/s**   | -20.0%     |
-| N=1024 | 281,000 ops/s        | **476,000 ops/s**   | -41.0%     |
-| N=2048 | 155,000 ops/s        | **233,000 ops/s**   | -33.3%     |
-| N=4096 | 62,000 ops/s         | **106,000 ops/s**   | -41.4%     |
+| Size   | wat-fft rfft (f64)   | fftw-js (f32)       | Comparison  |
+| ------ | -------------------- | ------------------- | ----------- |
+| N=8    | **24,159,000 ops/s** | 10,793,000 ops/s    | **+123.8%** |
+| N=16   | **12,487,000 ops/s** | 10,266,000 ops/s    | **+21.6%**  |
+| N=32   | **13,140,000 ops/s** | 9,017,000 ops/s     | **+45.7%**  |
+| N=64   | 4,807,000 ops/s      | **6,858,000 ops/s** | -29.9%      |
+| N=128  | 2,897,000 ops/s      | **4,357,000 ops/s** | -33.5%      |
+| N=256  | 1,258,000 ops/s      | **1,530,000 ops/s** | -17.8%      |
+| N=512  | 736,000 ops/s        | **922,000 ops/s**   | -20.2%      |
+| N=1024 | 281,000 ops/s        | **476,000 ops/s**   | -41.0%      |
+| N=2048 | 155,000 ops/s        | **233,000 ops/s**   | -33.3%      |
+| N=4096 | 62,000 ops/s         | **106,000 ops/s**   | -41.4%      |
 
 ```mermaid
 ---
@@ -71,18 +73,18 @@ config:
 ---
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
-    x-axis [N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 14
-    line [13.08, 4.84, 2.91, 1.24, 0.73, 0.28, 0.15, 0.06]
-    line [9.24, 6.90, 4.36, 1.51, 0.91, 0.47, 0.23, 0.11]
-    line [5.92, 3.00, 1.79, 0.77, 0.42, 0.18, 0.09, 0.04]
+    x-axis [N=8, N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
+    y-axis "Million ops/s" 0 --> 26
+    line [24.16, 12.49, 13.14, 4.81, 2.90, 1.26, 0.74, 0.28, 0.15, 0.06]
+    line [10.79, 10.27, 9.02, 6.86, 4.36, 1.53, 0.92, 0.48, 0.23, 0.11]
+    line [11.21, 7.90, 5.91, 3.00, 1.76, 0.78, 0.43, 0.18, 0.09, 0.04]
 ```
 
 > 🟢 **wat-fft (f64)** · 🔴 **fftw-js (f32)** · 🟣 **kissfft-js (f32)**
 
-**wat-fft beats fftw-js at small sizes (N=32)** while providing double precision (f64) vs fftw-js's single precision (f32). For larger sizes, fftw-js (compiled from highly optimized FFTW C library) is faster.
+**wat-fft beats fftw-js at small sizes (N≤32)** with massive speedups: **+124% at N=8** and **+46% at N=32**. This is achieved through fused rfft codelets that eliminate function call overhead and twiddle memory loads. For larger sizes, fftw-js (compiled from highly optimized FFTW C library with hierarchical codelets) is faster.
 
-Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally.
+Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally. For small sizes (N≤32), fused rfft codelets with hardcoded twiddles provide additional speedups by eliminating memory loads and function call overhead.
 
 ## Quick Start
 
@@ -251,7 +253,8 @@ Optimized real-to-complex FFT for real-valued input signals:
 - Returns N/2+1 unique frequency bins (exploits conjugate symmetry)
 - ~2x faster than complex FFT for real input
 - Double precision (f64) for high accuracy
-- **Radix-4 variant** (`fft_real_radix4.wasm`) is fastest, beating fftw-js at small/medium sizes
+- **Fused rfft codelets** for N=8 and N=32 with hardcoded twiddles - **beats fftw-js by up to 124%**
+- **Combined variant** (`fft_real_combined.wasm`) is recommended, auto-selects optimal algorithm
 
 ```javascript
 // Real FFT usage (radix-4 recommended for best performance)
