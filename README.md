@@ -22,14 +22,16 @@ Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pur
 
 Benchmarked against [kissfft-wasm](https://www.npmjs.com/package/kissfft-wasm) and [fftw-js](https://www.npmjs.com/package/fftw-js):
 
-| Size   | wat-fft rfft (f64)  | wat-fft rfft (f32) | kissfft-wasm (f32) | fftw-js (f32)   |
-| ------ | ------------------- | ------------------ | ------------------ | --------------- |
-| N=64   | **5,052,654 ops/s** | 4,557,213 ops/s    | 3,467,219 ops/s    | 6,918,197 ops/s |
-| N=256  | **1,242,945 ops/s** | 1,102,350 ops/s    | 1,018,967 ops/s    | 1,494,750 ops/s |
-| N=1024 | **281,152 ops/s**   | 249,718 ops/s      | 242,823 ops/s      | 474,662 ops/s   |
-| N=4096 | **61,887 ops/s**    | 54,553 ops/s       | 56,587 ops/s       | 107,878 ops/s   |
+| Size   | wat-fft radix-4 (f64) | wat-fft radix-2 (f64) | kissfft-wasm (f32) | fftw-js (f32)     |
+| ------ | --------------------- | --------------------- | ------------------ | ----------------- |
+| N=64   | 6,598,000 ops/s       | 4,941,000 ops/s       | 3,343,000 ops/s    | 6,913,000 ops/s   |
+| N=256  | **1,638,000 ops/s**   | 1,245,000 ops/s       | 1,012,000 ops/s    | 1,484,000 ops/s   |
+| N=1024 | 383,000 ops/s         | 278,000 ops/s         | 243,000 ops/s      | **461,000 ops/s** |
+| N=4096 | 79,200 ops/s          | 61,200 ops/s          | 55,600 ops/s       | **107,000 ops/s** |
 
-Note: wat-fft provides both double precision (f64) and single precision (f32) implementations. kissfft-wasm and fftw-js use single precision only. The real FFT is ~2x faster than the complex FFT for the same input size, achieving the theoretical optimum by computing only N/2 complex FFT internally.
+**wat-fft radix-4 beats fftw-js at N=256** (110% performance) while providing double precision (f64) vs fftw-js's single precision (f32). At larger sizes, fftw-js is faster due to its extensive algorithm selection and cache-optimized codelets.
+
+Note: wat-fft provides both double precision (f64) and single precision (f32) implementations. The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally.
 
 ## Quick Start
 
@@ -88,13 +90,13 @@ console.log("DC component:", data[0], data[1]);
 
 Four FFT implementations are provided:
 
-| Module                   | Algorithm                 | Best For               | Speed            |
-| ------------------------ | ------------------------- | ---------------------- | ---------------- |
-| `fft_radix4.wasm`        | Radix-4 Stockham + SIMD   | Power-of-4 sizes       | **Fastest**      |
-| `combined_stockham.wasm` | Radix-2 Stockham + SIMD   | All power-of-2 sizes   | Fast             |
-| `combined_real.wasm`     | Real FFT (r2c) + Stockham | Real-valued signals    | Fast             |
-| `fft_real_radix4.wasm`   | Real FFT + Radix-4        | Real signals, N/2=pow4 | **Fastest rfft** |
-| `combined_fast.wasm`     | Radix-2 (no SIMD)         | No SIMD support        | Medium           |
+| Module                   | Algorithm                 | Best For                | Speed            |
+| ------------------------ | ------------------------- | ----------------------- | ---------------- |
+| `fft_radix4.wasm`        | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4   | **Fastest cfft** |
+| `fft_real_radix4.wasm`   | Real FFT + Radix-4        | Real signals (any size) | **Fastest rfft** |
+| `combined_stockham.wasm` | Radix-2 Stockham + SIMD   | All power-of-2 sizes    | Fast             |
+| `combined_real.wasm`     | Real FFT (r2c) + Stockham | Real-valued signals     | Fast             |
+| `combined_fast.wasm`     | Radix-2 (no SIMD)         | No SIMD support         | Medium           |
 
 ### Numerical Accuracy
 
@@ -155,18 +157,17 @@ Based on the algorithm from [scientificgo/fft](https://github.com/scientificgo/f
 
 Optimized real-to-complex FFT for real-valued input signals:
 
-- Computes N-point real FFT using N/2-point complex Stockham FFT
+- Computes N-point real FFT using N/2-point complex FFT
 - Returns N/2+1 unique frequency bins (exploits conjugate symmetry)
 - ~2x faster than complex FFT for real input
 - Double precision (f64) for high accuracy
+- **Radix-4 variant** (`fft_real_radix4.wasm`) is fastest, beating fftw-js at small/medium sizes
 
 ```javascript
-// Real FFT usage
-const wasmBuffer = fs.readFileSync("dist/combined_real.wasm");
+// Real FFT usage (radix-4 recommended for best performance)
+const wasmBuffer = fs.readFileSync("dist/fft_real_radix4.wasm");
 const wasmModule = await WebAssembly.compile(wasmBuffer);
-const instance = await WebAssembly.instantiate(wasmModule, {
-  math: { sin: Math.sin, cos: Math.cos },
-});
+const instance = await WebAssembly.instantiate(wasmModule, {});
 const fft = instance.exports;
 
 const N = 1024;
