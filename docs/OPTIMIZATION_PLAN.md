@@ -356,6 +356,48 @@ Note: The original comparison target was fftw-js (FFTW via Emscripten). The numb
 
 **Result**: **SUCCESS** - All tests pass, provides faster rfft for power-of-4 N/2 sizes.
 
+### Experiment 6: Automated Codelet Generator (2026-01-22)
+
+**Hypothesis**: An automated codelet generator using DAG-based symbolic tracing with CSE would produce correct, optimized codelets for any size.
+
+**Implementation**:
+
+- Created `tools/codelet_generator.js` with:
+  - Symbolic expression system (`Expr` class with hash-based CSE)
+  - `StockhamTracer` that traces the FFT algorithm symbolically
+  - `SIMDWATGenerator` that emits optimized WAT with SIMD v128 operations
+  - Support for both radix-2 and radix-4 algorithms
+- Generated N=32 (radix-2) and N=64 (radix-4) codelets
+- Integrated into `fft_combined.wat` with dispatch logic
+
+**Result**: **PARTIAL SUCCESS - Correct but limited performance gains**
+
+| Size | Standalone codelet vs general loop | rfft benchmark vs fftw-js |
+| ---- | ---------------------------------- | ------------------------- |
+| N=32 | +15.6% faster | rfft(64): -32.0% |
+| N=64 | +18.9% faster | rfft(128): -33.4% |
+
+**Analysis**:
+
+1. **Codelets are numerically correct** - Max error ~10⁻¹⁵ (machine precision)
+2. **Too many locals cause register spilling**:
+   - N=32 codelet: 320+ locals (32 inputs + 288 temps)
+   - N=64 codelet: 768+ locals (64 inputs + 704 temps)
+   - WebAssembly engines spill excess locals to stack memory
+3. **General SIMD loop already efficient** - The Stockham loop with inlined SIMD complex multiply is competitive; codelet overhead (spills) may negate unrolling benefits
+4. **Hand-written $fft_16 still wins** - Only ~20 locals, carefully optimized, used by rfft(32) which beats fftw-js by +43%
+
+**Key Insight**: FFTW's approach of composing **small** codelets (N≤16) hierarchically is superior to generating **large** monolithic codelets. Large unrolled codelets exhaust registers and cause spills.
+
+**Lesson**: Future work should focus on:
+- Keeping codelets small (N≤16)
+- Using hierarchical composition for larger sizes
+- Register-aware scheduling to minimize live variables
+
+**Files created/modified**:
+- `tools/codelet_generator.js` - Automated codelet generator
+- `modules/fft_combined.wat` - Added $fft_32, $fft_64 codelets and dispatch
+
 ### Final Performance Summary (2026-01-21)
 
 After all optimizations, wat-fft Radix-4 achieves:
@@ -368,10 +410,18 @@ After all optimizations, wat-fft Radix-4 achieves:
 | N=1024 | 186K ops/s      | 109K ops/s       | **+71%** |
 | N=4096 | 42.8K ops/s     | 22.7K ops/s      | **+89%** |
 
-**Conclusion**: The radix-4 approach with SIMD and codelets successfully achieves significant speedups over the best pure JS implementation. Further gains would require:
+**Conclusion**: The radix-4 approach with SIMD and small hand-written codelets (N=4, N=16) successfully achieves significant speedups over the best pure JS implementation.
 
-- Codelet generator for automated N=32, N=64 generation
+**Key findings from codelet generator experiment (2026-01-22)**:
+- Automated codelet generation works and produces correct code
+- However, large codelets (N≥32) have too many locals causing register spills
+- Small hand-written codelets (N≤16) outperform generated large codelets
+- FFTW's hierarchical composition of small codelets is the superior approach
+
+Further gains would require:
+- Hierarchical composition using small codelets (N≤16) as building blocks
 - Depth-first recursion for better cache locality at N≥8192
+- Twiddle-butterfly fusion to reduce memory traffic
 - FFTW-style planner for runtime algorithm selection
 
 ---
