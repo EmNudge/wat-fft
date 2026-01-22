@@ -20,18 +20,18 @@ Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pur
 
 ### Real FFT
 
-Benchmarked against [kissfft-wasm](https://www.npmjs.com/package/kissfft-wasm) and [fftw-js](https://www.npmjs.com/package/fftw-js):
+Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft radix-4 (f64) | wat-fft radix-2 (f64) | kissfft-wasm (f32) | fftw-js (f32)     |
-| ------ | --------------------- | --------------------- | ------------------ | ----------------- |
-| N=64   | 6,598,000 ops/s       | 4,941,000 ops/s       | 3,343,000 ops/s    | 6,913,000 ops/s   |
-| N=256  | **1,638,000 ops/s**   | 1,245,000 ops/s       | 1,012,000 ops/s    | 1,484,000 ops/s   |
-| N=1024 | 383,000 ops/s         | 278,000 ops/s         | 243,000 ops/s      | **461,000 ops/s** |
-| N=4096 | 79,200 ops/s          | 61,200 ops/s          | 55,600 ops/s       | **107,000 ops/s** |
+| Size   | wat-fft rfft (f64)  | fftw-js (f32)     | Speedup   |
+| ------ | ------------------- | ----------------- | --------- |
+| N=64   | 6,828,000 ops/s     | 6,950,000 ops/s   | -1.8%     |
+| N=256  | **1,626,000 ops/s** | 1,496,000 ops/s   | **+8.7%** |
+| N=1024 | 386,000 ops/s       | **467,000 ops/s** | -17.4%    |
+| N=4096 | 79,000 ops/s        | **106,000 ops/s** | -25.9%    |
 
-**wat-fft radix-4 beats fftw-js at N=256** (110% performance) while providing double precision (f64) vs fftw-js's single precision (f32). At larger sizes, fftw-js is faster due to its extensive algorithm selection and cache-optimized codelets.
+**wat-fft beats fftw-js at N=256** while providing double precision (f64) vs fftw-js's single precision (f32).
 
-Note: wat-fft provides both double precision (f64) and single precision (f32) implementations. The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally.
+Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally.
 
 ## Quick Start
 
