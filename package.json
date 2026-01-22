@@ -43,6 +43,7 @@
     "fft-js": "^0.0.12",
     "fft.js": "^4.0.4",
     "fftw-js": "^0.1.4",
+    "kissfft-js": "^0.1.8",
     "kissfft-wasm": "^2.0.1",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.41.0"
