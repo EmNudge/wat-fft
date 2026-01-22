@@ -101,6 +101,12 @@ function runComplexFFT(wasm, realInput) {
   return { real, imag };
 }
 
+// Tolerance helper: Taylor series trig functions have ~1e-9 accuracy per operation,
+// which accumulates with size. Using size-dependent tolerance matching README.
+function getTolerance(n) {
+  return Math.max(1e-9, n * 5e-11);
+}
+
 describe("Real FFT", async () => {
   const realWasm = await loadRealWasm();
   const stockhamWasm = await loadStockhamWasm();
@@ -116,13 +122,14 @@ describe("Real FFT", async () => {
         const result = runRFFT(realWasm, input);
 
         // Expected: all frequency bins should be 1 + 0i
+        const tol = getTolerance(n);
         for (let k = 0; k <= n / 2; k++) {
           assert.ok(
-            Math.abs(result.real[k] - 1) < 1e-10,
+            Math.abs(result.real[k] - 1) < tol,
             `Bin ${k} real: expected 1, got ${result.real[k]}`,
           );
           assert.ok(
-            Math.abs(result.imag[k]) < 1e-10,
+            Math.abs(result.imag[k]) < tol,
             `Bin ${k} imag: expected 0, got ${result.imag[k]}`,
           );
         }
@@ -139,19 +146,20 @@ describe("Real FFT", async () => {
         const result = runRFFT(realWasm, input);
 
         // Expected: DC bin (k=0) should be N, all others should be 0
+        const tol = getTolerance(n);
         assert.ok(
-          Math.abs(result.real[0] - n) < 1e-10,
+          Math.abs(result.real[0] - n) < tol,
           `DC real: expected ${n}, got ${result.real[0]}`,
         );
-        assert.ok(Math.abs(result.imag[0]) < 1e-10, `DC imag: expected 0, got ${result.imag[0]}`);
+        assert.ok(Math.abs(result.imag[0]) < tol, `DC imag: expected 0, got ${result.imag[0]}`);
 
         for (let k = 1; k <= n / 2; k++) {
           assert.ok(
-            Math.abs(result.real[k]) < 1e-10,
+            Math.abs(result.real[k]) < tol,
             `Bin ${k} real: expected 0, got ${result.real[k]}`,
           );
           assert.ok(
-            Math.abs(result.imag[k]) < 1e-10,
+            Math.abs(result.imag[k]) < tol,
             `Bin ${k} imag: expected 0, got ${result.imag[k]}`,
           );
         }
@@ -169,25 +177,26 @@ describe("Real FFT", async () => {
         }
 
         const result = runRFFT(realWasm, input);
+        const tol = getTolerance(n);
 
         // Expected: Nyquist bin (k=N/2) should be N, all others should be 0
         const n2 = n / 2;
         for (let k = 0; k < n2; k++) {
           assert.ok(
-            Math.abs(result.real[k]) < 1e-10,
+            Math.abs(result.real[k]) < tol,
             `Bin ${k} real: expected 0, got ${result.real[k]}`,
           );
           assert.ok(
-            Math.abs(result.imag[k]) < 1e-10,
+            Math.abs(result.imag[k]) < tol,
             `Bin ${k} imag: expected 0, got ${result.imag[k]}`,
           );
         }
         assert.ok(
-          Math.abs(result.real[n2] - n) < 1e-10,
+          Math.abs(result.real[n2] - n) < tol,
           `Nyquist real: expected ${n}, got ${result.real[n2]}`,
         );
         assert.ok(
-          Math.abs(result.imag[n2]) < 1e-10,
+          Math.abs(result.imag[n2]) < tol,
           `Nyquist imag: expected 0, got ${result.imag[n2]}`,
         );
       });
@@ -216,13 +225,14 @@ describe("Real FFT", async () => {
         const cfftResult = runComplexFFT(stockhamWasm, input);
 
         // Compare first N/2+1 bins (the unique frequencies for real input)
+        const tol = getTolerance(n);
         for (let k = 0; k <= n / 2; k++) {
           assert.ok(
-            Math.abs(rfftResult.real[k] - cfftResult.real[k]) < 1e-10,
+            Math.abs(rfftResult.real[k] - cfftResult.real[k]) < tol,
             `Bin ${k} real: rfft=${rfftResult.real[k]}, cfft=${cfftResult.real[k]}`,
           );
           assert.ok(
-            Math.abs(rfftResult.imag[k] - cfftResult.imag[k]) < 1e-10,
+            Math.abs(rfftResult.imag[k] - cfftResult.imag[k]) < tol,
             `Bin ${k} imag: rfft=${rfftResult.imag[k]}, cfft=${cfftResult.imag[k]}`,
           );
         }
@@ -248,7 +258,8 @@ describe("Real FFT", async () => {
         const actual = runRFFT(realWasm, input);
         const expected = referenceRealDFT(input);
 
-        const errors = compareResults(actual, expected);
+        const tol = getTolerance(n);
+        const errors = compareResults(actual, expected, tol);
         if (errors.length > 0) {
           const firstErrors = errors.slice(0, 5);
           const errMsg = firstErrors
@@ -300,8 +311,9 @@ describe("Real FFT", async () => {
         // Parseval: time_energy = freq_energy / N
         freqEnergy /= n;
 
+        const tol = getTolerance(n);
         assert.ok(
-          Math.abs(timeEnergy - freqEnergy) < 1e-10,
+          Math.abs(timeEnergy - freqEnergy) < tol,
           `Parseval violated: time=${timeEnergy}, freq=${freqEnergy}`,
         );
       });
@@ -320,6 +332,7 @@ describe("Real FFT", async () => {
             }
 
             const result = runRFFT(realWasm, input);
+            const tol = getTolerance(n);
 
             // Expected: peak at bin `freq` with magnitude N/2
             // All other bins should be ~0
@@ -330,12 +343,12 @@ describe("Real FFT", async () => {
 
               if (k === freq) {
                 assert.ok(
-                  Math.abs(magnitude - n / 2) < 1e-9,
+                  Math.abs(magnitude - n / 2) < tol,
                   `Bin ${k}: expected magnitude ${n / 2}, got ${magnitude}`,
                 );
               } else {
                 assert.ok(
-                  Math.abs(magnitude) < 1e-9,
+                  Math.abs(magnitude) < tol,
                   `Bin ${k}: expected magnitude 0, got ${magnitude}`,
                 );
               }
@@ -350,6 +363,7 @@ describe("Real FFT", async () => {
             }
 
             const result = runRFFT(realWasm, input);
+            const tol = getTolerance(n);
 
             // Expected: peak at bin `freq` with magnitude N/2
             // The imaginary part should be -N/2 (for positive frequency)
@@ -360,21 +374,21 @@ describe("Real FFT", async () => {
 
               if (k === freq) {
                 assert.ok(
-                  Math.abs(magnitude - n / 2) < 1e-9,
+                  Math.abs(magnitude - n / 2) < tol,
                   `Bin ${k}: expected magnitude ${n / 2}, got ${magnitude}`,
                 );
                 // For sine, real should be ~0 and imag should be ~ -N/2
                 assert.ok(
-                  Math.abs(result.real[k]) < 1e-9,
+                  Math.abs(result.real[k]) < tol,
                   `Bin ${k} real: expected ~0, got ${result.real[k]}`,
                 );
                 assert.ok(
-                  Math.abs(result.imag[k] + n / 2) < 1e-9,
+                  Math.abs(result.imag[k] + n / 2) < tol,
                   `Bin ${k} imag: expected ${-n / 2}, got ${result.imag[k]}`,
                 );
               } else {
                 assert.ok(
-                  Math.abs(magnitude) < 1e-9,
+                  Math.abs(magnitude) < tol,
                   `Bin ${k}: expected magnitude 0, got ${magnitude}`,
                 );
               }

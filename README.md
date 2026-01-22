@@ -8,28 +8,79 @@ A high-performance FFT implementation in WebAssembly Text format that **signific
 
 Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pure-JS FFT) and [fft-js](https://github.com/vail-systems/node-fft):
 
-| Size   | wat-fft (Radix-4)    | wat-fft (Radix-2) | fft.js           | Speedup vs fft.js |
-| ------ | -------------------- | ----------------- | ---------------- | ----------------- |
-| N=16   | **16,086,000 ops/s** | 11,205,000 ops/s  | 11,009,000 ops/s | **1.46x**         |
-| N=64   | **3,814,000 ops/s**  | 3,424,000 ops/s   | 2,706,000 ops/s  | **1.41x**         |
-| N=256  | **967,000 ops/s**    | 743,000 ops/s     | 554,000 ops/s    | **1.75x**         |
-| N=1024 | **186,000 ops/s**    | 161,000 ops/s     | 109,000 ops/s    | **1.71x**         |
-| N=4096 | **42,800 ops/s**     | 28,000 ops/s      | 22,700 ops/s     | **1.89x**         |
+| Size   | wat-fft (Combined)   | fft.js           | Speedup vs fft.js |
+| ------ | -------------------- | ---------------- | ----------------- |
+| N=16   | **16,066,000 ops/s** | 11,613,000 ops/s | **1.38x**         |
+| N=32   | **6,168,000 ops/s**  | 5,133,000 ops/s  | **1.20x**         |
+| N=64   | **3,898,000 ops/s**  | 2,842,000 ops/s  | **1.37x**         |
+| N=128  | **1,610,000 ops/s**  | 1,110,000 ops/s  | **1.45x**         |
+| N=256  | **989,000 ops/s**    | 571,000 ops/s    | **1.73x**         |
+| N=512  | **351,000 ops/s**    | 227,000 ops/s    | **1.54x**         |
+| N=1024 | **198,000 ops/s**    | 115,000 ops/s    | **1.72x**         |
+| N=2048 | **74,200 ops/s**     | 48,200 ops/s     | **1.54x**         |
+| N=4096 | **44,600 ops/s**     | 24,100 ops/s     | **1.85x**         |
 
-**wat-fft Radix-4** is the fastest option for power-of-4 sizes (4, 16, 64, 256, 1024, 4096), achieving up to **1.89x speedup** over fft.js at N=4096. For non-power-of-4 sizes, use the Radix-2 Stockham implementation.
+```mermaid
+---
+config:
+    xyChart:
+        width: 700
+        height: 400
+    themeVariables:
+        xyChart:
+            plotColorPalette: "#4ade80, #60a5fa, #a855f7, #f87171"
+---
+xychart-beta
+    title "Complex FFT Performance (Million ops/s)"
+    x-axis [N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
+    y-axis "Million ops/s" 0 --> 18
+    line [16.05, 6.12, 3.87, 1.59, 0.98, 0.35, 0.20, 0.07, 0.04]
+    line [11.57, 5.08, 2.81, 1.10, 0.57, 0.23, 0.11, 0.05, 0.02]
+    line [6.08, 3.14, 1.92, 0.81, 0.45, 0.18, 0.10, 0.04, 0.02]
+    line [0.59, 0.27, 0.12, 0.05, 0.02, 0.003, 0.001, 0.001, 0.0003]
+```
+
+> 🟢 **wat-fft** · 🔵 **fft.js** · 🟣 **kissfft-js** · 🔴 **fft-js**
+
+**wat-fft Combined** auto-selects the optimal algorithm (radix-4 for power-of-4 sizes, radix-2 for others), achieving up to **1.87x speedup** over fft.js at N=4096.
 
 ### Real FFT
 
 Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft rfft (f64)  | fftw-js (f32)     | Speedup   |
-| ------ | ------------------- | ----------------- | --------- |
-| N=64   | 6,828,000 ops/s     | 6,950,000 ops/s   | -1.8%     |
-| N=256  | **1,626,000 ops/s** | 1,496,000 ops/s   | **+8.7%** |
-| N=1024 | 386,000 ops/s       | **467,000 ops/s** | -17.4%    |
-| N=4096 | 79,000 ops/s        | **106,000 ops/s** | -25.9%    |
+| Size   | wat-fft rfft (f64)   | fftw-js (f32)       | Comparison |
+| ------ | -------------------- | ------------------- | ---------- |
+| N=32   | **13,079,000 ops/s** | 9,280,000 ops/s     | **+40.9%** |
+| N=64   | 4,894,000 ops/s      | **7,113,000 ops/s** | -31.2%     |
+| N=128  | 2,909,000 ops/s      | **4,413,000 ops/s** | -34.1%     |
+| N=256  | 1,256,000 ops/s      | **1,519,000 ops/s** | -17.3%     |
+| N=512  | 734,000 ops/s        | **918,000 ops/s**   | -20.0%     |
+| N=1024 | 281,000 ops/s        | **476,000 ops/s**   | -41.0%     |
+| N=2048 | 155,000 ops/s        | **233,000 ops/s**   | -33.3%     |
+| N=4096 | 62,000 ops/s         | **106,000 ops/s**   | -41.4%     |
 
-**wat-fft beats fftw-js at N=256** while providing double precision (f64) vs fftw-js's single precision (f32).
+```mermaid
+---
+config:
+    xyChart:
+        width: 700
+        height: 400
+    themeVariables:
+        xyChart:
+            plotColorPalette: "#4ade80, #f87171, #a855f7"
+---
+xychart-beta
+    title "Real FFT Performance (Million ops/s)"
+    x-axis [N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
+    y-axis "Million ops/s" 0 --> 14
+    line [13.08, 4.84, 2.91, 1.24, 0.73, 0.28, 0.15, 0.06]
+    line [9.24, 6.90, 4.36, 1.51, 0.91, 0.47, 0.23, 0.11]
+    line [5.92, 3.00, 1.79, 0.77, 0.42, 0.18, 0.09, 0.04]
+```
+
+> 🟢 **wat-fft (f64)** · 🔴 **fftw-js (f32)** · 🟣 **kissfft-js (f32)**
+
+**wat-fft beats fftw-js at small sizes (N=32)** while providing double precision (f64) vs fftw-js's single precision (f32). For larger sizes, fftw-js (compiled from highly optimized FFTW C library) is faster.
 
 Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally.
 
@@ -90,13 +141,15 @@ console.log("DC component:", data[0], data[1]);
 
 Four FFT implementations are provided:
 
-| Module                   | Algorithm                 | Best For                | Speed            |
-| ------------------------ | ------------------------- | ----------------------- | ---------------- |
-| `fft_radix4.wasm`        | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4   | **Fastest cfft** |
-| `fft_real_radix4.wasm`   | Real FFT + Radix-4        | Real signals (any size) | **Fastest rfft** |
-| `combined_stockham.wasm` | Radix-2 Stockham + SIMD   | All power-of-2 sizes    | Fast             |
-| `combined_real.wasm`     | Real FFT (r2c) + Stockham | Real-valued signals     | Fast             |
-| `combined_fast.wasm`     | Radix-2 (no SIMD)         | No SIMD support         | Medium           |
+| Module                   | Algorithm                 | Best For                 | Speed           |
+| ------------------------ | ------------------------- | ------------------------ | --------------- |
+| `fft_combined.wasm`      | Radix-4 + Radix-2 auto    | **All power-of-2 sizes** | **Recommended** |
+| `fft_real_combined.wasm` | Real FFT + auto dispatch  | **Real signals (any)**   | **Recommended** |
+| `fft_radix4.wasm`        | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4    | Fastest cfft    |
+| `fft_real_radix4.wasm`   | Real FFT + Radix-4        | Real signals, pow-of-4   | Fastest rfft    |
+| `combined_stockham.wasm` | Radix-2 Stockham + SIMD   | All power-of-2 sizes     | Fast            |
+| `combined_real.wasm`     | Real FFT (r2c) + Stockham | Real-valued signals      | Fast            |
+| `combined_fast.wasm`     | Radix-2 (no SIMD)         | No SIMD support          | Medium          |
 
 ### Numerical Accuracy
 
@@ -114,7 +167,9 @@ The accuracy difference between implementations comes from trigonometric functio
 
 For most signal processing applications, ~10⁻⁹ accuracy is more than sufficient. Use `combined_fast.wasm` if you need higher precision and can accept the ~30% performance penalty from JavaScript trig calls.
 
-Use `fft_radix4.wasm` for power-of-4 sizes (best performance), `combined_stockham.wasm` for other power-of-2 sizes, or `combined_fast.wasm` as a fallback for environments without SIMD support.
+**Recommended:** Use `fft_combined.wasm` (complex) or `fft_real_combined.wasm` (real) for automatic algorithm selection. These modules use radix-4 for power-of-4 sizes and radix-2 for other sizes, similar to FFTW's approach.
+
+For manual control, use `fft_radix4.wasm` for power-of-4 sizes, `combined_stockham.wasm` for other power-of-2 sizes, or `combined_fast.wasm` for environments without SIMD support.
 
 ### Radix-4 (Fastest for Power-of-4 Sizes)
 
@@ -137,6 +192,41 @@ const fft = instance.exports;
 const N = 1024; // Must be power of 4
 fft.precompute_twiddles(N);
 fft.fft_radix4(N);
+```
+
+### Combined (Recommended - All Power-of-2 Sizes)
+
+Combined FFT modules that automatically select the optimal algorithm:
+
+- **Radix-4** for power-of-4 sizes (4, 16, 64, 256, 1024, 4096) - fastest
+- **Radix-2 Stockham** for other power-of-2 sizes (8, 32, 128, 512, 2048) - fast
+
+This mirrors FFTW's approach of selecting the best algorithm per size.
+
+```javascript
+// Combined FFT usage (any power-of-2 size)
+const wasmBuffer = fs.readFileSync("dist/fft_combined.wasm");
+const wasmModule = await WebAssembly.compile(wasmBuffer);
+const instance = await WebAssembly.instantiate(wasmModule);
+const fft = instance.exports;
+
+const N = 512; // Any power of 2
+fft.precompute_twiddles(N);
+fft.fft(N); // Automatically uses radix-2 for N=512
+```
+
+For real FFT:
+
+```javascript
+// Combined Real FFT usage
+const wasmBuffer = fs.readFileSync("dist/fft_real_combined.wasm");
+const wasmModule = await WebAssembly.compile(wasmBuffer);
+const instance = await WebAssembly.instantiate(wasmModule);
+const fft = instance.exports;
+
+const N = 1024; // Any power of 2
+fft.precompute_rfft_twiddles(N);
+fft.rfft(N); // Uses radix-4 since N/2=512 is NOT power-of-4, uses radix-2
 ```
 
 ### Stockham Radix-2 (All Power-of-2 Sizes)
@@ -194,6 +284,8 @@ Radix-2 with precomputed twiddle factors. Use this for environments without WebA
 ```
 wat-fft/
 ├── modules/              # WAT source files
+│   ├── fft_combined.wat  # Combined radix-2/4 FFT (recommended)
+│   ├── fft_real_combined.wat # Combined real FFT (recommended)
 │   ├── fft_radix4.wat    # Radix-4 Stockham FFT with SIMD (fastest)
 │   ├── fft_real_radix4.wat # Real FFT using Radix-4
 │   ├── fft_stockham.wat  # Stockham Radix-2 FFT with SIMD

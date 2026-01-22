@@ -4,6 +4,7 @@
  * Compares our WAT/WASM FFT implementations against popular JS libraries:
  * - fft.js (indutny) - Fastest pure JS, Radix-4 implementation
  * - fft-js - Simple Cooley-Tukey implementation
+ * - kissfft-js - Emscripten port of Kiss FFT
  */
 
 import fs from "fs";
@@ -11,6 +12,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
+import kissfft from "kissfft-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,10 +46,20 @@ async function loadRadix4WasmFFT() {
   return instance.exports;
 }
 
+// Load Combined WASM FFT (auto-dispatch radix-2/4)
+async function loadCombinedWasmFFT() {
+  const wasmPath = path.join(__dirname, "..", "dist", "fft_combined.wasm");
+  const wasmBuffer = fs.readFileSync(wasmPath);
+  const wasmModule = await WebAssembly.compile(wasmBuffer);
+  const instance = await WebAssembly.instantiate(wasmModule);
+  return instance.exports;
+}
+
 // Benchmark configuration
 const WARMUP_ITERATIONS = 100;
 const BENCHMARK_DURATION_MS = 2000;
-const SIZES = [16, 64, 256, 1024, 4096];
+// Include both power-of-4 (16, 64, 256, 1024, 4096) and non-power-of-4 (32, 128, 512, 2048)
+const SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 // Generate random complex input data
 function generateComplexInput(n) {
@@ -61,11 +73,12 @@ function generateComplexInput(n) {
 }
 
 // Benchmark runner
-function runBenchmark(name, setupFn, benchFn) {
+function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
   const ctx = setupFn();
   for (let i = 0; i < WARMUP_ITERATIONS; i++) {
     benchFn(ctx);
   }
+  if (teardownFn) teardownFn(ctx);
 
   const freshCtx = setupFn();
   const startTime = performance.now();
@@ -78,6 +91,8 @@ function runBenchmark(name, setupFn, benchFn) {
 
   const elapsed = performance.now() - startTime;
   const opsPerSec = (iterations / elapsed) * 1000;
+
+  if (teardownFn) teardownFn(freshCtx);
 
   return { name, iterations, elapsed, opsPerSec };
 }
@@ -97,6 +112,7 @@ async function runBenchmarks() {
   const stockhamExports = await loadStockhamWasmFFT();
   const fastExports = await loadFastWasmFFT();
   const radix4Exports = await loadRadix4WasmFFT();
+  const combinedExports = await loadCombinedWasmFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -127,9 +143,31 @@ async function runBenchmarks() {
     );
     results.push(stockhamResult);
 
+    // wat-fft Combined (auto-dispatch radix-2/4) - recommended for all sizes
+    const isPowerOf4 = (size & (size - 1)) === 0 && (size & 0xaaaaaaaa) === 0;
+    const combinedResult = runBenchmark(
+      `wat-fft (Combined)`,
+      () => {
+        const memory = combinedExports.memory;
+        const data = new Float64Array(memory.buffer, 0, size * 2);
+        combinedExports.precompute_twiddles(size);
+        const inputBuffer = new Float64Array(size * 2);
+        for (let i = 0; i < size; i++) {
+          inputBuffer[i * 2] = input.real[i];
+          inputBuffer[i * 2 + 1] = input.imag[i];
+        }
+        return { data, inputBuffer, size };
+      },
+      (ctx) => {
+        ctx.data.set(ctx.inputBuffer);
+        combinedExports.fft(ctx.size);
+      },
+    );
+    results.push(combinedResult);
+
     // wat-fft Radix-4 SIMD (best for power-of-4 sizes)
     // Only test for power-of-4 sizes
-    if (Math.log2(size) % 2 === 0) {
+    if (isPowerOf4) {
       const radix4Result = runBenchmark(
         "wat-fft (Radix-4)",
         () => {
@@ -207,6 +245,28 @@ async function runBenchmarks() {
     );
     results.push(fftJsSimpleResult);
 
+    // kissfft-js
+    const kissfftResult = runBenchmark(
+      "kissfft-js",
+      () => {
+        const fft = new kissfft.FFT(size);
+        // kissfft expects interleaved complex input
+        const complexInput = new Float64Array(size * 2);
+        for (let i = 0; i < size; i++) {
+          complexInput[i * 2] = input.real[i];
+          complexInput[i * 2 + 1] = input.imag[i];
+        }
+        return { fft, complexInput };
+      },
+      (ctx) => {
+        ctx.fft.forward(ctx.complexInput);
+      },
+      (ctx) => {
+        ctx.fft.dispose();
+      },
+    );
+    results.push(kissfftResult);
+
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
     const fastest = results[0].opsPerSec;
@@ -230,9 +290,12 @@ async function runBenchmarks() {
   console.log("Benchmark complete!");
   console.log("");
   console.log("Notes:");
-  console.log("- wat-fft (Stockham): SIMD + inline trig + LSR optimization (recommended)");
+  console.log("- wat-fft (Combined): Auto-selects radix-4 or radix-2 (RECOMMENDED)");
+  console.log("- wat-fft (Radix-4): SIMD radix-4 for power-of-4 sizes only");
+  console.log("- wat-fft (Radix-2): SIMD radix-2 Stockham for all power-of-2");
   console.log("- wat-fft (fast): Non-SIMD fallback for older environments");
   console.log("- fft.js: Highly optimized Radix-4 JS (Fedor Indutny)");
+  console.log("- kissfft-js: Emscripten port of Kiss FFT");
   console.log("- fft-js: Simple Cooley-Tukey JS (educational)");
   console.log("=".repeat(70));
 }
