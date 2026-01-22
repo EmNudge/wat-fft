@@ -35,6 +35,15 @@ async function loadFastWasmFFT() {
   return instance.exports;
 }
 
+// Load Radix-4 WASM FFT
+async function loadRadix4WasmFFT() {
+  const wasmPath = path.join(__dirname, "..", "dist", "fft_radix4.wasm");
+  const wasmBuffer = fs.readFileSync(wasmPath);
+  const wasmModule = await WebAssembly.compile(wasmBuffer);
+  const instance = await WebAssembly.instantiate(wasmModule);
+  return instance.exports;
+}
+
 // Benchmark configuration
 const WARMUP_ITERATIONS = 100;
 const BENCHMARK_DURATION_MS = 2000;
@@ -87,6 +96,7 @@ async function runBenchmarks() {
 
   const stockhamExports = await loadStockhamWasmFFT();
   const fastExports = await loadFastWasmFFT();
+  const radix4Exports = await loadRadix4WasmFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -96,9 +106,9 @@ async function runBenchmarks() {
     const input = generateComplexInput(size);
     const results = [];
 
-    // wat-fft Stockham (recommended)
+    // wat-fft Stockham (radix-2)
     const stockhamResult = runBenchmark(
-      "wat-fft (Stockham)",
+      "wat-fft (Radix-2)",
       () => {
         const memory = stockhamExports.memory;
         const data = new Float64Array(memory.buffer, 0, size * 2);
@@ -116,6 +126,30 @@ async function runBenchmarks() {
       },
     );
     results.push(stockhamResult);
+
+    // wat-fft Radix-4 SIMD (best for power-of-4 sizes)
+    // Only test for power-of-4 sizes
+    if (Math.log2(size) % 2 === 0) {
+      const radix4Result = runBenchmark(
+        "wat-fft (Radix-4)",
+        () => {
+          const memory = radix4Exports.memory;
+          const data = new Float64Array(memory.buffer, 0, size * 2);
+          radix4Exports.precompute_twiddles(size);
+          const inputBuffer = new Float64Array(size * 2);
+          for (let i = 0; i < size; i++) {
+            inputBuffer[i * 2] = input.real[i];
+            inputBuffer[i * 2 + 1] = input.imag[i];
+          }
+          return { data, inputBuffer, size };
+        },
+        (ctx) => {
+          ctx.data.set(ctx.inputBuffer);
+          radix4Exports.fft_radix4(ctx.size);
+        },
+      );
+      results.push(radix4Result);
+    }
 
     // wat-fft Fast (non-SIMD fallback)
     const fastResult = runBenchmark(
