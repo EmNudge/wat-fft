@@ -2,54 +2,21 @@
  * Real FFT Performance Benchmarks
  *
  * Compares our WAT/WASM Real FFT implementation against:
- * - kissfft-wasm - WebAssembly port of KissFFT
  * - fftw-js - Emscripten port of FFTW
  *
- * Note: kissfft-wasm and fftw-js use Float32 (single precision),
+ * Note: fftw-js uses Float32 (single precision),
  * while our implementation uses Float64 (double precision).
  */
 
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { rfft as kissRfft, RealFFTConfig, RealArray, ComplexArray } from "kissfft-wasm";
 import fftwJs from "fftw-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load our Real FFT WASM module (f64)
-async function loadRealWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_real.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
-// Load our Real FFT WASM module (f32)
-async function loadRealWasmFFT_f32() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_real_f32.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {});
-  return instance.exports;
-}
-
-// Load our Stockham WASM FFT for complex FFT comparison
-async function loadStockhamWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_stockham.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
-// Load our Radix-4 Real FFT WASM module (f64) - fastest for power-of-4 N/2
+// Load our Radix-4 Real FFT WASM module (f64)
 async function loadRadix4RealWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "fft_real_radix4.wasm");
   const wasmBuffer = fs.readFileSync(wasmPath);
@@ -112,13 +79,10 @@ async function runBenchmarks() {
   console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
-  console.log("Note: kissfft-wasm and fftw-js use Float32 (single precision)");
+  console.log("Note: fftw-js uses Float32 (single precision)");
   console.log("      wat-fft uses Float64 (double precision)");
   console.log("");
 
-  const realWasmExports = await loadRealWasmFFT();
-  const realWasmExports_f32 = await loadRealWasmFFT_f32();
-  const stockhamWasmExports = await loadStockhamWasmFFT();
   const radix4RealWasmExports = await loadRadix4RealWasmFFT();
 
   for (const size of SIZES) {
@@ -127,43 +91,10 @@ async function runBenchmarks() {
     console.log("-".repeat(70));
 
     const input = generateRealInput(size);
-    const results = [];
 
-    // 1. Our WASM Real FFT (double precision)
+    // 1. Our WASM Real FFT with Radix-4 (f64)
     const watRfftResult = runBenchmark(
       "wat-fft rfft (f64)",
-      () => {
-        const memory = realWasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size);
-        realWasmExports.precompute_rfft_twiddles(size);
-        return { data, inputBuffer: input.real64 };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        realWasmExports.rfft(size);
-      },
-    );
-    results.push(watRfftResult);
-
-    // 1b. Our WASM Real FFT (single precision f32)
-    const watRfftF32Result = runBenchmark(
-      "wat-fft rfft (f32)",
-      () => {
-        const memory = realWasmExports_f32.memory;
-        const data = new Float32Array(memory.buffer, 0, size);
-        realWasmExports_f32.precompute_rfft_twiddles(size);
-        return { data, inputBuffer: input.real32 };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        realWasmExports_f32.rfft(size);
-      },
-    );
-    results.push(watRfftF32Result);
-
-    // 1c. Our WASM Real FFT with Radix-4 (f64) - fastest implementation
-    const watRfftRadix4Result = runBenchmark(
-      "wat-fft rfft-radix4 (f64)",
       () => {
         const memory = radix4RealWasmExports.memory;
         const data = new Float64Array(memory.buffer, 0, size);
@@ -175,66 +106,8 @@ async function runBenchmarks() {
         radix4RealWasmExports.rfft(size);
       },
     );
-    results.push(watRfftRadix4Result);
 
-    // 2. Our WASM complex FFT on real input (for comparison)
-    const watCfftResult = runBenchmark(
-      "wat-fft cfft (f64)",
-      () => {
-        const memory = stockhamWasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        stockhamWasmExports.precompute_twiddles(size);
-        // Prepare interleaved buffer with im=0
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real64[i];
-          inputBuffer[i * 2 + 1] = 0;
-        }
-        return { data, inputBuffer };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        stockhamWasmExports.fft_stockham(size);
-      },
-    );
-    results.push(watCfftResult);
-
-    // 3. kissfft-wasm (single precision) - using stateful API for fair comparison
-    // Note: kissfft-wasm expects output ComplexArray with same nfft as input
-    const kissRfftResult = runBenchmark(
-      "kissfft-wasm rfft (f32)",
-      () => {
-        const config = new RealFFTConfig(size);
-        const inputArray = new RealArray(size);
-        const outputArray = new ComplexArray(size); // Same size as input, not n/2+1
-        return { config, inputArray, outputArray, inputData: input.real32 };
-      },
-      (ctx) => {
-        // Copy input data directly into WASM memory
-        ctx.inputArray.asFloat32Array().set(ctx.inputData);
-        ctx.config.work(ctx.inputArray, ctx.outputArray);
-      },
-      (ctx) => {
-        ctx.config.free();
-        ctx.inputArray.free();
-        ctx.outputArray.free();
-      },
-    );
-    results.push(kissRfftResult);
-
-    // 4. kissfft-wasm simple API (includes allocation overhead)
-    const kissSimpleResult = runBenchmark(
-      "kissfft-wasm simple (f32)",
-      () => {
-        return { inputData: input.real32 };
-      },
-      (ctx) => {
-        kissRfft(ctx.inputData);
-      },
-    );
-    results.push(kissSimpleResult);
-
-    // 5. fftw-js (single precision)
+    // 2. fftw-js (single precision)
     const fftwResult = runBenchmark(
       "fftw-js FFT (f32)",
       () => {
@@ -248,42 +121,29 @@ async function runBenchmarks() {
         ctx.fft.dispose();
       },
     );
-    results.push(fftwResult);
 
-    // Sort by performance
-    results.sort((a, b) => b.opsPerSec - a.opsPerSec);
-    const fastest = results[0].opsPerSec;
+    // Calculate speedup of wat-fft vs fftw-js
+    const speedup = watRfftResult.opsPerSec / fftwResult.opsPerSec;
+    const speedupStr =
+      speedup >= 1
+        ? `+${((speedup - 1) * 100).toFixed(1)}%`
+        : `${((speedup - 1) * 100).toFixed(1)}%`;
 
     // Print results
     console.log("");
-    console.log("Library                        ops/sec        relative");
-    console.log("─".repeat(55));
-
-    for (const result of results) {
-      const relative = result.opsPerSec / fastest;
-      const relativeStr = relative === 1 ? "(fastest)" : `${(relative * 100).toFixed(1)}%`;
-      const bar = "█".repeat(Math.round(relative * 20));
-      console.log(
-        `${result.name.padEnd(27)} ${formatNumber(result.opsPerSec).padStart(10)}    ${relativeStr.padStart(10)}  ${bar}`,
-      );
-    }
+    console.log("Library                        ops/sec");
+    console.log("─".repeat(45));
+    console.log(
+      `${watRfftResult.name.padEnd(27)} ${formatNumber(watRfftResult.opsPerSec).padStart(10)}`,
+    );
+    console.log(`${fftwResult.name.padEnd(27)} ${formatNumber(fftwResult.opsPerSec).padStart(10)}`);
+    console.log("");
+    console.log(`wat-fft vs fftw-js: ${speedupStr}`);
     console.log("");
   }
 
   console.log("=".repeat(70));
   console.log("Benchmark complete!");
-  console.log("");
-  console.log("Notes:");
-  console.log("- wat-fft rfft (f64): Real FFT using radix-2 Stockham (double precision)");
-  console.log("- wat-fft rfft (f32): Real FFT using radix-2 Stockham (single precision)");
-  console.log("- wat-fft rfft-radix4 (f64): Real FFT using radix-4 (fastest, double precision)");
-  console.log("- wat-fft cfft (f64): Complex FFT on real input with im=0 for comparison");
-  console.log("- kissfft-wasm rfft: KissFFT WASM with stateful API (f32)");
-  console.log("- kissfft-wasm simple: KissFFT WASM simple API with allocation (f32)");
-  console.log("- fftw-js: FFTW via Emscripten (f32)");
-  console.log("");
-  console.log("The rfft-radix4 is the fastest wat-fft implementation, beating fftw-js");
-  console.log("at small/medium sizes (N<=256) while using double precision.");
   console.log("=".repeat(70));
 }
 
