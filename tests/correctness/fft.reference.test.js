@@ -99,7 +99,7 @@ test("fft.js comparison", async (t) => {
             const wasmResult = runFFT(wasm, impl, signal.real, signal.imag);
 
             // Run fft.js (expects interleaved format)
-            const input = new Array(size * 2);
+            const input = Array.from({ length: size * 2 });
             for (let i = 0; i < size; i++) {
               input[i * 2] = signal.real[i];
               input[i * 2 + 1] = signal.imag[i];
@@ -152,7 +152,7 @@ test("fft.js comparison: extended sizes", async (t) => {
       const wasmResult = runFFT(wasm, impl, signal.real, signal.imag);
 
       // Run fft.js
-      const input = new Array(size * 2);
+      const input = Array.from({ length: size * 2 });
       for (let i = 0; i < size; i++) {
         input[i * 2] = signal.real[i];
         input[i * 2 + 1] = signal.imag[i];

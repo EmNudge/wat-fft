@@ -50,16 +50,16 @@ Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten
 
 | Size   | wat-fft rfft (f64)   | fftw-js (f32)       | Comparison  |
 | ------ | -------------------- | ------------------- | ----------- |
-| N=8    | **24,159,000 ops/s** | 10,793,000 ops/s    | **+123.8%** |
-| N=16   | **12,487,000 ops/s** | 10,266,000 ops/s    | **+21.6%**  |
-| N=32   | **13,140,000 ops/s** | 9,017,000 ops/s     | **+45.7%**  |
-| N=64   | 4,807,000 ops/s      | **6,858,000 ops/s** | -29.9%      |
-| N=128  | 2,897,000 ops/s      | **4,357,000 ops/s** | -33.5%      |
-| N=256  | 1,258,000 ops/s      | **1,530,000 ops/s** | -17.8%      |
-| N=512  | 736,000 ops/s        | **922,000 ops/s**   | -20.2%      |
-| N=1024 | 281,000 ops/s        | **476,000 ops/s**   | -41.0%      |
-| N=2048 | 155,000 ops/s        | **233,000 ops/s**   | -33.3%      |
-| N=4096 | 62,000 ops/s         | **106,000 ops/s**   | -41.4%      |
+| N=8    | **23,801,000 ops/s** | 10,528,000 ops/s    | **+126.1%** |
+| N=16   | **12,477,000 ops/s** | 10,195,000 ops/s    | **+22.4%**  |
+| N=32   | **12,884,000 ops/s** | 8,991,000 ops/s     | **+43.3%**  |
+| N=64   | **7,036,000 ops/s**  | 6,806,000 ops/s     | **+3.4%**   |
+| N=128  | 3,560,000 ops/s      | **4,277,000 ops/s** | -16.8%      |
+| N=256  | **1,678,000 ops/s**  | 1,495,000 ops/s     | **+12.3%**  |
+| N=512  | 760,000 ops/s        | **903,000 ops/s**   | -15.8%      |
+| N=1024 | 344,000 ops/s        | **471,000 ops/s**   | -26.9%      |
+| N=2048 | 158,000 ops/s        | **230,000 ops/s**   | -31.1%      |
+| N=4096 | 60,000 ops/s         | **107,000 ops/s**   | -44.2%      |
 
 ```mermaid
 ---
@@ -75,16 +75,16 @@ xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=8, N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 26
-    line [24.16, 12.49, 13.14, 4.81, 2.90, 1.26, 0.74, 0.28, 0.15, 0.06]
-    line [10.79, 10.27, 9.02, 6.86, 4.36, 1.53, 0.92, 0.48, 0.23, 0.11]
-    line [11.21, 7.90, 5.91, 3.00, 1.76, 0.78, 0.43, 0.18, 0.09, 0.04]
+    line [23.80, 12.48, 12.88, 7.04, 3.56, 1.68, 0.76, 0.34, 0.16, 0.06]
+    line [10.53, 10.19, 8.99, 6.81, 4.28, 1.50, 0.90, 0.47, 0.23, 0.11]
+    line [10.80, 8.00, 5.89, 2.99, 1.78, 0.76, 0.43, 0.18, 0.09, 0.04]
 ```
 
 > 🟢 **wat-fft (f64)** · 🔴 **fftw-js (f32)** · 🟣 **kissfft-js (f32)**
 
-**wat-fft beats fftw-js at small sizes (N≤32)** with massive speedups: **+124% at N=8** and **+46% at N=32**. This is achieved through fused rfft codelets that eliminate function call overhead and twiddle memory loads. For larger sizes, fftw-js (compiled from highly optimized FFTW C library with hierarchical codelets) is faster.
+**wat-fft beats fftw-js at small and medium sizes (N≤64 and N=256)** with massive speedups: **+126% at N=8**, **+43% at N=32**, and **+12% at N=256**. This is achieved through fused rfft codelets and hierarchical FFT composition (`$fft_32`, `$fft_64`, `$fft_128`, `$fft_256`, `$fft_512`, `$fft_1024`) that eliminate function call overhead and twiddle memory loads. For larger sizes, fftw-js (compiled from highly optimized FFTW C library with hierarchical codelets) is faster.
 
-Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally. For small sizes (N≤32), fused rfft codelets with hardcoded twiddles provide additional speedups by eliminating memory loads and function call overhead.
+Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally. For small sizes (N≤32), fused rfft codelets with hardcoded twiddles provide additional speedups. For N=64-2048, hierarchical FFT composition (building fft_32 from fft_16, fft_64 from fft_32, fft_128 from fft_64, fft_256 from fft_128, fft_512 from fft_256, fft_1024 from fft_512) improves performance.
 
 ## Quick Start
 
@@ -254,6 +254,7 @@ Optimized real-to-complex FFT for real-valued input signals:
 - ~2x faster than complex FFT for real input
 - Double precision (f64) for high accuracy
 - **Fused rfft codelets** for N=8 and N=32 with hardcoded twiddles - **beats fftw-js by up to 124%**
+- **Hierarchical FFT composition** for N=64 using optimized sub-codelets
 - **Combined variant** (`fft_real_combined.wasm`) is recommended, auto-selects optimal algorithm
 
 ```javascript
