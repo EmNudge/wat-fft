@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g., 0.2.0). Leave empty to auto-increment minor version."
+        required: false
+        type: string
+
+jobs:
+  release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            # Get the latest tag, default to v0.0.0 if none exists
+            LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+            if [ -z "$LATEST_TAG" ]; then
+              VERSION="0.1.0"
+            else
+              # Strip 'v' prefix and increment minor version
+              CURRENT="${LATEST_TAG#v}"
+              MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+              MINOR=$(echo "$CURRENT" | cut -d. -f2)
+              PATCH=$(echo "$CURRENT" | cut -d. -f3)
+              NEW_MINOR=$((MINOR + 1))
+              VERSION="${MAJOR}.${NEW_MINOR}.0"
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing version: $VERSION"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install wasm-tools
+        env:
+          WASM_TOOLS_VERSION: "1.244.0"
+        run: |
+          curl -LO "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          tar xzf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          sudo mv "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux/wasm-tools" /usr/local/bin/
+          rm -rf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux" "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          wasm-tools --version
+
+      - name: Install wac-cli
+        env:
+          WAC_VERSION: "0.8.1"
+        run: |
+          curl -L "https://github.com/bytecodealliance/wac/releases/download/v${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl" -o wac
+          chmod +x wac
+          sudo mv wac /usr/local/bin/
+          wac --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build WASM modules
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Create release archive
+        run: |
+          cd dist
+          tar -czvf ../wat-fft-${{ steps.version.outputs.version }}.tar.gz *.wasm
+          cd ..
+          zip -j wat-fft-${{ steps.version.outputs.version }}.zip dist/*.wasm
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: wat-fft ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            wat-fft-${{ steps.version.outputs.version }}.tar.gz
+            wat-fft-${{ steps.version.outputs.version }}.zip
+            dist/*.wasm
