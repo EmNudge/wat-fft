@@ -5,7 +5,6 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import * as fftJs from "fft-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,10 +23,6 @@ async function loadStockhamFFT() {
   const wasmModule = await WebAssembly.compile(wasmBuffer);
   const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
-}
-
-function complexMagnitude(re, im) {
-  return Math.sqrt(re * re + im * im);
 }
 
 function compareResults(name, result1, result2, tolerance = 1e-9) {

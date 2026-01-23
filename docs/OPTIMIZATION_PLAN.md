@@ -207,26 +207,54 @@ fft(x, N):
 
 **Target**: Keep live values ≤ 16 (typical register file size)
 
-### Priority F: Hierarchical Small-Codelet Composition (Expected: +10-20%)
+### Priority F: Hierarchical Small-Codelet Composition (Expected: +10-20%) **IMPLEMENTED - LIMIT REACHED**
+
+**Status**: ✅ Implemented for N=32, N=64, N=128, N=256, N=512, and N=1024. **N=1024 is the optimal ceiling** - extending to N=2048 made performance worse.
 
 **Problem**: Large monolithic codelets (N≥32) have too many locals causing register spills (see Experiment 6).
 
-**Solution**: Use small codelets (N=4, N=16) as building blocks and compose them recursively.
+**Solution**: Use small codelets (N=4, N=16) as building blocks and compose them using DIF decomposition.
+
+**Implemented**:
+
+- `$fft_32`: DIF decomposition using two `$fft_16_at` calls
+- `$fft_64`: DIF decomposition using two `$fft_32_at` calls
+- `$fft_128`: DIF decomposition using two `$fft_64_at` calls
+- `$fft_256`: DIF decomposition using two `$fft_128_at` calls
+- `$fft_512`: DIF decomposition using two `$fft_256_at` calls
+- `$fft_1024`: DIF decomposition using two `$fft_512_at` calls (optimal limit)
 
 ```
-fft(64):
-  fft_16(x[0:16])   // codelet, fits in registers
-  fft_16(x[16:32])  // codelet
-  fft_16(x[32:48])  // codelet
-  fft_16(x[48:64])  // codelet
-  combine_4_groups(x, twiddles)  // single twiddle pass
+fft_1024:
+  // First pass: butterflies with W_1024^k twiddles
+  for k in 0..511:
+    first_half[k] = x[k] + x[k+512]
+    second_half[k] = (x[k] - x[k+512]) * W_1024^k
+
+  fft_512_at(0)     // First half
+  fft_512_at(8192)  // Second half (512 * 16 bytes)
 ```
+
+**Results**:
+
+- N=64: improved from -30% to **+3.4%** vs fftw-js
+- N=128: improved from -33% to **-16.8%** vs fftw-js
+- N=256: improved from -17% to **+12.3%** vs fftw-js
+- N=512: improved from -21% to **-15.8%** vs fftw-js
+- N=1024: improved from -40% to **-26.9%** vs fftw-js
+- N=2048: improved from -33% to **-31.1%** vs fftw-js (minimal gain - fft(1024) already used $fft_1024)
 
 **Benefits**:
 
 - Each codelet stays within register limits
 - Reuses proven, optimized small codelets
-- Natural extension to arbitrary sizes
+- Hardcoded twiddles eliminate memory loads
+
+**Limitations discovered**:
+
+- ❌ Extending to `$fft_2048` made N=4096 **7% slower** due to instruction cache thrashing
+- The optimal cutoff is **N=1024** - beyond this, simple loops beat hierarchical composition
+- Code size grows exponentially: $fft_2048 alone would add 13,800 lines of WAT
 
 ### Priority G: Real-Only Arithmetic in Early Stages (Expected: +5-15% for rfft)
 
@@ -510,7 +538,92 @@ Note: The original comparison target was fftw-js (FFTW via Emscripten). The numb
 
 **Key Insight**: For small sizes (N≤32), the overhead of memory loads and function calls is proportionally significant. Fusing these operations with hardcoded constants provides substantial speedups without register pressure issues.
 
-### Final Performance Summary (2026-01-22)
+### Experiment 9: Hierarchical FFT Composition (2026-01-23)
+
+**Hypothesis**: Building larger FFTs from smaller optimized codelets (hierarchical composition) would avoid the slow radix-2 Stockham path for non-power-of-4 sizes.
+
+**Problem**: rfft(64) calls fft(32) internally, but 32 is NOT a power of 4 (2^5), so it was using radix-2 Stockham with 5 stages instead of the faster radix-4. Similarly, rfft(128) calls fft(64), and rfft(256) calls fft(128).
+
+**Solution**: Use DIF (Decimation in Frequency) decomposition to build larger FFTs hierarchically:
+
+1. **`$fft_32`**: Implemented using two `$fft_16_at` calls
+   - First pass: 16 butterflies combining x[k] and x[k+16] with hardcoded W_32^k twiddles
+   - Then two independent FFT-16 calls on each half
+
+2. **`$fft_64`**: Implemented using two `$fft_32_at` calls
+   - First pass: 32 butterflies combining x[k] and x[k+32] with hardcoded W_64^k twiddles
+   - Then two independent FFT-32 calls on each half
+
+3. **`$fft_128`**: Implemented using two `$fft_64_at` calls
+   - First pass: 64 butterflies combining x[k] and x[k+64] with hardcoded W_128^k twiddles
+   - Then two independent FFT-64 calls on each half
+
+4. **`$fft_256`**: Implemented using two `$fft_128_at` calls
+   - First pass: 128 butterflies combining x[k] and x[k+128] with hardcoded W_256^k twiddles
+   - Then two independent FFT-128 calls on each half
+
+5. **`$fft_512`**: Implemented using two `$fft_256_at` calls
+   - First pass: 256 butterflies combining x[k] and x[k+256] with hardcoded W_512^k twiddles
+   - Then two independent FFT-256 calls on each half
+
+6. **`$fft_1024`**: Implemented using two `$fft_512_at` calls
+   - First pass: 512 butterflies combining x[k] and x[k+512] with hardcoded W_1024^k twiddles
+   - Then two independent FFT-512 calls on each half
+
+7. **Parameterized codelets** (`$fft_16_at`, `$fft_32_at`, `$fft_64_at`, `$fft_128_at`, `$fft_256_at`, `$fft_512_at`): Take a base offset parameter to operate at arbitrary memory locations, enabling composition.
+
+**Implementation Pattern** (DIF decomposition):
+
+```wat
+(func $fft_N
+  ;; First pass: for each k, compute:
+  ;;   first_half[k] = x[k] + x[k+N/2]
+  ;;   second_half[k] = (x[k] - x[k+N/2]) * W_N^k
+
+  ;; k=0: W_N^0 = (1, 0) - no multiply needed
+  (local.set $a (v128.load (i32.const 0)))
+  (local.set $b (v128.load (i32.const N/2*16)))  ;; offset = N/2 * 16 bytes
+  (v128.store (i32.const 0) (f64x2.add (local.get $a) (local.get $b)))
+  (v128.store (i32.const N/2*16) (f64x2.sub (local.get $a) (local.get $b)))
+
+  ;; k=1..N/2-1: apply hardcoded W_N^k twiddles using SIMD complex multiply
+  ;; ...
+
+  ;; Then run FFT-N/2 on each half
+  (call $fft_N/2_at (i32.const 0))
+  (call $fft_N/2_at (i32.const N/2*16))
+)
+```
+
+**Results**: **SIGNIFICANT IMPROVEMENT for N=64, N=128, N=256, N=512, N=1024, and N=2048**
+
+| Size   | Before (radix-2)   | After (hierarchical) | vs fftw-js |
+| ------ | ------------------ | -------------------- | ---------- |
+| N=64   | 4.8M ops/s (-30%)  | 6.9M ops/s           | **+3.4%**  |
+| N=128  | 2.9M ops/s (-33%)  | 3.5M ops/s           | **-16.8%** |
+| N=256  | 1.2M ops/s (-17%)  | 1.7M ops/s           | **+12.3%** |
+| N=512  | 0.7M ops/s (-21%)  | 0.76M ops/s          | **-15.8%** |
+| N=1024 | 0.27M ops/s (-40%) | 0.34M ops/s          | **-26.9%** |
+| N=2048 | 0.14M ops/s (-33%) | 0.14M ops/s          | **-31.1%** |
+
+**Analysis**:
+
+1. **N=64 now beats fftw-js**: By using hierarchical fft_32 (composed of two fft_16), we avoid the slow 5-stage radix-2 Stockham entirely
+2. **N=128 improved by ~17 percentage points**: rfft(128) calls fft(64), which now uses hierarchical composition
+3. **N=256 improved by ~30 percentage points**: rfft(256) calls fft(128), which now uses hierarchical composition - now **beats fftw-js by +12%**
+4. **N=512 improved by ~5 percentage points**: rfft(512) calls fft(256), which now uses hierarchical $fft_256 composition
+5. **N=1024 improved by ~13 percentage points**: rfft(1024) calls fft(512), which now uses hierarchical $fft_512 composition
+6. **N=2048 improved by ~2 percentage points**: rfft(2048) calls fft(1024), which now uses hierarchical $fft_1024 composition
+7. **Hardcoded twiddles**: All W_N^k twiddles are inline constants, eliminating memory loads
+8. **Low register pressure**: Each sub-FFT codelet operates independently, avoiding register spills
+
+**Key Insight**: FFTW's approach of using small codelets (N≤16) as building blocks works well in WebAssembly. The hierarchical composition avoids register pressure issues while still benefiting from fully-optimized small codelets.
+
+**Files modified**:
+
+- `modules/fft_real_combined.wat` - Added `$fft_16_at`, `$fft_32`, `$fft_32_at`, `$fft_64`, `$fft_64_at`, `$fft_128`, `$fft_128_at`, `$fft_256`, `$fft_256_at`, `$fft_512`, `$fft_512_at`, `$fft_1024`, updated `$fft` dispatch
+
+### Final Performance Summary (2026-01-23)
 
 After all optimizations, wat-fft Combined achieves:
 
@@ -526,17 +639,23 @@ After all optimizations, wat-fft Combined achieves:
 **Real FFT (vs fftw-js Emscripten/FFTW):**
 | Size | wat-fft Combined | fftw-js (f32) | vs fftw-js |
 | ----- | ---------------- | ------------- | ----------- |
-| N=8 | 24.2M ops/s | 10.8M ops/s | **+123.8%** |
-| N=16 | 12.5M ops/s | 10.3M ops/s | **+21.6%** |
-| N=32 | 13.1M ops/s | 9.0M ops/s | **+45.7%** |
-| N=64 | 4.8M ops/s | 6.9M ops/s | -29.9% |
-| N=128 | 2.9M ops/s | 4.4M ops/s | -33.5% |
+| N=8 | 23.6M ops/s | 10.4M ops/s | **+126.1%** |
+| N=16 | 12.1M ops/s | 10.0M ops/s | **+22.4%** |
+| N=32 | 12.8M ops/s | 9.0M ops/s | **+43.3%** |
+| N=64 | 6.9M ops/s | 6.6M ops/s | **+3.4%** |
+| N=128 | 3.5M ops/s | 4.2M ops/s | -16.8% |
+| N=256 | 1.7M ops/s | 1.5M ops/s | **+12.3%** |
+| N=512 | 757K ops/s | 900K ops/s | -15.8% |
+| N=1024 | 336K ops/s | 460K ops/s | -26.9% |
+| N=2048 | 142K ops/s | 206K ops/s | -31.1% |
+| N=4096 | 59K ops/s | 106K ops/s | -44.2% |
 
 **Conclusion**:
 
 - Fused rfft codelets (`$rfft_8`, `$rfft_32`) provide **massive speedups for small sizes**
-- For N≤32, we now **beat fftw-js** (Emscripten port of FFTW) significantly
-- For N≥64, fftw-js's hierarchical codelet composition gives it an advantage
+- For N≤64 and N=256, we now **beat fftw-js** (Emscripten port of FFTW)
+- Hierarchical FFT composition (`$fft_32`, `$fft_64`, `$fft_128`, `$fft_256`, `$fft_512`, `$fft_1024`) provides consistent speedups
+- For N=128 and N≥512, fftw-js still has an advantage but the gap is narrowing
 
 **Key findings from codelet generator experiment (2026-01-22)**:
 
@@ -552,11 +671,50 @@ After all optimizations, wat-fft Combined achieves:
 - For N=32: hybrid approach (call fft_16 + hardcoded post-processing) gives +46% vs fftw-js
 - Diminishing returns for N≥64 as FFT computation dominates
 
-Further gains would require:
+**Key findings from hierarchical composition experiment (2026-01-23)**:
 
-- Hierarchical composition using small codelets (N≤16) as building blocks for larger N
-- Depth-first recursion for better cache locality at N≥8192
-- FFTW-style planner for runtime algorithm selection
+- DIF decomposition with parameterized codelets (`$fft_16_at`, `$fft_32_at`, `$fft_64_at`, `$fft_128_at`, `$fft_256_at`, `$fft_512_at`) enables hierarchical composition
+- `$fft_32` (2x fft_16), `$fft_64` (2x fft_32), `$fft_128` (2x fft_64), `$fft_256` (2x fft_128), `$fft_512` (2x fft_256), and `$fft_1024` (2x fft_512) avoid slow radix-2 path
+- N=64 improved from -30% to **+3.4%** vs fftw-js
+- N=128 improved from -33% to **-16.8%** vs fftw-js
+- N=256 improved from -17% to **+12.3%** vs fftw-js (rfft(256) calls fft(128) internally)
+- N=512 improved from -21% to **-15.8%** vs fftw-js (rfft(512) calls fft(256) internally)
+- N=1024 improved from -40% to **-26.9%** vs fftw-js (rfft(1024) calls fft(512) internally)
+- N=2048 improved from -33% to **-31.1%** vs fftw-js (rfft(2048) calls fft(1024) internally)
+
+**Failed experiment: $fft_2048 hierarchical composition (2026-01-23)**:
+
+Attempted to extend hierarchical composition to N=2048 to improve rfft(4096) performance. The implementation was correct but **made performance worse**:
+
+- N=4096: went from **-44%** to **-51%** vs fftw-js (7 percentage points worse)
+
+**Why $fft_2048 failed**:
+
+| Factor        | Impact                                                           |
+| ------------- | ---------------------------------------------------------------- |
+| Code size     | 13,800 lines of WAT → instruction cache thrashing                |
+| Call depth    | 8 levels deep: `$fft_2048` → `$fft_1024_at` → ... → `$fft_16_at` |
+| Twiddle bloat | 1024 inline twiddle constants in just the first pass             |
+
+**The crossover point**: Hierarchical composition is beneficial when:
+
+- Small codelets fit in instruction cache
+- Function call overhead < loop overhead saved
+- Twiddle inline savings > code bloat cost
+
+For N≥2048, the simple radix-2/radix-4 Stockham loops are more efficient because:
+
+- Compact, cache-friendly code
+- Modern CPUs predict simple loops well
+- Twiddle table lookups are fast when data is hot in cache
+
+**Conclusion**: The hierarchical approach has **diminishing returns** and becomes **counterproductive** at N≥2048. The optimal cutoff for hierarchical codelets is around N=1024.
+
+Further gains for large N would require fundamentally different approaches:
+
+- Cache-oblivious recursive algorithms (not just hierarchical codelets)
+- Runtime planning (like FFTW's planner) to select algorithms per-size
+- Depth-first recursion with explicit stack management to improve cache locality
 
 ---
 
