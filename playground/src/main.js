@@ -4,17 +4,26 @@
  */
 
 import { loadFFTModule, createFFTContext } from "./fft-loader.js";
-import { generateSyntheticAudio, loadAudioFile } from "./audio-sources.js";
-import { generateSpectrogram, renderSpectrogram } from "./spectrogram.js";
+import { generateSyntheticAudio, loadAudioFile, loadAudioFromUrl } from "./audio-sources.js";
+import { generateSpectrogram, renderSpectrogram, analyzeFrequencyRange } from "./spectrogram.js";
+import SAMPLE_FILES from "virtual:sample-files";
 
 // State
 let currentModule = null;
 let currentModuleId = "combined";
-let colorScale = "viridis";
-let sourceType = "synthetic";
+let colorScale = "magma";
+let freqScale = "log";
+let minFreq = 50;
+let maxFreq = 8000;
+let windowType = "hann";
+let zeroPadding = 2;
+let gain = -20;
+let range = 80;
+let sourceType = SAMPLE_FILES.length > 0 ? "file" : "synthetic";
 let loadedAudioSamples = null;
 let isProcessing = false;
 let pendingRegenerate = false;
+let lastSpectrogram = null;
 
 // Sine wave components
 let sineComponents = [
@@ -34,6 +43,21 @@ const elements = {
   fftSizeValue: document.getElementById("fft-size-value"),
   hopSize: document.getElementById("hop-size"),
   hopSizeValue: document.getElementById("hop-size-value"),
+  zeroPadding: document.getElementById("zero-padding"),
+  zeroPaddingValue: document.getElementById("zero-padding-value"),
+  windowType: document.getElementById("window-type"),
+  gain: document.getElementById("gain"),
+  gainValue: document.getElementById("gain-value"),
+  range: document.getElementById("range"),
+  rangeValue: document.getElementById("range-value"),
+  freqScaleSelector: document.getElementById("freq-scale-selector"),
+  minFreq: document.getElementById("min-freq"),
+  minFreqValue: document.getElementById("min-freq-value"),
+  maxFreq: document.getElementById("max-freq"),
+  maxFreqValue: document.getElementById("max-freq-value"),
+  autoFreq: document.getElementById("auto-freq"),
+  freqLabelTop: document.getElementById("freq-label-top"),
+  freqLabelBottom: document.getElementById("freq-label-bottom"),
   colorSelector: document.getElementById("color-selector"),
   sourceToggle: document.getElementById("source-toggle"),
   syntheticControls: document.getElementById("synthetic-controls"),
@@ -45,6 +69,7 @@ const elements = {
   sineComponentsContainer: document.getElementById("sine-components"),
   addSineBtn: document.getElementById("add-sine"),
   addHarmonicBtn: document.getElementById("add-harmonic"),
+  sampleFile: document.getElementById("sample-file"),
   audioFile: document.getElementById("audio-file"),
   canvas: document.getElementById("spectrogram"),
   implName: document.getElementById("impl-name"),
@@ -63,6 +88,20 @@ function debounce(fn, delay) {
     clearTimeout(timeout);
     timeout = setTimeout(() => fn(...args), delay);
   };
+}
+
+// Format frequency for display
+function formatFreq(hz) {
+  if (hz >= 1000) {
+    return (hz / 1000).toFixed(1) + " kHz";
+  }
+  return hz + " Hz";
+}
+
+// Update frequency labels
+function updateFreqLabels() {
+  elements.freqLabelTop.textContent = formatFreq(maxFreq);
+  elements.freqLabelBottom.textContent = formatFreq(minFreq);
 }
 
 // Show/hide processing indicator
@@ -118,6 +157,9 @@ function setupFFTSelector() {
   });
 }
 
+// Zero padding factor options
+const ZERO_PADDING_OPTIONS = [1, 2, 4];
+
 // Spectrogram settings
 function setupSpectrogramControls() {
   // FFT Size slider (powers of 2)
@@ -131,6 +173,78 @@ function setupSpectrogramControls() {
   elements.hopSize.addEventListener("input", () => {
     const value = Math.pow(2, parseInt(elements.hopSize.value));
     elements.hopSizeValue.textContent = value;
+    triggerRegenerate();
+  });
+
+  // Zero padding factor
+  elements.zeroPadding.addEventListener("input", () => {
+    const index = parseInt(elements.zeroPadding.value);
+    zeroPadding = ZERO_PADDING_OPTIONS[index];
+    elements.zeroPaddingValue.textContent = zeroPadding + "x";
+    triggerRegenerate();
+  });
+
+  // Window type
+  elements.windowType.addEventListener("change", () => {
+    windowType = elements.windowType.value;
+    triggerRegenerate();
+  });
+
+  // Gain
+  elements.gain.addEventListener("input", () => {
+    gain = parseInt(elements.gain.value);
+    elements.gainValue.textContent = gain + " dB";
+    triggerRegenerate();
+  });
+
+  // Range
+  elements.range.addEventListener("input", () => {
+    range = parseInt(elements.range.value);
+    elements.rangeValue.textContent = range + " dB";
+    triggerRegenerate();
+  });
+
+  // Frequency scale
+  const freqScaleOptions = elements.freqScaleSelector.querySelectorAll(".color-option");
+  freqScaleOptions.forEach((option) => {
+    option.addEventListener("click", () => {
+      freqScaleOptions.forEach((o) => o.classList.remove("selected"));
+      option.classList.add("selected");
+      freqScale = option.dataset.scale;
+      triggerRegenerate();
+    });
+  });
+
+  // Min frequency
+  elements.minFreq.addEventListener("input", () => {
+    minFreq = parseInt(elements.minFreq.value);
+    elements.minFreqValue.textContent = minFreq + " Hz";
+    triggerRegenerate();
+  });
+
+  // Max frequency
+  elements.maxFreq.addEventListener("input", () => {
+    maxFreq = parseInt(elements.maxFreq.value);
+    elements.maxFreqValue.textContent = formatFreq(maxFreq);
+    triggerRegenerate();
+  });
+
+  // Auto-detect frequency range
+  elements.autoFreq.addEventListener("click", () => {
+    if (!lastSpectrogram) return;
+
+    const { minFreq: detectedMin, maxFreq: detectedMax } = analyzeFrequencyRange(lastSpectrogram);
+
+    // Update state
+    minFreq = detectedMin;
+    maxFreq = detectedMax;
+
+    // Update sliders
+    elements.minFreq.value = minFreq;
+    elements.minFreqValue.textContent = minFreq + " Hz";
+    elements.maxFreq.value = maxFreq;
+    elements.maxFreqValue.textContent = formatFreq(maxFreq);
+
     triggerRegenerate();
   });
 
@@ -151,7 +265,7 @@ function setupSourceToggle() {
   const options = elements.sourceToggle.querySelectorAll(".source-option");
 
   options.forEach((option) => {
-    option.addEventListener("click", () => {
+    option.addEventListener("click", async () => {
       const source = option.dataset.source;
       if (source === sourceType) return;
 
@@ -162,10 +276,65 @@ function setupSourceToggle() {
       elements.syntheticControls.classList.toggle("hidden", source !== "synthetic");
       elements.fileControls.classList.toggle("hidden", source !== "file");
 
-      if (source === "synthetic" || loadedAudioSamples) {
+      if (source === "synthetic") {
         triggerRegenerate();
+      } else if (source === "file") {
+        // Auto-load first sample file if available and no audio loaded yet
+        if (!loadedAudioSamples && SAMPLE_FILES.length > 0) {
+          elements.sampleFile.value = SAMPLE_FILES[0].value;
+          await loadSampleFile(SAMPLE_FILES[0].value);
+        } else if (loadedAudioSamples) {
+          triggerRegenerate();
+        }
       }
     });
+  });
+}
+
+// Load a sample file from URL
+async function loadSampleFile(url) {
+  if (!url) return;
+
+  try {
+    setProcessing(true);
+    const sampleRateIndex = parseInt(elements.sampleRate.value);
+    const targetRate = SAMPLE_RATES[sampleRateIndex];
+    const result = await loadAudioFromUrl(url, targetRate);
+    loadedAudioSamples = result;
+    triggerRegenerate();
+  } catch (err) {
+    console.error("Failed to load sample file:", err);
+  } finally {
+    setProcessing(false);
+  }
+}
+
+// Setup sample file selector
+function setupSampleFileSelector() {
+  // Populate dropdown with discovered sample files
+  const sampleSection = document.getElementById("sample-file-section");
+
+  if (SAMPLE_FILES.length === 0) {
+    // Hide sample section if no samples found
+    if (sampleSection) sampleSection.classList.add("hidden");
+    return;
+  }
+
+  // Add options to the select
+  for (const sample of SAMPLE_FILES) {
+    const option = document.createElement("option");
+    option.value = sample.value;
+    option.textContent = sample.label;
+    elements.sampleFile.appendChild(option);
+  }
+
+  elements.sampleFile.addEventListener("change", async () => {
+    const url = elements.sampleFile.value;
+    if (url) {
+      // Clear any uploaded file selection
+      elements.audioFile.value = "";
+      await loadSampleFile(url);
+    }
   });
 }
 
@@ -267,6 +436,9 @@ function setupFileInput() {
     const file = elements.audioFile.files[0];
     if (!file) return;
 
+    // Clear sample file selection when uploading a custom file
+    elements.sampleFile.value = "";
+
     try {
       setProcessing(true);
       const sampleRateIndex = parseInt(elements.sampleRate.value);
@@ -326,8 +498,9 @@ async function generate() {
     const fftSize = Math.pow(2, parseInt(elements.fftSize.value));
     const hopSize = Math.pow(2, parseInt(elements.hopSize.value));
 
-    // Ensure hop size doesn't exceed FFT size
-    const effectiveHopSize = Math.min(hopSize, fftSize);
+    // Ensure hop size doesn't exceed FFT size (adjusted for zero padding)
+    const windowSize = Math.floor(fftSize / zeroPadding);
+    const effectiveHopSize = Math.min(hopSize, windowSize);
 
     const fftContext = createFFTContext(currentModule, fftSize);
 
@@ -336,7 +509,14 @@ async function generate() {
       sampleRate,
       fftContext,
       hopSize: effectiveHopSize,
+      windowType,
+      zeroPadding,
+      gain,
+      range,
     });
+
+    // Store for auto-detection
+    lastSpectrogram = spectrogram;
 
     // Update stats
     elements.stats.fftTime.textContent = spectrogram.timing.fftTime.toFixed(1);
@@ -351,7 +531,13 @@ async function generate() {
       canvas: elements.canvas,
       spectrogram,
       colorScale,
+      freqScale,
+      minFreq,
+      maxFreq,
     });
+
+    // Update frequency labels
+    updateFreqLabels();
   } catch (err) {
     console.error("Generation error:", err);
   } finally {
@@ -371,23 +557,44 @@ async function init() {
   setupSpectrogramControls();
   setupSourceToggle();
   setupSyntheticControls();
+  setupSampleFileSelector();
   setupFileInput();
   renderSineComponents();
 
   // Initialize display values
   elements.fftSizeValue.textContent = Math.pow(2, parseInt(elements.fftSize.value));
   elements.hopSizeValue.textContent = Math.pow(2, parseInt(elements.hopSize.value));
+  elements.zeroPaddingValue.textContent =
+    ZERO_PADDING_OPTIONS[parseInt(elements.zeroPadding.value)] + "x";
+  elements.gainValue.textContent = elements.gain.value + " dB";
+  elements.rangeValue.textContent = elements.range.value + " dB";
   elements.durationValue.textContent = parseFloat(elements.duration.value).toFixed(2) + "s";
   const sampleRateIndex = parseInt(elements.sampleRate.value);
   elements.sampleRateValue.textContent = (SAMPLE_RATES[sampleRateIndex] / 1000).toFixed(1) + "k";
 
-  // Load default module and generate
+  // Set initial source type UI state
+  const sourceOptions = elements.sourceToggle.querySelectorAll(".source-option");
+  sourceOptions.forEach((o) => {
+    o.classList.toggle("selected", o.dataset.source === sourceType);
+  });
+  elements.syntheticControls.classList.toggle("hidden", sourceType !== "synthetic");
+  elements.fileControls.classList.toggle("hidden", sourceType !== "file");
+
+  // Load default module
   try {
     currentModule = await loadFFTModule(currentModuleId);
     updateImplName();
-    generate();
   } catch (err) {
     console.error("Failed to load default module:", err);
+    return;
+  }
+
+  // Load first sample file if using file source, otherwise generate synthetic
+  if (sourceType === "file" && SAMPLE_FILES.length > 0) {
+    elements.sampleFile.value = SAMPLE_FILES[0].value;
+    await loadSampleFile(SAMPLE_FILES[0].value);
+  } else {
+    generate();
   }
 }
 
