@@ -972,6 +972,55 @@ The original implementation used scalar f64 operations. Each pair required 8 f64
 - **Still behind** at N=64 and N=128 (-17%) where fftw-js's small-N codelets dominate
 - The f32 dual-complex approach provides +26% to +97% speedup over the existing f32 rfft
 
+### Experiment 15: Fully Fused FFT-64 Codelet (2026-01-24)
+
+**Hypothesis**: The hierarchical FFT-64 (which calls fft_32 → fft_16) has function call overhead that can be eliminated by fully inlining all stages into a single monolithic function.
+
+**Background**: For rfft(128), the internal FFT is N/2=64. The existing `$fft_64` function does:
+
+1. 32 DIF butterflies with W_64^k twiddles (first stage)
+2. Calls `$fft_32_at(0)` and `$fft_32_at(512)`
+3. Each fft_32_at does 16 butterflies, then calls `$fft_16_at` twice
+
+This results in 6 function calls per FFT-64: 2×fft_32 + 4×fft_16.
+
+**Implementation** (`$fft_64_fused`):
+
+1. Created code generator `scripts/generate_fused_fft64.js` that produces:
+   - Stage 1: 32 DIF butterflies with W_64^k twiddles
+   - Stage 2a: 16 DIF butterflies with W_32^k at offset 0
+   - Stage 2b: 16 DIF butterflies with W_32^k at offset 512
+   - Stage 3: Four inlined FFT-16 blocks at offsets 0, 256, 512, 768
+
+2. Also created FMA version `scripts/generate_fused_fft64_fma.js` using `f64x2.relaxed_madd`
+
+3. Updated dispatch in `$fft` to use `$fft_64_fused` when N=64
+
+**Result**: **SIGNIFICANT IMPROVEMENT - N=128 gap halved**
+
+| Metric           | Before    | After           | Improvement     |
+| ---------------- | --------- | --------------- | --------------- |
+| N=128 ops/sec    | 3,536,039 | 3,815,000       | **+7.9%**       |
+| N=128 vs fftw-js | -17.4%    | **-8% to -11%** | **+6 to +9 pp** |
+
+**Analysis**:
+
+1. **Function call overhead eliminated**: Removed 6 function calls per FFT-64
+2. **All twiddles hardcoded**: No memory loads for twiddle factors in stages 1-2
+3. **Code size tradeoff**: ~1072 lines of WAT, acceptable for the performance gain
+4. **Variance in benchmarks**: Results vary between -8% and -11% vs fftw-js depending on system load
+
+**Key insight**: The hierarchical composition approach (Experiment 9) was already a big win, but the remaining gap at N=128 was partly due to function call overhead. Fully fusing eliminates this overhead.
+
+**Conclusion**: The fused FFT-64 codelet roughly halves the performance gap at N=128. Combined with the f64 precision advantage (better numerical accuracy than fftw-js's f32), the -8% to -11% gap is acceptable.
+
+**Files modified**:
+
+- `modules/fft_real_combined.wat` - Added `$fft_64_fused`, updated dispatch
+- `modules/fft_real_combined_fma.wat` - Added FMA version of `$fft_64_fused`
+- `scripts/generate_fused_fft64.js` - Generator for non-FMA version
+- `scripts/generate_fused_fft64_fma.js` - Generator for FMA version
+
 ---
 
 ## Future Optimization Opportunities (Research Summary)
