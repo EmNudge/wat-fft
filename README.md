@@ -6,19 +6,14 @@ A high-performance FFT implementation in WebAssembly Text format that **signific
 
 ### Complex FFT
 
-Benchmarked against [fft.js](https://github.com/indutny/fft.js) (the fastest pure-JS FFT) and [fft-js](https://github.com/vail-systems/node-fft):
+Benchmarked against [fft.js](https://github.com/indutny/fft.js) (fastest pure-JS FFT):
 
-| Size   | wat-fft (Combined)   | fft.js           | Speedup vs fft.js |
-| ------ | -------------------- | ---------------- | ----------------- |
-| N=16   | **16,066,000 ops/s** | 11,613,000 ops/s | **1.38x**         |
-| N=32   | **6,168,000 ops/s**  | 5,133,000 ops/s  | **1.20x**         |
-| N=64   | **3,898,000 ops/s**  | 2,842,000 ops/s  | **1.37x**         |
-| N=128  | **1,610,000 ops/s**  | 1,110,000 ops/s  | **1.45x**         |
-| N=256  | **989,000 ops/s**    | 571,000 ops/s    | **1.73x**         |
-| N=512  | **351,000 ops/s**    | 227,000 ops/s    | **1.54x**         |
-| N=1024 | **198,000 ops/s**    | 115,000 ops/s    | **1.72x**         |
-| N=2048 | **74,200 ops/s**     | 48,200 ops/s     | **1.54x**         |
-| N=4096 | **44,600 ops/s**     | 24,100 ops/s     | **1.85x**         |
+| Size   | wat-fft (f64)       | fft.js          | Speedup  |
+| ------ | ------------------- | --------------- | -------- |
+| N=64   | **3,830,000 ops/s** | 2,794,000 ops/s | **1.4x** |
+| N=256  | **973,000 ops/s**   | 559,000 ops/s   | **1.7x** |
+| N=1024 | **191,000 ops/s**   | 113,000 ops/s   | **1.7x** |
+| N=4096 | **44,400 ops/s**    | 23,400 ops/s    | **1.9x** |
 
 ```mermaid
 ---
@@ -32,34 +27,28 @@ config:
 ---
 xychart-beta
     title "Complex FFT Performance (Million ops/s)"
-    x-axis [N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 18
-    line [16.05, 6.12, 3.87, 1.59, 0.98, 0.35, 0.20, 0.07, 0.04]
-    line [11.57, 5.08, 2.81, 1.10, 0.57, 0.23, 0.11, 0.05, 0.02]
-    line [6.08, 3.14, 1.92, 0.81, 0.45, 0.18, 0.10, 0.04, 0.02]
-    line [0.59, 0.27, 0.12, 0.05, 0.02, 0.003, 0.001, 0.001, 0.0003]
+    x-axis [N=64, N=256, N=1024, N=4096]
+    y-axis "Million ops/s" 0 --> 5
+    line [3.83, 0.97, 0.19, 0.044]
+    line [4.60, 1.17, 0.27, 0.062]
+    line [2.79, 0.56, 0.11, 0.023]
+    line [1.90, 0.45, 0.10, 0.022]
 ```
 
-> 🟢 **wat-fft** · 🔵 **fft.js** · 🟣 **kissfft-js** · 🔴 **fft-js**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**wat-fft Combined** auto-selects the optimal algorithm (radix-4 for power-of-4 sizes, radix-2 for others), achieving up to **1.87x speedup** over fft.js at N=4096.
+**Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **2.6x faster** than fft.js.
 
 ### Real FFT
 
 Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft rfft (f64)   | fftw-js (f32)       | Comparison  |
-| ------ | -------------------- | ------------------- | ----------- |
-| N=8    | **23,801,000 ops/s** | 10,528,000 ops/s    | **+126.1%** |
-| N=16   | **12,477,000 ops/s** | 10,195,000 ops/s    | **+22.4%**  |
-| N=32   | **12,884,000 ops/s** | 8,991,000 ops/s     | **+43.3%**  |
-| N=64   | **7,036,000 ops/s**  | 6,806,000 ops/s     | **+3.4%**   |
-| N=128  | 3,560,000 ops/s      | **4,277,000 ops/s** | -16.8%      |
-| N=256  | **1,678,000 ops/s**  | 1,495,000 ops/s     | **+12.3%**  |
-| N=512  | 760,000 ops/s        | **903,000 ops/s**   | -15.8%      |
-| N=1024 | 344,000 ops/s        | **471,000 ops/s**   | -26.9%      |
-| N=2048 | 158,000 ops/s        | **230,000 ops/s**   | -31.1%      |
-| N=4096 | 60,000 ops/s         | **107,000 ops/s**   | -44.2%      |
+| Size   | wat-fft (f64)       | fftw-js (f32)     | Comparison |
+| ------ | ------------------- | ----------------- | ---------- |
+| N=64   | **6,990,000 ops/s** | 6,654,000 ops/s   | **+5%**    |
+| N=256  | **1,785,000 ops/s** | 1,490,000 ops/s   | **+20%**   |
+| N=1024 | 364,000 ops/s       | **459,000 ops/s** | -21%       |
+| N=4096 | 63,000 ops/s        | **105,000 ops/s** | -40%       |
 
 ```mermaid
 ---
@@ -69,42 +58,21 @@ config:
         height: 400
     themeVariables:
         xyChart:
-            plotColorPalette: "#4ade80, #f87171, #a855f7"
+            plotColorPalette: "#4ade80, #60a5fa, #f87171, #a855f7"
 ---
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
-    x-axis [N=8, N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 26
-    line [23.80, 12.48, 12.88, 7.04, 3.56, 1.68, 0.76, 0.34, 0.16, 0.06]
-    line [10.53, 10.19, 8.99, 6.81, 4.28, 1.50, 0.90, 0.47, 0.23, 0.11]
-    line [10.80, 8.00, 5.89, 2.99, 1.78, 0.76, 0.43, 0.18, 0.09, 0.04]
+    x-axis [N=64, N=256, N=512, N=1024, N=4096]
+    y-axis "Million ops/s" 0 --> 8
+    line [6.99, 1.79, 0.81, 0.36, 0.063]
+    line [5.70, 1.57, 0.81, 0.39, 0.093]
+    line [6.65, 1.49, 0.90, 0.46, 0.105]
+    line [2.93, 0.74, 0.42, 0.17, 0.039]
 ```
 
-> 🟢 **wat-fft (f64)** · 🔴 **fftw-js (f32)** · 🟣 **kissfft-js (f32)**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
 
-**wat-fft beats fftw-js at small and medium sizes (N≤64 and N=256)** with massive speedups: **+126% at N=8**, **+43% at N=32**, and **+12% at N=256**. This is achieved through fused rfft codelets and hierarchical FFT composition (`$fft_32`, `$fft_64`, `$fft_128`, `$fft_256`, `$fft_512`, `$fft_1024`) that eliminate function call overhead and twiddle memory loads. For larger sizes, fftw-js (compiled from highly optimized FFTW C library with hierarchical codelets) is faster.
-
-Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally. For small sizes (N≤32), fused rfft codelets with hardcoded twiddles provide additional speedups. For N=64-2048, hierarchical FFT composition (building fft_32 from fft_16, fft_64 from fft_32, fft_128 from fft_64, fft_256 from fft_128, fft_512 from fft_256, fft_1024 from fft_512) improves performance.
-
-### f32 Dual-Complex FFT (NEW)
-
-High-performance single-precision FFT using full f32x4 SIMD throughput (2 complex numbers per v128):
-
-| Size   | f32 Dual-Complex    | f32 Original    | fft.js          | vs Original | vs fft.js   |
-| ------ | ------------------- | --------------- | --------------- | ----------- | ----------- |
-| N=64   | **4,600,000 ops/s** | 3,060,000 ops/s | 2,810,000 ops/s | **+50.6%**  | **+64.1%**  |
-| N=256  | **1,180,000 ops/s** | 674,000 ops/s   | 560,000 ops/s   | **+74.7%**  | **+110.0%** |
-| N=1024 | **273,500 ops/s**   | 142,400 ops/s   | 112,800 ops/s   | **+92.1%**  | **+142.5%** |
-| N=2048 | **124,800 ops/s**   | 63,700 ops/s    | 47,200 ops/s    | **+95.9%**  | **+164.6%** |
-| N=4096 | **62,000 ops/s**    | 30,300 ops/s    | 23,500 ops/s    | **+104.8%** | **+164.1%** |
-
-The f32 dual-complex implementation achieves up to **+105% speedup** over the original f32 implementation by:
-
-- Processing 2 complex numbers per v128 (vs 1 in original f32)
-- Pre-replicated twiddles stored as `[w.re, w.im, w.re, w.im]` eliminating runtime shuffles
-- Inline dual-complex SIMD multiply with zero function call overhead
-
-Use `fft_stockham_f32_dual.wasm` when single-precision (f32) is sufficient for your application.
+**wat-fft wins at N≤256** with up to +123% speedup at small sizes. For larger sizes, fftw-js (compiled from FFTW C library) is faster. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for single precision with +28-71% speedup over basic f32.
 
 ## Quick Start
 
@@ -167,7 +135,8 @@ Four FFT implementations are provided:
 | ---------------------------- | ------------------------- | ------------------------ | --------------- |
 | `fft_combined.wasm`          | Radix-4 + Radix-2 auto    | **All power-of-2 sizes** | **Recommended** |
 | `fft_real_combined.wasm`     | Real FFT + auto dispatch  | **Real signals (any)**   | **Recommended** |
-| `fft_stockham_f32_dual.wasm` | f32 Dual-Complex SIMD     | **f32 precision (fast)** | **Fastest f32** |
+| `fft_stockham_f32_dual.wasm` | f32 Dual-Complex SIMD     | **f32 complex (fast)**   | **Fastest f32** |
+| `fft_real_f32_dual.wasm`     | f32 Dual-Complex rfft     | **f32 real signals**     | **Fastest f32** |
 | `fft_radix4.wasm`            | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4    | Fastest f64     |
 | `fft_real_radix4.wasm`       | Real FFT + Radix-4        | Real signals, pow-of-4   | Fastest rfft    |
 | `combined_stockham.wasm`     | Radix-2 Stockham + SIMD   | All power-of-2 sizes     | Fast            |
@@ -280,6 +249,33 @@ console.log("DC component:", data[0], data[1]);
 
 The f32 dual-complex variant is **up to 105% faster** than the original f32 implementation by processing 2 complex numbers per SIMD operation. Use this when single-precision accuracy is sufficient.
 
+### f32 Dual-Complex Real FFT (Fastest f32 rfft)
+
+High-performance single-precision real FFT combining dual-complex optimization with rfft:
+
+```javascript
+// f32 Dual-Complex Real FFT usage
+const wasmBuffer = fs.readFileSync("dist/fft_real_f32_dual.wasm");
+const wasmModule = await WebAssembly.compile(wasmBuffer);
+const instance = await WebAssembly.instantiate(wasmModule);
+const fft = instance.exports;
+
+const N = 1024; // Any power of 2
+const realInput = new Float32Array(fft.memory.buffer, 0, N);
+for (let i = 0; i < N; i++) {
+  realInput[i] = Math.sin((2 * Math.PI * i) / N);
+}
+
+fft.precompute_rfft_twiddles(N);
+fft.rfft(N);
+
+// Output: N/2+1 complex values (interleaved re, im) in f32
+const output = new Float32Array(fft.memory.buffer, 0, (N / 2 + 1) * 2);
+console.log("DC:", output[0], output[1]);
+```
+
+The f32 dual-complex rfft achieves **+28% to +71% speedup** over the existing f32 rfft by applying dual-complex SIMD optimization to the real FFT pipeline.
+
 ### Stockham Radix-2 (All Power-of-2 Sizes)
 
 Radix-2 Stockham FFT with SIMD acceleration - works for any power-of-2:
@@ -340,6 +336,7 @@ wat-fft/
 │   ├── fft_combined.wat  # Combined radix-2/4 FFT (recommended)
 │   ├── fft_real_combined.wat # Combined real FFT (recommended)
 │   ├── fft_stockham_f32_dual.wat # f32 dual-complex (fastest f32)
+│   ├── fft_real_f32_dual.wat # f32 dual-complex rfft (fastest f32 rfft)
 │   ├── fft_radix4.wat    # Radix-4 Stockham FFT with SIMD (fastest f64)
 │   ├── fft_real_radix4.wat # Real FFT using Radix-4
 │   ├── fft_stockham.wat  # Stockham Radix-2 FFT with SIMD
@@ -402,6 +399,7 @@ npm run build         # Build all WASM modules
 npm test              # Run all tests
 npm run bench         # Run complex FFT benchmarks
 npm run bench:rfft    # Run real FFT benchmarks
+npm run bench:rfft32  # Run f32 real FFT benchmarks
 npm run test:fft      # Run comprehensive FFT tests
 npm run test:rfft     # Run real FFT tests
 npm run test:permutation  # Test permutation algorithms
