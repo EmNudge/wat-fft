@@ -1,18 +1,21 @@
 (module
-  ;; Depth-First Recursive FFT
+  ;; Depth-First Recursive FFT using DIF (Decimation in Frequency)
   ;;
   ;; Uses cache-oblivious recursive decomposition:
   ;; - Base case: N <= 64 uses iterative Stockham
-  ;; - Recursive case: split into even/odd, recurse, combine
+  ;; - Recursive case: DIF butterflies first, then recurse on halves
+  ;;
+  ;; DIF advantage: No data reordering needed before recursion
   ;;
   ;; Benefits for large N:
   ;; - Working set stays in cache longer
   ;; - Better temporal locality than breadth-first iteration
+  ;; - Depth-first processing keeps data hot
   ;;
   ;; Memory layout:
   ;;   0 - 65535: Primary data buffer
-  ;;   65536 - 131071: Secondary buffer for recursion
-  ;;   131072+: Twiddle factors
+  ;;   65536 - 131071: Secondary buffer (for iterative base case)
+  ;;   131072+: Twiddle factors (precomputed for full N)
 
   (memory (export "memory") 4)
 
@@ -20,6 +23,9 @@
   (global $TWIDDLE_OFFSET i32 (i32.const 131072))
   (global $PI f64 (f64.const 3.141592653589793))
   (global $HALF_PI f64 (f64.const 1.5707963267948966))
+
+  ;; Store top-level N for twiddle stride calculation
+  (global $TOP_N (mut i32) (i32.const 0))
 
   ;; Inline sin using Taylor series
   (func $sin (param $x f64) (result f64)
@@ -108,7 +114,20 @@
     ))
   )
 
-  ;; N=4 base case using SIMD
+  ;; ============================================================================
+  ;; N=2 base case (DIF butterfly, no twiddle)
+  ;; ============================================================================
+  (func $fft_2_at (param $base i32)
+    (local $x0 v128) (local $x1 v128)
+    (local.set $x0 (v128.load (local.get $base)))
+    (local.set $x1 (v128.load (i32.add (local.get $base) (i32.const 16))))
+    (v128.store (local.get $base) (f64x2.add (local.get $x0) (local.get $x1)))
+    (v128.store (i32.add (local.get $base) (i32.const 16)) (f64x2.sub (local.get $x0) (local.get $x1)))
+  )
+
+  ;; ============================================================================
+  ;; N=4 base case using SIMD (radix-4 DIF)
+  ;; ============================================================================
   (func $fft_4_at (param $base i32)
     (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
     (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
@@ -118,10 +137,11 @@
     (local.set $x2 (v128.load (i32.add (local.get $base) (i32.const 32))))
     (local.set $x3 (v128.load (i32.add (local.get $base) (i32.const 48))))
 
+    ;; DIF Stage 1: butterflies with stride N/2=2
     (local.set $t0 (f64x2.add (local.get $x0) (local.get $x2)))
-    (local.set $t1 (f64x2.sub (local.get $x0) (local.get $x2)))
-    (local.set $t2 (f64x2.add (local.get $x1) (local.get $x3)))
-    (local.set $t3 (f64x2.sub (local.get $x1) (local.get $x3)))
+    (local.set $t1 (f64x2.add (local.get $x1) (local.get $x3)))
+    (local.set $t2 (f64x2.sub (local.get $x0) (local.get $x2)))  ;; * W_4^0 = 1
+    (local.set $t3 (f64x2.sub (local.get $x1) (local.get $x3)))  ;; * W_4^1 = -j
 
     ;; Apply -j to t3: (a,b) -> (b,-a)
     (local.set $t3
@@ -129,266 +149,401 @@
         (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t3) (local.get $t3))
         (v128.const f64x2 1.0 -1.0)))
 
-    (v128.store (local.get $base) (f64x2.add (local.get $t0) (local.get $t2)))
-    (v128.store (i32.add (local.get $base) (i32.const 16)) (f64x2.add (local.get $t1) (local.get $t3)))
-    (v128.store (i32.add (local.get $base) (i32.const 32)) (f64x2.sub (local.get $t0) (local.get $t2)))
-    (v128.store (i32.add (local.get $base) (i32.const 48)) (f64x2.sub (local.get $t1) (local.get $t3)))
+    ;; DIF Stage 2: butterflies with stride N/4=1
+    (v128.store (local.get $base) (f64x2.add (local.get $t0) (local.get $t1)))
+    (v128.store (i32.add (local.get $base) (i32.const 16)) (f64x2.sub (local.get $t0) (local.get $t1)))
+    (v128.store (i32.add (local.get $base) (i32.const 32)) (f64x2.add (local.get $t2) (local.get $t3)))
+    (v128.store (i32.add (local.get $base) (i32.const 48)) (f64x2.sub (local.get $t2) (local.get $t3)))
   )
 
-  ;; N=2 base case
-  (func $fft_2_at (param $base i32)
-    (local $x0 v128) (local $x1 v128)
+  ;; ============================================================================
+  ;; N=8 base case (DIF with hardcoded twiddles)
+  ;; ============================================================================
+  (func $fft_8_at (param $base i32)
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $x4 v128) (local $x5 v128) (local $x6 v128) (local $x7 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    (local $a v128) (local $b v128)
+
+    ;; Load all 8 complex values
     (local.set $x0 (v128.load (local.get $base)))
     (local.set $x1 (v128.load (i32.add (local.get $base) (i32.const 16))))
-    (v128.store (local.get $base) (f64x2.add (local.get $x0) (local.get $x1)))
-    (v128.store (i32.add (local.get $base) (i32.const 16)) (f64x2.sub (local.get $x0) (local.get $x1)))
+    (local.set $x2 (v128.load (i32.add (local.get $base) (i32.const 32))))
+    (local.set $x3 (v128.load (i32.add (local.get $base) (i32.const 48))))
+    (local.set $x4 (v128.load (i32.add (local.get $base) (i32.const 64))))
+    (local.set $x5 (v128.load (i32.add (local.get $base) (i32.const 80))))
+    (local.set $x6 (v128.load (i32.add (local.get $base) (i32.const 96))))
+    (local.set $x7 (v128.load (i32.add (local.get $base) (i32.const 112))))
+
+    ;; DIF Stage 1: butterflies combining x[k] and x[k+4] with W_8^k
+    ;; k=0: W_8^0 = (1, 0)
+    (local.set $t0 (f64x2.add (local.get $x0) (local.get $x4)))
+    (local.set $a (f64x2.sub (local.get $x0) (local.get $x4)))
+    (v128.store (local.get $base) (local.get $t0))
+    (v128.store (i32.add (local.get $base) (i32.const 64)) (local.get $a))
+
+    ;; k=1: W_8^1 = (0.7071067811865476, -0.7071067811865476)
+    (local.set $t1 (f64x2.add (local.get $x1) (local.get $x5)))
+    (local.set $a (f64x2.sub (local.get $x1) (local.get $x5)))
+    (local.set $b (f64x2.add
+      (f64x2.mul (local.get $a) (v128.const f64x2 0.7071067811865476 0.7071067811865476))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476)) (v128.const f64x2 -1.0 1.0))))
+    (v128.store (i32.add (local.get $base) (i32.const 16)) (local.get $t1))
+    (v128.store (i32.add (local.get $base) (i32.const 80)) (local.get $b))
+
+    ;; k=2: W_8^2 = (0, -1) = -j
+    (local.set $t2 (f64x2.add (local.get $x2) (local.get $x6)))
+    (local.set $a (f64x2.sub (local.get $x2) (local.get $x6)))
+    (local.set $b (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)) (v128.const f64x2 1.0 -1.0)))
+    (v128.store (i32.add (local.get $base) (i32.const 32)) (local.get $t2))
+    (v128.store (i32.add (local.get $base) (i32.const 96)) (local.get $b))
+
+    ;; k=3: W_8^3 = (-0.7071067811865476, -0.7071067811865476)
+    (local.set $t3 (f64x2.add (local.get $x3) (local.get $x7)))
+    (local.set $a (f64x2.sub (local.get $x3) (local.get $x7)))
+    (local.set $b (f64x2.add
+      (f64x2.mul (local.get $a) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476)) (v128.const f64x2 -1.0 1.0))))
+    (v128.store (i32.add (local.get $base) (i32.const 48)) (local.get $t3))
+    (v128.store (i32.add (local.get $base) (i32.const 112)) (local.get $b))
+
+    ;; DIF Stage 2 & 3: Two FFT-4s on each half
+    (call $fft_4_at (local.get $base))
+    (call $fft_4_at (i32.add (local.get $base) (i32.const 64)))
   )
 
-  ;; Iterative Stockham for medium sizes (used as base case)
-  ;; Performs FFT in-place at the given base address
-  (func $fft_stockham_at (param $base i32) (param $n i32)
-    (local $half i32) (local $stride i32) (local $group_size i32)
-    (local $j i32) (local $k i32)
-    (local $tw_step i32) (local $tw_idx i32) (local $tw_addr i32)
-    (local $even_addr i32) (local $odd_addr i32)
-    (local $dst_addr i32) (local $dst_half i32)
-    (local $src i32) (local $dst i32)
-    (local $xe v128) (local $xo v128) (local $tw v128)
-    (local $prod v128) (local $sum v128) (local $diff v128)
+  ;; ============================================================================
+  ;; N=16 base case (DIF with hardcoded twiddles)
+  ;; ============================================================================
+  (func $fft_16_at (param $base i32)
+    (local $a v128) (local $b v128) (local $t v128)
+    (local $off8 i32)
 
-    (local.set $half (i32.shr_u (local.get $n) (i32.const 1)))
-    (local.set $src (local.get $base))
-    (local.set $dst (global.get $SECONDARY_OFFSET))
-    (local.set $stride (i32.const 1))
-    (local.set $group_size (local.get $half))
+    (local.set $off8 (i32.add (local.get $base) (i32.const 128)))  ;; 8 * 16 bytes
 
-    (block $done_stages (loop $stage_loop
-      (br_if $done_stages (i32.ge_u (local.get $stride) (local.get $n)))
+    ;; DIF first pass: butterflies combining x[k] and x[k+8] with W_16^k
 
-      (local.set $tw_step (i32.div_u (local.get $n) (i32.shl (local.get $stride) (i32.const 1))))
-      (local.set $j (i32.const 0))
+    ;; k=0: W_16^0 = (1, 0)
+    (local.set $a (v128.load (local.get $base)))
+    (local.set $b (v128.load (local.get $off8)))
+    (v128.store (local.get $base) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (local.get $off8) (f64x2.sub (local.get $a) (local.get $b)))
 
-      (block $done_groups (loop $group_loop
-        (br_if $done_groups (i32.ge_u (local.get $j) (local.get $stride)))
+    ;; k=1: W_16^1 = (0.9238795325112867, -0.3826834323650898)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 16))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 16))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 16)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 16)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 0.9238795325112867 0.9238795325112867))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.3826834323650898 -0.3826834323650898)) (v128.const f64x2 -1.0 1.0))))
 
-        (local.set $tw_idx (i32.mul (local.get $j) (local.get $tw_step)))
-        (local.set $tw_addr (i32.add (global.get $TWIDDLE_OFFSET)
-                                     (i32.shl (local.get $tw_idx) (i32.const 4))))
-        (local.set $tw (v128.load (local.get $tw_addr)))
+    ;; k=2: W_16^2 = (0.7071067811865476, -0.7071067811865476)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 32))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 32))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 32)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 32)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 0.7071067811865476 0.7071067811865476))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476)) (v128.const f64x2 -1.0 1.0))))
 
-        (local.set $even_addr (i32.add (local.get $src)
-                               (i32.shl (i32.mul (local.get $j) (local.get $group_size)) (i32.const 4))))
-        (local.set $odd_addr (i32.add (local.get $even_addr)
-                              (i32.shl (local.get $half) (i32.const 4))))
-        (local.set $dst_addr (i32.add (local.get $dst)
-                              (i32.shl (i32.mul (local.get $j) (i32.const 2)) (i32.const 4))))
-        (local.set $dst_half (i32.add (local.get $dst_addr)
-                              (i32.shl (local.get $stride) (i32.const 4))))
+    ;; k=3: W_16^3 = (0.3826834323650898, -0.9238795325112867)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 48))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 48))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 48)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 48)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 0.3826834323650898 0.3826834323650898))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.9238795325112867 -0.9238795325112867)) (v128.const f64x2 -1.0 1.0))))
 
-        (local.set $k (i32.const 0))
-        (block $done_k (loop $k_loop
-          (br_if $done_k (i32.ge_u (local.get $k) (local.get $group_size)))
+    ;; k=4: W_16^4 = (0, -1) = -j
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 64))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 64))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 64)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 64)) (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 1.0 -1.0)))
 
-          (local.set $xe (v128.load (local.get $even_addr)))
-          (local.set $xo (v128.load (local.get $odd_addr)))
+    ;; k=5: W_16^5 = (-0.3826834323650898, -0.9238795325112867)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 80))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 80))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 80)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 80)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 -0.3826834323650898 -0.3826834323650898))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.9238795325112867 -0.9238795325112867)) (v128.const f64x2 -1.0 1.0))))
 
-          ;; Complex multiply xo * tw (inlined)
-          (local.set $prod
-            (f64x2.add
-              (f64x2.mul (local.get $xo)
-                (i8x16.shuffle 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 (local.get $tw) (local.get $tw)))
-              (f64x2.mul
-                (f64x2.mul
-                  (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $xo) (local.get $xo))
-                  (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $tw) (local.get $tw)))
-                (v128.const f64x2 -1.0 1.0))))
+    ;; k=6: W_16^6 = (-0.7071067811865476, -0.7071067811865476)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 96))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 96))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 96)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 96)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.7071067811865476 -0.7071067811865476)) (v128.const f64x2 -1.0 1.0))))
 
-          (local.set $sum (f64x2.add (local.get $xe) (local.get $prod)))
-          (local.set $diff (f64x2.sub (local.get $xe) (local.get $prod)))
+    ;; k=7: W_16^7 = (-0.9238795325112867, -0.3826834323650898)
+    (local.set $a (v128.load (i32.add (local.get $base) (i32.const 112))))
+    (local.set $b (v128.load (i32.add (local.get $off8) (i32.const 112))))
+    (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $base) (i32.const 112)) (f64x2.add (local.get $a) (local.get $b)))
+    (v128.store (i32.add (local.get $off8) (i32.const 112)) (f64x2.add
+      (f64x2.mul (local.get $t) (v128.const f64x2 -0.9238795325112867 -0.9238795325112867))
+      (f64x2.mul (f64x2.mul (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t)) (v128.const f64x2 -0.3826834323650898 -0.3826834323650898)) (v128.const f64x2 -1.0 1.0))))
 
-          (v128.store (local.get $dst_addr) (local.get $sum))
-          (v128.store (local.get $dst_half) (local.get $diff))
-
-          (local.set $even_addr (i32.add (local.get $even_addr) (i32.const 16)))
-          (local.set $odd_addr (i32.add (local.get $odd_addr) (i32.const 16)))
-          (local.set $dst_addr (i32.add (local.get $dst_addr) (i32.shl (i32.shl (local.get $stride) (i32.const 1)) (i32.const 4))))
-          (local.set $dst_half (i32.add (local.get $dst_half) (i32.shl (i32.shl (local.get $stride) (i32.const 1)) (i32.const 4))))
-          (local.set $k (i32.add (local.get $k) (i32.const 1)))
-          (br $k_loop)
-        ))
-
-        (local.set $j (i32.add (local.get $j) (i32.const 1)))
-        (br $group_loop)
-      ))
-
-      ;; Swap buffers
-      (if (i32.eq (local.get $src) (local.get $base))
-        (then
-          (local.set $src (global.get $SECONDARY_OFFSET))
-          (local.set $dst (local.get $base)))
-        (else
-          (local.set $src (local.get $base))
-          (local.set $dst (global.get $SECONDARY_OFFSET))))
-
-      (local.set $stride (i32.shl (local.get $stride) (i32.const 1)))
-      (local.set $group_size (i32.shr_u (local.get $group_size) (i32.const 1)))
-      (br $stage_loop)
-    ))
-
-    ;; Copy back if result is in secondary buffer
-    (if (i32.ne (local.get $src) (local.get $base))
-      (then
-        (local.set $k (i32.const 0))
-        (local.set $even_addr (global.get $SECONDARY_OFFSET))
-        (local.set $odd_addr (local.get $base))
-        (block $copy_done (loop $copy_loop
-          (br_if $copy_done (i32.ge_u (local.get $k) (local.get $n)))
-          (v128.store (local.get $odd_addr) (v128.load (local.get $even_addr)))
-          (local.set $even_addr (i32.add (local.get $even_addr) (i32.const 16)))
-          (local.set $odd_addr (i32.add (local.get $odd_addr) (i32.const 16)))
-          (local.set $k (i32.add (local.get $k) (i32.const 1)))
-          (br $copy_loop)
-        ))
-      )
-    )
+    ;; DIF Stage 2 & 3: Two FFT-8s on each half
+    (call $fft_8_at (local.get $base))
+    (call $fft_8_at (local.get $off8))
   )
 
-  ;; Combine step: given FFT of even and odd halves, produce full FFT
-  ;; Even half at base, odd half at base + n/2 * 16
-  ;; Uses twiddles for size n
-  (func $combine (param $base i32) (param $n i32)
+  ;; ============================================================================
+  ;; DIF pass: Apply butterflies with twiddles for size N at given base
+  ;; Twiddles are fetched from table using stride (TOP_N / n)
+  ;; ============================================================================
+  (func $dif_pass (param $base i32) (param $n i32) (param $tw_stride i32)
     (local $half i32) (local $k i32)
-    (local $even_addr i32) (local $odd_addr i32)
-    (local $tw_step i32) (local $tw_addr i32)
-    (local $xe v128) (local $xo v128) (local $tw v128) (local $prod v128)
+    (local $addr_a i32) (local $addr_b i32) (local $tw_addr i32)
+    (local $a v128) (local $b v128) (local $t v128) (local $tw v128) (local $prod v128)
 
     (local.set $half (i32.shr_u (local.get $n) (i32.const 1)))
-    (local.set $tw_step (i32.const 1))  ;; twiddles precomputed for full N at top level
-    (local.set $even_addr (local.get $base))
-    (local.set $odd_addr (i32.add (local.get $base) (i32.shl (local.get $half) (i32.const 4))))
+    (local.set $addr_a (local.get $base))
+    (local.set $addr_b (i32.add (local.get $base) (i32.shl (local.get $half) (i32.const 4))))
     (local.set $k (i32.const 0))
 
     (block $done (loop $loop
       (br_if $done (i32.ge_u (local.get $k) (local.get $half)))
 
-      ;; Load twiddle W_n^k
+      ;; Load data
+      (local.set $a (v128.load (local.get $addr_a)))
+      (local.set $b (v128.load (local.get $addr_b)))
+
+      ;; First half: a + b
+      (v128.store (local.get $addr_a) (f64x2.add (local.get $a) (local.get $b)))
+
+      ;; Second half: (a - b) * W_n^k
+      (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+
+      ;; Load twiddle: index = k * stride
       (local.set $tw_addr (i32.add (global.get $TWIDDLE_OFFSET)
-                                   (i32.shl (local.get $k) (i32.const 4))))
+                                   (i32.shl (i32.mul (local.get $k) (local.get $tw_stride)) (i32.const 4))))
       (local.set $tw (v128.load (local.get $tw_addr)))
 
-      (local.set $xe (v128.load (local.get $even_addr)))
-      (local.set $xo (v128.load (local.get $odd_addr)))
-
-      ;; prod = xo * tw (inlined SIMD complex multiply)
+      ;; Complex multiply: t * tw (inlined SIMD)
       (local.set $prod
         (f64x2.add
-          (f64x2.mul (local.get $xo)
+          (f64x2.mul (local.get $t)
             (i8x16.shuffle 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 (local.get $tw) (local.get $tw)))
           (f64x2.mul
             (f64x2.mul
-              (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $xo) (local.get $xo))
+              (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t))
               (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $tw) (local.get $tw)))
             (v128.const f64x2 -1.0 1.0))))
 
-      ;; X[k] = xe + prod, X[k + n/2] = xe - prod
-      (v128.store (local.get $even_addr) (f64x2.add (local.get $xe) (local.get $prod)))
-      (v128.store (local.get $odd_addr) (f64x2.sub (local.get $xe) (local.get $prod)))
+      (v128.store (local.get $addr_b) (local.get $prod))
 
-      (local.set $even_addr (i32.add (local.get $even_addr) (i32.const 16)))
-      (local.set $odd_addr (i32.add (local.get $odd_addr) (i32.const 16)))
+      (local.set $addr_a (i32.add (local.get $addr_a) (i32.const 16)))
+      (local.set $addr_b (i32.add (local.get $addr_b) (i32.const 16)))
       (local.set $k (i32.add (local.get $k) (i32.const 1)))
       (br $loop)
     ))
   )
 
-  ;; Recursive FFT implementation
-  ;; For small N: use iterative Stockham
-  ;; For large N: split, recurse, combine
-  (func $fft_recursive_impl (param $base i32) (param $n i32)
-    (local $half i32) (local $odd_base i32)
+  ;; ============================================================================
+  ;; Iterative DIF for small N (used as base case to reduce recursive calls)
+  ;; Performs complete DIF FFT iteratively for N <= 64
+  ;; ============================================================================
+  (func $fft_dif_iterative (param $base i32) (param $n i32) (param $tw_stride i32)
+    (local $half i32) (local $stage_size i32) (local $num_groups i32)
+    (local $group i32) (local $k i32) (local $group_offset i32)
+    (local $addr_a i32) (local $addr_b i32) (local $tw_addr i32) (local $local_stride i32)
+    (local $a v128) (local $b v128) (local $t v128) (local $tw v128) (local $prod v128)
 
-    ;; Base cases
+    (local.set $stage_size (local.get $n))
+    (local.set $local_stride (local.get $tw_stride))
+
+    ;; Iterate through stages (DIF: start with full size, halve each stage)
+    (block $done_stages (loop $stage_loop
+      (br_if $done_stages (i32.le_u (local.get $stage_size) (i32.const 1)))
+
+      (local.set $half (i32.shr_u (local.get $stage_size) (i32.const 1)))
+      (local.set $num_groups (i32.div_u (local.get $n) (local.get $stage_size)))
+      (local.set $group (i32.const 0))
+
+      ;; Process each group at this stage
+      (block $done_groups (loop $group_loop
+        (br_if $done_groups (i32.ge_u (local.get $group) (local.get $num_groups)))
+
+        (local.set $group_offset (i32.add (local.get $base)
+          (i32.shl (i32.mul (local.get $group) (local.get $stage_size)) (i32.const 4))))
+        (local.set $k (i32.const 0))
+
+        ;; Process butterflies within this group
+        (block $done_k (loop $k_loop
+          (br_if $done_k (i32.ge_u (local.get $k) (local.get $half)))
+
+          (local.set $addr_a (i32.add (local.get $group_offset) (i32.shl (local.get $k) (i32.const 4))))
+          (local.set $addr_b (i32.add (local.get $addr_a) (i32.shl (local.get $half) (i32.const 4))))
+
+          (local.set $a (v128.load (local.get $addr_a)))
+          (local.set $b (v128.load (local.get $addr_b)))
+
+          ;; First half: a + b
+          (v128.store (local.get $addr_a) (f64x2.add (local.get $a) (local.get $b)))
+
+          ;; Second half: (a - b) * W
+          (local.set $t (f64x2.sub (local.get $a) (local.get $b)))
+
+          ;; Load twiddle
+          (local.set $tw_addr (i32.add (global.get $TWIDDLE_OFFSET)
+            (i32.shl (i32.mul (local.get $k) (local.get $local_stride)) (i32.const 4))))
+          (local.set $tw (v128.load (local.get $tw_addr)))
+
+          ;; Complex multiply
+          (local.set $prod
+            (f64x2.add
+              (f64x2.mul (local.get $t)
+                (i8x16.shuffle 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 (local.get $tw) (local.get $tw)))
+              (f64x2.mul
+                (f64x2.mul
+                  (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t) (local.get $t))
+                  (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $tw) (local.get $tw)))
+                (v128.const f64x2 -1.0 1.0))))
+
+          (v128.store (local.get $addr_b) (local.get $prod))
+
+          (local.set $k (i32.add (local.get $k) (i32.const 1)))
+          (br $k_loop)
+        ))
+
+        (local.set $group (i32.add (local.get $group) (i32.const 1)))
+        (br $group_loop)
+      ))
+
+      ;; Next stage: halve size, double stride
+      (local.set $stage_size (local.get $half))
+      (local.set $local_stride (i32.shl (local.get $local_stride) (i32.const 1)))
+      (br $stage_loop)
+    ))
+  )
+
+  ;; ============================================================================
+  ;; Depth-First Recursive DIF FFT implementation
+  ;; Parameters:
+  ;;   base: start address of data
+  ;;   n: current size
+  ;;   tw_stride: twiddle stride (TOP_N / n)
+  ;; ============================================================================
+  (func $fft_dif_recursive (param $base i32) (param $n i32) (param $tw_stride i32)
+    (local $half i32) (local $second_half i32)
+
+    ;; Base cases using optimized codelets (hardcoded twiddles, no loops)
     (if (i32.eq (local.get $n) (i32.const 2))
       (then (call $fft_2_at (local.get $base)) (return)))
     (if (i32.eq (local.get $n) (i32.const 4))
       (then (call $fft_4_at (local.get $base)) (return)))
+    (if (i32.eq (local.get $n) (i32.const 8))
+      (then (call $fft_8_at (local.get $base)) (return)))
+    (if (i32.eq (local.get $n) (i32.const 16))
+      (then (call $fft_16_at (local.get $base)) (return)))
 
-    ;; For sizes <= 64, use iterative Stockham (fits in cache)
-    (if (i32.le_u (local.get $n) (i32.const 64))
-      (then (call $fft_stockham_at (local.get $base) (local.get $n)) (return)))
-
-    ;; Recursive case: split into even/odd, recurse, combine
-    (local.set $half (i32.shr_u (local.get $n) (i32.const 1)))
-    (local.set $odd_base (i32.add (local.get $base) (i32.shl (local.get $half) (i32.const 4))))
-
-    ;; NOTE: Data must already be in even/odd order for this to work
-    ;; This is the Cooley-Tukey DIT pattern, not Stockham
-    ;; Recurse on even half
-    (call $fft_recursive_impl (local.get $base) (local.get $half))
-    ;; Recurse on odd half
-    (call $fft_recursive_impl (local.get $odd_base) (local.get $half))
-    ;; Combine
-    (call $combine (local.get $base) (local.get $n))
-  )
-
-  ;; Reorder data into even/odd split for recursive FFT
-  ;; Input: natural order at base
-  ;; Output: even indices in first half, odd indices in second half
-  (func $reorder_even_odd (param $base i32) (param $n i32)
-    (local $half i32) (local $k i32)
-    (local $src_addr i32) (local $even_dst i32) (local $odd_dst i32)
-    (local $temp_base i32)
+    ;; Recursive case: DIF decomposition
+    ;; 1. Apply DIF butterflies (first pass)
+    ;; 2. Recurse on first half (depth-first)
+    ;; 3. Recurse on second half (depth-first)
 
     (local.set $half (i32.shr_u (local.get $n) (i32.const 1)))
-    (local.set $temp_base (global.get $SECONDARY_OFFSET))
+    (local.set $second_half (i32.add (local.get $base) (i32.shl (local.get $half) (i32.const 4))))
 
-    ;; Copy even indices to temp first half
-    (local.set $k (i32.const 0))
-    (local.set $src_addr (local.get $base))
-    (local.set $even_dst (local.get $temp_base))
-    (block $even_done (loop $even_loop
-      (br_if $even_done (i32.ge_u (local.get $k) (local.get $half)))
-      (v128.store (local.get $even_dst) (v128.load (local.get $src_addr)))
-      (local.set $src_addr (i32.add (local.get $src_addr) (i32.const 32)))  ;; skip by 2
-      (local.set $even_dst (i32.add (local.get $even_dst) (i32.const 16)))
-      (local.set $k (i32.add (local.get $k) (i32.const 1)))
-      (br $even_loop)
+    ;; DIF pass: butterflies with twiddles
+    (call $dif_pass (local.get $base) (local.get $n) (local.get $tw_stride))
+
+    ;; Recurse depth-first on first half, then second half
+    ;; This keeps the working set hot in cache
+    (call $fft_dif_recursive (local.get $base) (local.get $half) (i32.shl (local.get $tw_stride) (i32.const 1)))
+    (call $fft_dif_recursive (local.get $second_half) (local.get $half) (i32.shl (local.get $tw_stride) (i32.const 1)))
+  )
+
+  ;; ============================================================================
+  ;; Bit-reversal permutation
+  ;; DIF produces output in bit-reversed order, so we need to reorder
+  ;; ============================================================================
+  (func $bit_reverse (param $x i32) (param $log2n i32) (result i32)
+    (local $result i32) (local $i i32)
+    (local.set $result (i32.const 0))
+    (local.set $i (i32.const 0))
+    (block $done (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $log2n)))
+      (local.set $result (i32.or
+        (i32.shl (local.get $result) (i32.const 1))
+        (i32.and (local.get $x) (i32.const 1))))
+      (local.set $x (i32.shr_u (local.get $x) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)
     ))
+    (local.get $result)
+  )
 
-    ;; Copy odd indices to temp second half
-    (local.set $k (i32.const 0))
-    (local.set $src_addr (i32.add (local.get $base) (i32.const 16)))  ;; start at index 1
-    (local.set $odd_dst (i32.add (local.get $temp_base) (i32.shl (local.get $half) (i32.const 4))))
-    (block $odd_done (loop $odd_loop
-      (br_if $odd_done (i32.ge_u (local.get $k) (local.get $half)))
-      (v128.store (local.get $odd_dst) (v128.load (local.get $src_addr)))
-      (local.set $src_addr (i32.add (local.get $src_addr) (i32.const 32)))
-      (local.set $odd_dst (i32.add (local.get $odd_dst) (i32.const 16)))
-      (local.set $k (i32.add (local.get $k) (i32.const 1)))
-      (br $odd_loop)
+  ;; Count trailing zeros to compute log2
+  (func $log2 (param $n i32) (result i32)
+    (local $result i32)
+    (local.set $result (i32.const 0))
+    (block $done (loop $loop
+      (br_if $done (i32.and (local.get $n) (i32.const 1)))
+      (local.set $result (i32.add (local.get $result) (i32.const 1)))
+      (local.set $n (i32.shr_u (local.get $n) (i32.const 1)))
+      (br $loop)
     ))
+    (local.get $result)
+  )
 
-    ;; Copy back to base
-    (local.set $k (i32.const 0))
-    (local.set $src_addr (local.get $temp_base))
-    (local.set $even_dst (local.get $base))
-    (block $copy_done (loop $copy_loop
-      (br_if $copy_done (i32.ge_u (local.get $k) (local.get $n)))
-      (v128.store (local.get $even_dst) (v128.load (local.get $src_addr)))
-      (local.set $src_addr (i32.add (local.get $src_addr) (i32.const 16)))
-      (local.set $even_dst (i32.add (local.get $even_dst) (i32.const 16)))
-      (local.set $k (i32.add (local.get $k) (i32.const 1)))
-      (br $copy_loop)
+  ;; Apply bit-reversal permutation to output (in-place)
+  ;; Only swaps pairs where i < j to avoid double-swapping
+  (func $bit_reversal_permutation (param $n i32)
+    (local $log2n i32) (local $i i32) (local $j i32)
+    (local $addr_i i32) (local $addr_j i32)
+    (local $tmp v128)
+
+    (local.set $log2n (call $log2 (local.get $n)))
+
+    (local.set $i (i32.const 0))
+    (block $done (loop $loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $j (call $bit_reverse (local.get $i) (local.get $log2n)))
+
+      ;; Only swap if i < j (avoids swapping twice or with self)
+      (if (i32.lt_u (local.get $i) (local.get $j))
+        (then
+          (local.set $addr_i (i32.shl (local.get $i) (i32.const 4)))
+          (local.set $addr_j (i32.shl (local.get $j) (i32.const 4)))
+          ;; Swap data[i] and data[j]
+          (local.set $tmp (v128.load (local.get $addr_i)))
+          (v128.store (local.get $addr_i) (v128.load (local.get $addr_j)))
+          (v128.store (local.get $addr_j) (local.get $tmp))
+        )
+      )
+
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $loop)
     ))
   )
 
-  ;; Main entry: recursive FFT on data at address 0
+  ;; ============================================================================
+  ;; Main entry point: Recursive FFT on data at address 0
+  ;; ============================================================================
   (func $fft_recursive (export "fft_recursive") (param $n i32)
-    ;; For recursive approach, we need to reorder data at each level
-    ;; This adds overhead but enables depth-first processing
+    ;; Store top-level N for twiddle calculations
+    (global.set $TOP_N (local.get $n))
 
-    ;; For now, just use iterative Stockham as baseline comparison
-    ;; A true recursive implementation needs bit-reversal or more complex reordering
-    (call $fft_stockham_at (i32.const 0) (local.get $n))
+    ;; Start recursion with stride=1 (twiddles precomputed for full N)
+    (call $fft_dif_recursive (i32.const 0) (local.get $n) (i32.const 1))
+
+    ;; DIF produces bit-reversed output, apply permutation to get natural order
+    (call $bit_reversal_permutation (local.get $n))
+  )
+
+  ;; ============================================================================
+  ;; Standard FFT entry point (alias for compatibility)
+  ;; ============================================================================
+  (func (export "fft") (param $n i32)
+    (call $fft_recursive (local.get $n))
   )
 )
