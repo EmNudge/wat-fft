@@ -256,38 +256,43 @@ fft_1024:
 - The optimal cutoff is **N=1024** - beyond this, simple loops beat hierarchical composition
 - Code size grows exponentially: $fft_2048 alone would add 13,800 lines of WAT
 
-### Priority G: Real-Only Arithmetic in Early Stages (Expected: +5-15% for rfft)
+### Priority G: Real-Only Arithmetic in Early Stages ~~(Expected: +5-15% for rfft)~~ **NOT APPLICABLE**
 
-**Problem**: rfft input is purely real, but we treat it as complex from the start.
+**Status**: ❌ Not applicable to our pack-based rfft algorithm.
 
-**Solution**: Exploit real-only input in early FFT stages where imaginary parts are known to be zero.
+**Original problem description**:
 
-```wat
-;; Stage 1 of rfft: input is real, imaginary = 0
-;; Butterfly: (a + 0i) ± (b + 0i) * W
-;; Can skip all imaginary multiplications in first stage
-```
+> rfft input is purely real, but we treat it as complex from the start.
 
-**Implementation**:
+**Why this doesn't apply**: Our rfft uses a "half-length" approach that packs pairs of reals as complex: `z[k] = x[2k] + i*x[2k+1]`. The "imaginary parts" are actual data values, NOT zeros. This is fundamentally different from a "full-length" approach where N real inputs are treated as N complex inputs with im=0.
 
-1. Create specialized first-stage butterfly that assumes im=0
-2. Transition to full complex arithmetic after first stage
-3. May require separate code paths (size vs complexity tradeoff)
+**Conclusion**: The real-only optimization described in this priority requires a different rfft algorithm. Our pack-based approach already achieves the same computational savings (N/2 FFT instead of N FFT) through a different mechanism.
 
-### Priority H: SIMD Pack/Unpack Fusion (Expected: +5-10% for rfft)
+### Priority H: SIMD Pack/Unpack Fusion ~~(Expected: +5-10% for rfft)~~ **IMPLEMENTED - +2-8pp improvement**
 
-**Problem**: rfft pack step `z[k] = x[2k] + i*x[2k+1]` is a separate loop.
+**Status**: ✅ Implemented via SIMD post-processing. See Experiment 11.
 
-**Solution**: Use SIMD shuffles to pack 2 complex values simultaneously.
+**Original problem**: The post-processing loop used scalar f64 operations.
 
-```wat
-;; Current: scalar pack loop
-;; Proposed: SIMD pack
-(v128.load (i32.const 0))           ;; [x0, x1, x2, x3]
-(i8x16.shuffle ...)                  ;; Rearrange to [x0, x1] [x2, x3] as 2 complex
-```
+**Solution implemented**: Created `$rfft_postprocess_simd` that uses v128 SIMD operations for:
 
-**Note**: May also fuse with first butterfly stage for additional gains.
+- Loading Z[k] and Z[n2-k] as v128
+- Computing conjugates via v128.xor with sign mask
+- Computing sum/diff with f64x2 operations
+- Complex multiply using inline SIMD pattern
+- Storing results as v128
+
+**Results**:
+| Size | Improvement vs scalar post-processing |
+| ------ | ------------------------------------- |
+| N=128 | +8.5pp (from -16.8% to -8.3%) |
+| N=256 | +6.7pp (from +12.3% to +19.0%) |
+| N=512 | +2.3pp (from -15.8% to -13.5%) |
+| N=1024 | +5.0pp (from -26.9% to -21.9%) |
+| N=2048 | +5.6pp (from -31.1% to -25.5%) |
+| N=4096 | +4.1pp (from -44.2% to -40.1%) |
+
+**Note**: The pack step itself is implicit in our algorithm (we just interpret N reals as N/2 complex). The optimization opportunity was in the post-processing, not the packing.
 
 ---
 
@@ -715,6 +720,133 @@ Further gains for large N would require fundamentally different approaches:
 - Cache-oblivious recursive algorithms (not just hierarchical codelets)
 - Runtime planning (like FFTW's planner) to select algorithms per-size
 - Depth-first recursion with explicit stack management to improve cache locality
+
+### Experiment 10: Depth-First Recursive DIF FFT (2026-01-23)
+
+**Hypothesis**: A depth-first recursive FFT using DIF (Decimation in Frequency) decomposition would improve cache locality for large N, as the working set stays hot in cache during recursion.
+
+**Implementation** (`modules/fft_recursive.wat`):
+
+- DIF decomposition: butterflies first, then recurse on halves
+- No data reordering needed before recursion (unlike DIT)
+- Base cases: N=2, 4, 8, 16 codelets with hardcoded twiddles
+- Twiddle stride parameter to use precomputed twiddle table at different recursion levels
+- Bit-reversal permutation at the end (DIF produces bit-reversed output)
+
+**Result**: **SLOWER THAN EXPECTED** - Does not achieve the expected +15-25% improvement
+
+| Size   | vs Combined (iterative) | Notes                            |
+| ------ | ----------------------- | -------------------------------- |
+| N=64   | **-37%**                | Function call overhead dominates |
+| N=256  | **-53%**                |                                  |
+| N=1024 | **-50%**                |                                  |
+| N=2048 | **-39%**                |                                  |
+| N=4096 | **-55%**                |                                  |
+| N=8192 | **-11%**                | Gap narrows at larger sizes      |
+
+**Why the depth-first approach is slower**:
+
+| Factor                 | Impact                                                           |
+| ---------------------- | ---------------------------------------------------------------- |
+| Function call overhead | WASM function calls have non-trivial overhead                    |
+| Bit-reversal overhead  | DIF produces bit-reversed output, requiring O(N) permutation     |
+| Loop vs codelet        | Recursive DIF loop is slower than hardcoded codelets             |
+| Twiddle table loads    | Each level loads twiddles from memory (vs hardcoded in codelets) |
+
+**Why the gap narrows at N=8192**:
+
+- Cache locality benefits start to show at very large N
+- Working set exceeds L2 cache, so depth-first helps
+- For N≥16384, depth-first might eventually beat iterative
+
+**Attempted optimizations that did NOT help**:
+
+1. **In-place bit-reversal**: Swap pairs directly instead of using secondary buffer → No improvement
+2. **Iterative base case (N≤64)**: Use iterative DIF loop instead of codelets → Made it **worse** because codelets have hardcoded twiddles and no loop overhead
+
+**Key insight**: The iterative Stockham algorithm avoids bit-reversal entirely through its ping-pong buffer structure, giving it a fundamental advantage over recursive DIF.
+
+**Conclusion**: Priority D (Depth-First Recursive FFT) does **NOT** provide the expected +15-25% improvement for N≥1024. The overhead of recursive calls and bit-reversal outweighs the cache locality benefits for typical FFT sizes. The gap only narrows significantly at N≥8192.
+
+**Files created**:
+
+- `modules/fft_recursive.wat` - Depth-first recursive DIF FFT
+- `tests/recursive.test.js` - Correctness tests
+- `benchmarks/recursive.bench.js` - Performance benchmarks
+
+### Experiment 11: SIMD Post-Processing for Real FFT (2026-01-24)
+
+**Hypothesis**: The scalar post-processing loop in rfft can be optimized using SIMD operations to reduce instruction count and improve throughput.
+
+**Background**: The rfft post-processing computes for each pair (k, n2-k):
+
+- `sum = Z[k] + conj(Z[n2-k])`
+- `diff = Z[k] - conj(Z[n2-k])`
+- `wd = W_rot * diff` where `W_rot = (w_im, -w_re)` is a rotated twiddle
+- `X[k] = 0.5 * (sum + wd)`
+
+The original implementation used scalar f64 operations. Each pair required 8 f64 loads, 8 f64 stores, and ~20 f64 arithmetic operations.
+
+**Implementation** (`$rfft_postprocess_simd`):
+
+1. Added `$CONJ_MASK` global for sign-flipping imaginary parts
+2. Created SIMD version that:
+   - Loads Z[k] and Z[n2-k] as v128
+   - Computes conj() using v128.xor with $CONJ_MASK
+   - Uses SIMD f64x2 add/sub for sum and diff
+   - Creates W_rot using shuffle + sign flip
+   - Performs complex multiply using inline SIMD pattern
+   - Stores results as v128
+3. Modified `$rfft` to dispatch to SIMD for N >= 128
+
+**Result**: **SUCCESS - 2-8 percentage point improvement across all sizes**
+
+| Size   | Before (scalar) | After (SIMD) | Improvement |
+| ------ | --------------- | ------------ | ----------- |
+| N=128  | -16.8%          | -8.3%        | **+8.5pp**  |
+| N=256  | +12.3%          | +19.0%       | **+6.7pp**  |
+| N=512  | -15.8%          | -13.5%       | **+2.3pp**  |
+| N=1024 | -26.9%          | -21.9%       | **+5.0pp**  |
+| N=2048 | -31.1%          | -25.5%       | **+5.6pp**  |
+| N=4096 | -44.2%          | -40.1%       | **+4.1pp**  |
+
+**Analysis**:
+
+1. **SIMD reduces instruction count**: v128 operations process 2 f64 values at once
+2. **Fewer memory operations**: v128.load/store replaces pairs of f64.load/store
+3. **Better instruction pipelining**: SIMD operations have good throughput on modern CPUs
+4. **Consistent gains**: The improvement is relatively consistent (2-8pp) across all sizes
+
+**Key insight**: The post-processing accounts for roughly 10-20% of total rfft time for larger sizes. SIMD optimization of this phase gives proportional improvement matching the Priority H expectation of "+5-10% for rfft".
+
+**Conclusion**: Priority G/H (SIMD post-processing) provides meaningful but not dramatic improvements. The main bottleneck remains the FFT computation itself, not the post-processing.
+
+**Files modified**:
+
+- `modules/fft_real_combined.wat` - Added `$CONJ_MASK` global, `$rfft_postprocess_simd` function, modified `$rfft` dispatch
+
+### Updated Performance Summary (2026-01-24)
+
+**Real FFT (vs fftw-js Emscripten/FFTW):**
+| Size | wat-fft Combined | fftw-js (f32) | vs fftw-js |
+| ----- | ---------------- | ------------- | ----------- |
+| N=8 | 22.5M ops/s | 10.0M ops/s | **+126.1%** |
+| N=16 | 11.9M ops/s | 9.7M ops/s | **+22.6%** |
+| N=32 | 12.2M ops/s | 8.6M ops/s | **+41.4%** |
+| N=64 | 6.7M ops/s | 6.4M ops/s | **+4.8%** |
+| N=128 | 3.7M ops/s | 4.0M ops/s | -8.3% |
+| N=256 | 1.6M ops/s | 1.4M ops/s | **+19.0%** |
+| N=512 | 750K ops/s | 867K ops/s | -13.5% |
+| N=1024| 350K ops/s | 448K ops/s | -21.9% |
+| N=2048| 157K ops/s | 211K ops/s | -25.5% |
+| N=4096| 61K ops/s | 101K ops/s | -40.1% |
+
+**Summary after all optimizations**:
+
+- **Beats fftw-js** for N ≤ 64 and N=256 (by +5% to +126%)
+- **Competitive** at N=128 (-8%) and N=512 (-14%)
+- **Gap narrows** at larger sizes compared to before SIMD optimization
+- Further gains would require fundamentally different algorithms or deeper FFT core optimization
 
 ---
 
