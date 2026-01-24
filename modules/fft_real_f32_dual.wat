@@ -29,6 +29,9 @@
   ;; Sign mask for dual-complex multiply: [-1, 1, -1, 1]
   (global $SIGN_MASK v128 (v128.const f32x4 -1.0 1.0 -1.0 1.0))
 
+  ;; Conjugate mask for f32 complex: flip sign of imaginary parts [0, -0, 0, -0]
+  (global $CONJ_MASK_F32 v128 (v128.const i32x4 0 0x80000000 0 0x80000000))
+
 
   ;; ============================================================================
   ;; Inline Trig Functions (Taylor Series) - Same as fft_stockham_f32.wat
@@ -697,6 +700,244 @@
 
 
   ;; ============================================================================
+  ;; SIMD Post-Processing for Real FFT (f32x4)
+  ;; ============================================================================
+  ;; Processes 2 pairs per iteration using full f32x4 SIMD throughput.
+  ;; Pairs (k, n2-k) and (k+1, n2-k-1) are processed together.
+
+  (func $rfft_postprocess_simd (param $n2 i32)
+    (local $k i32) (local $k_end i32) (local $n2_minus_k i32)
+    (local $addr_k i32) (local $addr_n2k i32) (local $tw_addr i32)
+    ;; SIMD registers
+    (local $zk v128) (local $zn2k v128) (local $conj_zn2k v128)
+    (local $wk v128) (local $wk_rot v128)
+    (local $wn2k v128) (local $wn2k_rot v128)
+    (local $sum v128) (local $diff v128) (local $wd v128)
+    (local $sum2 v128) (local $diff2 v128) (local $wd2 v128)
+    (local $xk v128) (local $xn2k v128)
+    (local $conj_zk v128)
+    (local $half v128)
+    ;; Scalar for DC/Nyquist
+    (local $z0_re f32) (local $z0_im f32)
+    ;; For complex multiply
+    (local $wr v128) (local $wi v128) (local $prod v128) (local $swapped v128)
+
+    (local.set $half (v128.const f32x4 0.5 0.5 0.5 0.5))
+
+    ;; DC and Nyquist handling
+    (local.set $z0_re (f32.load (i32.const 0)))
+    (local.set $z0_im (f32.load (i32.const 4)))
+    (f32.store (i32.const 0) (f32.add (local.get $z0_re) (local.get $z0_im)))
+    (f32.store (i32.const 4) (f32.const 0.0))
+    (local.set $addr_k (i32.shl (local.get $n2) (i32.const 3)))
+    (f32.store (local.get $addr_k) (f32.sub (local.get $z0_re) (local.get $z0_im)))
+    (f32.store (i32.add (local.get $addr_k) (i32.const 4)) (f32.const 0.0))
+
+    ;; Main SIMD loop: process 2 pairs per iteration
+    ;; Pairs (k, n2-k) and (k+1, n2-k-1)
+    (local.set $k_end (i32.shr_u (local.get $n2) (i32.const 1)))
+    (local.set $k (i32.const 1))
+
+    (block $done_main (loop $main_loop
+      ;; Need at least 2 pairs, so k+1 < k_end
+      (br_if $done_main (i32.ge_u (i32.add (local.get $k) (i32.const 1)) (local.get $k_end)))
+
+      (local.set $n2_minus_k (i32.sub (local.get $n2) (local.get $k)))
+      (local.set $addr_k (i32.shl (local.get $k) (i32.const 3)))
+      ;; addr_n2k points to Z[n2-k-1], loading 16 bytes gives [Z[n2-k-1], Z[n2-k]]
+      (local.set $addr_n2k (i32.shl (i32.sub (local.get $n2_minus_k) (i32.const 1)) (i32.const 3)))
+
+      ;; Load [Z[k], Z[k+1]] - contiguous
+      (local.set $zk (v128.load (local.get $addr_k)))
+
+      ;; Load [Z[n2-k-1], Z[n2-k]] and shuffle to [Z[n2-k], Z[n2-k-1]]
+      (local.set $zn2k (v128.load (local.get $addr_n2k)))
+      (local.set $zn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+                                      (local.get $zn2k) (local.get $zn2k)))
+
+      ;; Compute conj(Z[n2-k], Z[n2-k-1]) = flip sign of imaginary parts
+      (local.set $conj_zn2k (v128.xor (local.get $zn2k) (global.get $CONJ_MASK_F32)))
+
+      ;; sum = Z[k,k+1] + conj(Z[n2-k, n2-k-1])
+      ;; diff = Z[k,k+1] - conj(Z[n2-k, n2-k-1])
+      (local.set $sum (f32x4.add (local.get $zk) (local.get $conj_zn2k)))
+      (local.set $diff (f32x4.sub (local.get $zk) (local.get $conj_zn2k)))
+
+      ;; Load [W[k], W[k+1]] - contiguous (8 bytes each)
+      (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
+      (local.set $wk (v128.load (local.get $tw_addr)))
+
+      ;; W_rot = (w_im, -w_re) for each: shuffle to swap re/im, then negate re
+      ;; [w0.re, w0.im, w1.re, w1.im] -> [w0.im, w0.re, w1.im, w1.re] -> [w0.im, -w0.re, w1.im, -w1.re]
+      (local.set $wk_rot
+        (f32x4.mul
+          (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11 (local.get $wk) (local.get $wk))
+          (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+      ;; wd = W_rot * diff (dual-complex multiply)
+      ;; For [a0+b0i, a1+b1i] * [c0+d0i, c1+d1i]:
+      ;; = [(a0*c0-b0*d0) + (a0*d0+b0*c0)i, (a1*c1-b1*d1) + (a1*d1+b1*c1)i]
+      (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                    (local.get $wk_rot) (local.get $wk_rot)))
+      (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                    (local.get $wk_rot) (local.get $wk_rot)))
+      (local.set $prod (f32x4.mul (local.get $diff) (local.get $wr)))
+      (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                         (local.get $diff) (local.get $diff)))
+      (local.set $wd (f32x4.add (local.get $prod)
+        (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+      ;; X[k,k+1] = 0.5 * (sum + wd)
+      (local.set $xk (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)))
+
+      ;; Now compute X[n2-k, n2-k-1] using swapped inputs
+      (local.set $conj_zk (v128.xor (local.get $zk) (global.get $CONJ_MASK_F32)))
+      (local.set $sum2 (f32x4.add (local.get $zn2k) (local.get $conj_zk)))
+      (local.set $diff2 (f32x4.sub (local.get $zn2k) (local.get $conj_zk)))
+
+      ;; Load [W[n2-k-1], W[n2-k]] and shuffle to [W[n2-k], W[n2-k-1]]
+      (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_n2k)))
+      (local.set $wn2k (v128.load (local.get $tw_addr)))
+      (local.set $wn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+                                      (local.get $wn2k) (local.get $wn2k)))
+
+      ;; W_rot2 = (w_im, -w_re) for each
+      (local.set $wn2k_rot
+        (f32x4.mul
+          (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11 (local.get $wn2k) (local.get $wn2k))
+          (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+      ;; wd2 = W_rot2 * diff2
+      (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                    (local.get $wn2k_rot) (local.get $wn2k_rot)))
+      (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                    (local.get $wn2k_rot) (local.get $wn2k_rot)))
+      (local.set $prod (f32x4.mul (local.get $diff2) (local.get $wr)))
+      (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                         (local.get $diff2) (local.get $diff2)))
+      (local.set $wd2 (f32x4.add (local.get $prod)
+        (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+      ;; X[n2-k, n2-k-1] = 0.5 * (sum2 + wd2)
+      (local.set $xn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
+
+      ;; Store X[k, k+1]
+      (v128.store (local.get $addr_k) (local.get $xk))
+
+      ;; Store X[n2-k, n2-k-1] - need to shuffle back to [X[n2-k-1], X[n2-k]] order
+      (local.set $xn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+                                      (local.get $xn2k) (local.get $xn2k)))
+      (v128.store (local.get $addr_n2k) (local.get $xn2k))
+
+      (local.set $k (i32.add (local.get $k) (i32.const 2)))
+      (br $main_loop)
+    ))
+
+    ;; Handle remaining pair if k < k_end (odd number of pairs)
+    (if (i32.lt_u (local.get $k) (local.get $k_end))
+      (then
+        (local.set $n2_minus_k (i32.sub (local.get $n2) (local.get $k)))
+        (local.set $addr_k (i32.shl (local.get $k) (i32.const 3)))
+        (local.set $addr_n2k (i32.shl (local.get $n2_minus_k) (i32.const 3)))
+
+        ;; Load single pair using 64-bit loads
+        (local.set $zk (v128.load64_zero (local.get $addr_k)))
+        (local.set $zn2k (v128.load64_zero (local.get $addr_n2k)))
+        (local.set $conj_zn2k (v128.xor (local.get $zn2k) (global.get $CONJ_MASK_F32)))
+
+        (local.set $sum (f32x4.add (local.get $zk) (local.get $conj_zn2k)))
+        (local.set $diff (f32x4.sub (local.get $zk) (local.get $conj_zn2k)))
+
+        (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
+        (local.set $wk (v128.load64_zero (local.get $tw_addr)))
+        (local.set $wk_rot
+          (f32x4.mul
+            (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $wk) (local.get $wk))
+            (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+        (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+                                      (local.get $wk_rot) (local.get $wk_rot)))
+        (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
+                                      (local.get $wk_rot) (local.get $wk_rot)))
+        (local.set $prod (f32x4.mul (local.get $diff) (local.get $wr)))
+        (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                           (local.get $diff) (local.get $diff)))
+        (local.set $wd (f32x4.add (local.get $prod)
+          (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+        (local.set $xk (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)))
+
+        ;; X[n2-k]
+        (local.set $conj_zk (v128.xor (local.get $zk) (global.get $CONJ_MASK_F32)))
+        (local.set $sum2 (f32x4.add (local.get $zn2k) (local.get $conj_zk)))
+        (local.set $diff2 (f32x4.sub (local.get $zn2k) (local.get $conj_zk)))
+
+        (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_n2k)))
+        (local.set $wn2k (v128.load64_zero (local.get $tw_addr)))
+        (local.set $wn2k_rot
+          (f32x4.mul
+            (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $wn2k) (local.get $wn2k))
+            (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+        (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+                                      (local.get $wn2k_rot) (local.get $wn2k_rot)))
+        (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
+                                      (local.get $wn2k_rot) (local.get $wn2k_rot)))
+        (local.set $prod (f32x4.mul (local.get $diff2) (local.get $wr)))
+        (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                           (local.get $diff2) (local.get $diff2)))
+        (local.set $wd2 (f32x4.add (local.get $prod)
+          (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+        (local.set $xn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
+
+        (v128.store64_lane 0 (local.get $addr_k) (local.get $xk))
+        (v128.store64_lane 0 (local.get $addr_n2k) (local.get $xn2k))
+      )
+    )
+
+    ;; Handle middle element when n2 is even and > 2
+    (if (i32.and (i32.eqz (i32.and (local.get $n2) (i32.const 1))) (i32.gt_u (local.get $n2) (i32.const 2)))
+      (then
+        (local.set $addr_k (i32.shl (local.get $k_end) (i32.const 3)))
+        (local.set $zk (v128.load64_zero (local.get $addr_k)))
+
+        (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
+        (local.set $wk (v128.load64_zero (local.get $tw_addr)))
+
+        ;; For middle element: sum = 2*zk_re, diff_im = 2*zk_im
+        ;; Extract re and im
+        (local.set $z0_re (f32x4.extract_lane 0 (local.get $zk)))
+        (local.set $z0_im (f32x4.extract_lane 1 (local.get $zk)))
+
+        (local.set $sum (f32x4.replace_lane 0 (v128.const f32x4 0 0 0 0)
+                          (f32.mul (f32.const 2.0) (local.get $z0_re))))
+        (local.set $diff (f32x4.replace_lane 1 (v128.const f32x4 0 0 0 0)
+                           (f32.mul (f32.const 2.0) (local.get $z0_im))))
+
+        (local.set $wk_rot
+          (f32x4.mul
+            (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $wk) (local.get $wk))
+            (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+        (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+                                      (local.get $wk_rot) (local.get $wk_rot)))
+        (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
+                                      (local.get $wk_rot) (local.get $wk_rot)))
+        (local.set $prod (f32x4.mul (local.get $diff) (local.get $wr)))
+        (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                           (local.get $diff) (local.get $diff)))
+        (local.set $wd (f32x4.add (local.get $prod)
+          (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+        (local.set $xk (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)))
+        (v128.store64_lane 0 (local.get $addr_k) (local.get $xk))
+      )
+    )
+  )
+
+
+  ;; ============================================================================
   ;; Internal FFT Entry Point
   ;; ============================================================================
 
@@ -756,7 +997,15 @@
     (call $fft (local.get $n2))
 
     ;; Step 2: Post-processing
+    ;; Use SIMD for N >= 128 (n2 >= 64, so we have enough pairs for efficient SIMD)
+    (if (i32.ge_u (local.get $n) (i32.const 128))
+      (then
+        (call $rfft_postprocess_simd (local.get $n2))
+        (return)
+      )
+    )
 
+    ;; Scalar post-processing for small N (N < 128)
     ;; DC and Nyquist
     (local.set $z0_re (f32.load (i32.const 0)))
     (local.set $z0_im (f32.load (i32.const 4)))
