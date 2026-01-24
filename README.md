@@ -355,6 +355,7 @@ wat-fft/
 ├── tests/                # Test suite
 ├── tools/                # Debug and analysis tools
 ├── benchmarks/           # Performance benchmarks
+├── playground/           # Interactive FFT playground (Vite)
 ├── dist/                 # Compiled WASM (generated)
 ├── build.js              # Build system
 └── package.json
@@ -410,6 +411,25 @@ npm run test:fft      # Run comprehensive FFT tests
 npm run test:rfft     # Run real FFT tests
 npm run test:permutation  # Test permutation algorithms
 ```
+
+## Playground
+
+An interactive browser-based playground is available for testing FFT performance with real-world tasks like spectrogram generation.
+
+```bash
+cd playground
+npm install
+npm run dev
+```
+
+Features:
+
+- **Multiple FFT implementations**: Compare performance of different wat-fft modules
+- **Audio sources**: Generate synthetic sine wave combinations using Web Audio API's OfflineAudioContext, or load your own audio files
+- **Spectrogram visualization**: Real-time spectrogram rendering with configurable FFT size, hop size, and color scales
+- **Performance metrics**: Track FFT execution time and throughput
+
+Add your own sample audio files to `playground/public/samples/`.
 
 ## Testing FFT Implementations
 

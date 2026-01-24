@@ -1,0 +1,11 @@
+# Built-in Sample Audio Files
+
+Place sample audio files here (e.g., .wav, .mp3, .ogg).
+
+These files will be available at /samples/ when running the playground.
+
+Example files to add:
+- speech.wav - Human speech sample
+- music.mp3 - Music clip
+- bird.ogg - Bird song
+- drums.wav - Percussion loop

@@ -1,0 +1,799 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wat-fft Playground</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: #1a1a2e;
+        color: #eee;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      .layout {
+        display: flex;
+        height: 100vh;
+      }
+
+      .sidebar {
+        width: 340px;
+        min-width: 200px;
+        max-width: 600px;
+        padding: 15px;
+        overflow-y: auto;
+        border-right: none;
+        background: #16213e;
+        flex-shrink: 0;
+      }
+
+      .resize-handle {
+        width: 6px;
+        background: #333;
+        cursor: col-resize;
+        flex-shrink: 0;
+        transition: background 0.15s;
+        position: relative;
+      }
+
+      .resize-handle:hover,
+      .resize-handle.dragging {
+        background: #4ade80;
+      }
+
+      .resize-handle::after {
+        content: "";
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 2px;
+        height: 40px;
+        background: #555;
+        border-radius: 1px;
+      }
+
+      .resize-handle:hover::after,
+      .resize-handle.dragging::after {
+        background: #1a1a2e;
+      }
+
+      .main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        padding: 20px;
+        overflow: hidden;
+      }
+
+      h1 {
+        color: #4ade80;
+        margin: 0 0 5px 0;
+        font-size: 1.3rem;
+      }
+
+      h2 {
+        color: #60a5fa;
+        margin: 18px 0 8px 0;
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      h2:first-of-type {
+        margin-top: 10px;
+      }
+
+      .subtitle {
+        color: #888;
+        margin: 0 0 10px 0;
+        font-size: 0.8rem;
+      }
+
+      .controls {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .control-row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .control-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        flex: 1;
+      }
+
+      label {
+        font-size: 10px;
+        color: #888;
+        text-transform: uppercase;
+      }
+
+      select,
+      input[type="file"] {
+        padding: 6px 8px;
+        border: 1px solid #333;
+        border-radius: 4px;
+        background: #0f0f23;
+        color: #eee;
+        font-size: 12px;
+        width: 100%;
+      }
+
+      select:focus,
+      input:focus {
+        outline: none;
+        border-color: #4ade80;
+      }
+
+      /* Range slider styling */
+      input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 6px;
+        border-radius: 3px;
+        background: #0f0f23;
+        outline: none;
+        cursor: pointer;
+      }
+
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #4ade80;
+        cursor: pointer;
+        transition: background 0.15s;
+      }
+
+      input[type="range"]::-webkit-slider-thumb:hover {
+        background: #22c55e;
+      }
+
+      input[type="range"]::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        background: #4ade80;
+        cursor: pointer;
+        border: none;
+      }
+
+      .slider-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .slider-row label {
+        min-width: 70px;
+        font-size: 11px;
+      }
+
+      .slider-row input[type="range"] {
+        flex: 1;
+      }
+
+      .slider-value {
+        min-width: 65px;
+        text-align: right;
+        font-size: 12px;
+        color: #4ade80;
+        font-weight: bold;
+        font-family: monospace;
+      }
+
+      button {
+        padding: 8px 14px;
+        border: none;
+        border-radius: 4px;
+        background: #4ade80;
+        color: #1a1a2e;
+        font-weight: bold;
+        cursor: pointer;
+        transition: background 0.2s;
+        font-size: 12px;
+      }
+
+      button:hover {
+        background: #22c55e;
+      }
+
+      button:disabled {
+        background: #333;
+        color: #666;
+        cursor: not-allowed;
+      }
+
+      button.secondary {
+        background: #60a5fa;
+      }
+
+      button.secondary:hover {
+        background: #3b82f6;
+      }
+
+      button.small {
+        padding: 4px 8px;
+        font-size: 10px;
+      }
+
+      button.danger {
+        background: #f87171;
+      }
+
+      button.danger:hover {
+        background: #ef4444;
+      }
+
+      .canvas-container {
+        flex: 1;
+        background: #0f0f23;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: hidden;
+        min-height: 0;
+      }
+
+      canvas {
+        max-width: 100%;
+        max-height: 100%;
+        display: block;
+        border-radius: 4px;
+        image-rendering: pixelated;
+      }
+
+      .current-impl {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 15px;
+        background: #16213e;
+        border-radius: 6px;
+        margin-top: 15px;
+      }
+
+      .impl-label {
+        font-size: 11px;
+        color: #888;
+        text-transform: uppercase;
+      }
+
+      .impl-name {
+        font-size: 14px;
+        font-weight: bold;
+        color: #4ade80;
+      }
+
+      .impl-name.alt {
+        color: #f97316;
+      }
+
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 10px;
+        margin-top: 10px;
+        flex-shrink: 0;
+      }
+
+      .stat-card {
+        background: #16213e;
+        padding: 10px;
+        border-radius: 6px;
+        text-align: center;
+      }
+
+      .stat-card.highlight {
+        background: #1e3a5f;
+        border: 1px solid #4ade80;
+      }
+
+      .stat-card.highlight .stat-value {
+        font-size: 1.3rem;
+      }
+
+      .stat-value {
+        font-size: 1.1rem;
+        font-weight: bold;
+        color: #4ade80;
+      }
+
+      .stat-label {
+        font-size: 9px;
+        color: #888;
+        text-transform: uppercase;
+        margin-top: 2px;
+      }
+
+      .sine-components {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .sine-component {
+        padding: 10px;
+        background: #0f0f23;
+        border-radius: 4px;
+        border-left: 3px solid #4ade80;
+      }
+
+      .sine-component .slider-row {
+        margin-bottom: 4px;
+      }
+
+      .sine-component .slider-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .sine-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+
+      .sine-header span {
+        font-size: 11px;
+        color: #60a5fa;
+        text-transform: uppercase;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .fft-selector {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .fft-option {
+        padding: 6px 10px;
+        border: 2px solid #333;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .fft-option:hover {
+        border-color: #4ade80;
+      }
+
+      .fft-option.selected {
+        border-color: #4ade80;
+        background: rgba(74, 222, 128, 0.1);
+      }
+
+      .fft-option .name {
+        font-weight: bold;
+        font-size: 12px;
+      }
+
+      .fft-option .desc {
+        font-size: 10px;
+        color: #888;
+      }
+
+      .fft-option.alt {
+        border-color: #4a4a4a;
+      }
+
+      .fft-option.alt:hover {
+        border-color: #f97316;
+      }
+
+      .fft-option.alt.selected {
+        border-color: #f97316;
+        background: rgba(249, 115, 22, 0.1);
+      }
+
+      .fft-group-label {
+        font-size: 9px;
+        text-transform: uppercase;
+        color: #4ade80;
+        margin: 8px 0 4px 0;
+        letter-spacing: 0.5px;
+      }
+
+      .fft-group-label:first-child {
+        margin-top: 0;
+      }
+
+      .fft-group-label.alt {
+        color: #f97316;
+      }
+
+      .add-sine-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .add-sine-row button {
+        flex: 1;
+      }
+
+      .processing-indicator {
+        position: fixed;
+        top: 10px;
+        right: 10px;
+        padding: 8px 16px;
+        background: rgba(74, 222, 128, 0.9);
+        color: #1a1a2e;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: bold;
+        opacity: 0;
+        transition: opacity 0.15s;
+        pointer-events: none;
+      }
+
+      .processing-indicator.visible {
+        opacity: 1;
+      }
+
+      .color-row {
+        display: flex;
+        gap: 6px;
+      }
+
+      .color-option {
+        flex: 1;
+        padding: 6px;
+        text-align: center;
+        border: 2px solid #333;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 10px;
+        text-transform: uppercase;
+        transition: all 0.15s;
+      }
+
+      .color-option:hover {
+        border-color: #4ade80;
+      }
+
+      .color-option.selected {
+        border-color: #4ade80;
+        background: rgba(74, 222, 128, 0.1);
+      }
+
+      .source-toggle {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+
+      .source-option {
+        flex: 1;
+        padding: 8px;
+        text-align: center;
+        border: 2px solid #333;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        transition: all 0.15s;
+      }
+
+      .source-option:hover {
+        border-color: #60a5fa;
+      }
+
+      .source-option.selected {
+        border-color: #60a5fa;
+        background: rgba(96, 165, 250, 0.1);
+      }
+
+      /* Tabs */
+      .tabs {
+        display: flex;
+        gap: 2px;
+        margin-bottom: 15px;
+        background: #0f0f23;
+        border-radius: 6px;
+        padding: 3px;
+      }
+
+      .tab {
+        flex: 1;
+        padding: 8px 12px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: bold;
+        color: #888;
+        background: transparent;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+      }
+
+      .tab:hover {
+        color: #ccc;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .tab.active {
+        color: #4ade80;
+        background: #16213e;
+      }
+
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: block;
+      }
+
+      .file-hint {
+        font-size: 11px;
+        color: #666;
+        margin: 8px 0 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="processing-indicator" id="processing">Processing...</div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <h1>wat-fft Playground</h1>
+        <p class="subtitle">Real-time FFT performance comparison</p>
+
+        <div class="tabs">
+          <button class="tab active" data-tab="fft">FFT</button>
+          <button class="tab" data-tab="audio">Audio</button>
+        </div>
+
+        <!-- FFT Tab -->
+        <div class="tab-content active" id="tab-fft">
+          <h2>Implementation</h2>
+          <div class="fft-selector" id="fft-selector">
+            <div class="fft-group-label">wat-fft (this project)</div>
+            <div class="fft-option selected" data-fft="combined">
+              <span class="name">Combined</span>
+              <span class="desc">f64 auto</span>
+            </div>
+            <div class="fft-option" data-fft="combined_stockham">
+              <span class="name">Stockham</span>
+              <span class="desc">f64 SIMD</span>
+            </div>
+            <div class="fft-option" data-fft="f32_dual">
+              <span class="name">f32 Dual</span>
+              <span class="desc">fastest</span>
+            </div>
+            <div class="fft-option" data-fft="real_combined">
+              <span class="name">Real FFT</span>
+              <span class="desc">f64 real</span>
+            </div>
+            <div class="fft-option" data-fft="real_f32_dual">
+              <span class="name">Real f32</span>
+              <span class="desc">fast real</span>
+            </div>
+
+            <div class="fft-group-label alt">Alternatives</div>
+            <div class="fft-option alt" data-fft="fftjs">
+              <span class="name">fft.js</span>
+              <span class="desc">JS radix-4</span>
+            </div>
+            <div class="fft-option alt" data-fft="fftjs_real">
+              <span class="name">fft.js Real</span>
+              <span class="desc">JS real</span>
+            </div>
+            <div class="fft-option alt" data-fft="fft_js">
+              <span class="name">fft-js</span>
+              <span class="desc">JS Cooley-Tukey</span>
+            </div>
+            <div class="fft-option alt" data-fft="fftw">
+              <span class="name">FFTW</span>
+              <span class="desc">WASM port</span>
+            </div>
+            <div class="fft-option alt" data-fft="fftw_real">
+              <span class="name">FFTW Real</span>
+              <span class="desc">WASM real</span>
+            </div>
+            <div class="fft-option alt" data-fft="kissfft">
+              <span class="name">KissFFT</span>
+              <span class="desc">WASM port</span>
+            </div>
+          </div>
+
+          <h2>Spectrogram</h2>
+          <div class="controls">
+            <div class="slider-row">
+              <label>FFT Size</label>
+              <input type="range" id="fft-size" min="8" max="12" value="10" step="1" />
+              <span class="slider-value" id="fft-size-value">1024</span>
+            </div>
+            <div class="slider-row">
+              <label>Hop Size</label>
+              <input type="range" id="hop-size" min="6" max="10" value="8" step="1" />
+              <span class="slider-value" id="hop-size-value">256</span>
+            </div>
+            <div class="color-row" id="color-selector">
+              <div class="color-option selected" data-color="viridis">Viridis</div>
+              <div class="color-option" data-color="magma">Magma</div>
+              <div class="color-option" data-color="grayscale">Gray</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Audio Tab -->
+        <div class="tab-content" id="tab-audio">
+          <h2>Source Type</h2>
+          <div class="source-toggle" id="source-toggle">
+            <div class="source-option selected" data-source="synthetic">Synthetic</div>
+            <div class="source-option" data-source="file">Audio File</div>
+          </div>
+
+          <div id="synthetic-controls">
+            <h2>Generation</h2>
+            <div class="controls">
+              <div class="slider-row">
+                <label>Duration</label>
+                <input type="range" id="duration" min="0.5" max="5" value="2" step="0.25" />
+                <span class="slider-value" id="duration-value">2.0s</span>
+              </div>
+              <div class="slider-row">
+                <label>Sample Rate</label>
+                <input type="range" id="sample-rate" min="0" max="2" value="1" step="1" />
+                <span class="slider-value" id="sample-rate-value">44.1k</span>
+              </div>
+            </div>
+
+            <h2>Sine Waves</h2>
+            <div class="sine-components" id="sine-components"></div>
+            <div class="add-sine-row">
+              <button id="add-sine" class="secondary small">+ Add Wave</button>
+              <button id="add-harmonic" class="secondary small">+ Harmonic</button>
+            </div>
+          </div>
+
+          <div id="file-controls" class="hidden">
+            <h2>File</h2>
+            <div class="controls">
+              <input type="file" id="audio-file" accept="audio/*" />
+              <p class="file-hint">Supports WAV, MP3, OGG, FLAC</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="resize-handle" id="resize-handle"></div>
+
+      <main class="main">
+        <div class="canvas-container">
+          <canvas id="spectrogram" width="1024" height="512"></canvas>
+        </div>
+
+        <div class="current-impl" id="current-impl">
+          <span class="impl-label">Using:</span>
+          <span class="impl-name" id="impl-name">wat-fft Combined</span>
+        </div>
+
+        <div class="stats" id="stats">
+          <div class="stat-card">
+            <div class="stat-value" id="stat-fft-time">-</div>
+            <div class="stat-label">FFT (ms)</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-total-time">-</div>
+            <div class="stat-label">Total (ms)</div>
+          </div>
+          <div class="stat-card highlight">
+            <div class="stat-value" id="stat-ffts-per-sec">-</div>
+            <div class="stat-label">FFTs/sec</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" id="stat-frames">-</div>
+            <div class="stat-label">Frames</div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+    <script>
+      // Tab switching
+      (function () {
+        const tabs = document.querySelectorAll(".tab");
+        const tabContents = document.querySelectorAll(".tab-content");
+
+        tabs.forEach((tab) => {
+          tab.addEventListener("click", () => {
+            const targetId = "tab-" + tab.dataset.tab;
+
+            tabs.forEach((t) => t.classList.remove("active"));
+            tabContents.forEach((c) => c.classList.remove("active"));
+
+            tab.classList.add("active");
+            document.getElementById(targetId).classList.add("active");
+          });
+        });
+      })();
+
+      // Sidebar resize handling
+      (function () {
+        const sidebar = document.querySelector(".sidebar");
+        const handle = document.getElementById("resize-handle");
+        let isDragging = false;
+        let startX, startWidth;
+
+        handle.addEventListener("mousedown", (e) => {
+          isDragging = true;
+          startX = e.clientX;
+          startWidth = sidebar.offsetWidth;
+          handle.classList.add("dragging");
+          document.body.style.cursor = "col-resize";
+          document.body.style.userSelect = "none";
+          e.preventDefault();
+        });
+
+        document.addEventListener("mousemove", (e) => {
+          if (!isDragging) return;
+          const delta = e.clientX - startX;
+          const newWidth = Math.min(600, Math.max(200, startWidth + delta));
+          sidebar.style.width = newWidth + "px";
+        });
+
+        document.addEventListener("mouseup", () => {
+          if (isDragging) {
+            isDragging = false;
+            handle.classList.remove("dragging");
+            document.body.style.cursor = "";
+            document.body.style.userSelect = "";
+          }
+        });
+
+        // Touch support
+        handle.addEventListener("touchstart", (e) => {
+          isDragging = true;
+          startX = e.touches[0].clientX;
+          startWidth = sidebar.offsetWidth;
+          handle.classList.add("dragging");
+          e.preventDefault();
+        });
+
+        document.addEventListener("touchmove", (e) => {
+          if (!isDragging) return;
+          const delta = e.touches[0].clientX - startX;
+          const newWidth = Math.min(600, Math.max(200, startWidth + delta));
+          sidebar.style.width = newWidth + "px";
+        });
+
+        document.addEventListener("touchend", () => {
+          if (isDragging) {
+            isDragging = false;
+            handle.classList.remove("dragging");
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
