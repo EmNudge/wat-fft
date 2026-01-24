@@ -86,6 +86,26 @@ xychart-beta
 
 Note: The real FFT achieves ~2x speedup over complex FFT by computing only N/2 complex FFT internally. For small sizes (N≤32), fused rfft codelets with hardcoded twiddles provide additional speedups. For N=64-2048, hierarchical FFT composition (building fft_32 from fft_16, fft_64 from fft_32, fft_128 from fft_64, fft_256 from fft_128, fft_512 from fft_256, fft_1024 from fft_512) improves performance.
 
+### f32 Dual-Complex FFT (NEW)
+
+High-performance single-precision FFT using full f32x4 SIMD throughput (2 complex numbers per v128):
+
+| Size   | f32 Dual-Complex    | f32 Original    | fft.js          | vs Original | vs fft.js   |
+| ------ | ------------------- | --------------- | --------------- | ----------- | ----------- |
+| N=64   | **4,600,000 ops/s** | 3,060,000 ops/s | 2,810,000 ops/s | **+50.6%**  | **+64.1%**  |
+| N=256  | **1,180,000 ops/s** | 674,000 ops/s   | 560,000 ops/s   | **+74.7%**  | **+110.0%** |
+| N=1024 | **273,500 ops/s**   | 142,400 ops/s   | 112,800 ops/s   | **+92.1%**  | **+142.5%** |
+| N=2048 | **124,800 ops/s**   | 63,700 ops/s    | 47,200 ops/s    | **+95.9%**  | **+164.6%** |
+| N=4096 | **62,000 ops/s**    | 30,300 ops/s    | 23,500 ops/s    | **+104.8%** | **+164.1%** |
+
+The f32 dual-complex implementation achieves up to **+105% speedup** over the original f32 implementation by:
+
+- Processing 2 complex numbers per v128 (vs 1 in original f32)
+- Pre-replicated twiddles stored as `[w.re, w.im, w.re, w.im]` eliminating runtime shuffles
+- Inline dual-complex SIMD multiply with zero function call overhead
+
+Use `fft_stockham_f32_dual.wasm` when single-precision (f32) is sufficient for your application.
+
 ## Quick Start
 
 ```bash
@@ -143,15 +163,17 @@ console.log("DC component:", data[0], data[1]);
 
 Four FFT implementations are provided:
 
-| Module                   | Algorithm                 | Best For                 | Speed           |
-| ------------------------ | ------------------------- | ------------------------ | --------------- |
-| `fft_combined.wasm`      | Radix-4 + Radix-2 auto    | **All power-of-2 sizes** | **Recommended** |
-| `fft_real_combined.wasm` | Real FFT + auto dispatch  | **Real signals (any)**   | **Recommended** |
-| `fft_radix4.wasm`        | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4    | Fastest cfft    |
-| `fft_real_radix4.wasm`   | Real FFT + Radix-4        | Real signals, pow-of-4   | Fastest rfft    |
-| `combined_stockham.wasm` | Radix-2 Stockham + SIMD   | All power-of-2 sizes     | Fast            |
-| `combined_real.wasm`     | Real FFT (r2c) + Stockham | Real-valued signals      | Fast            |
-| `combined_fast.wasm`     | Radix-2 (no SIMD)         | No SIMD support          | Medium          |
+| Module                       | Algorithm                 | Best For                 | Speed           |
+| ---------------------------- | ------------------------- | ------------------------ | --------------- |
+| `fft_combined.wasm`          | Radix-4 + Radix-2 auto    | **All power-of-2 sizes** | **Recommended** |
+| `fft_real_combined.wasm`     | Real FFT + auto dispatch  | **Real signals (any)**   | **Recommended** |
+| `fft_stockham_f32_dual.wasm` | f32 Dual-Complex SIMD     | **f32 precision (fast)** | **Fastest f32** |
+| `fft_radix4.wasm`            | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4    | Fastest f64     |
+| `fft_real_radix4.wasm`       | Real FFT + Radix-4        | Real signals, pow-of-4   | Fastest rfft    |
+| `combined_stockham.wasm`     | Radix-2 Stockham + SIMD   | All power-of-2 sizes     | Fast            |
+| `combined_stockham_f32.wasm` | f32 Stockham + SIMD       | f32 precision            | Fast f32        |
+| `combined_real.wasm`         | Real FFT (r2c) + Stockham | Real-valued signals      | Fast            |
+| `combined_fast.wasm`         | Radix-2 (no SIMD)         | No SIMD support          | Medium          |
 
 ### Numerical Accuracy
 
@@ -231,6 +253,33 @@ fft.precompute_rfft_twiddles(N);
 fft.rfft(N); // Uses radix-4 since N/2=512 is NOT power-of-4, uses radix-2
 ```
 
+### f32 Dual-Complex (Fastest f32)
+
+High-performance single-precision FFT using full f32x4 SIMD throughput:
+
+```javascript
+// f32 Dual-Complex FFT usage
+const wasmBuffer = fs.readFileSync("dist/fft_stockham_f32_dual.wasm");
+const wasmModule = await WebAssembly.compile(wasmBuffer);
+const instance = await WebAssembly.instantiate(wasmModule);
+const fft = instance.exports;
+
+const N = 1024; // Any power of 2
+const data = new Float32Array(fft.memory.buffer, 0, N * 2);
+for (let i = 0; i < N; i++) {
+  data[i * 2] = Math.sin((2 * Math.PI * i) / N); // real
+  data[i * 2 + 1] = 0; // imaginary
+}
+
+fft.precompute_twiddles(N);
+fft.fft(N);
+
+// Results are in-place in data[] (f32)
+console.log("DC component:", data[0], data[1]);
+```
+
+The f32 dual-complex variant is **up to 105% faster** than the original f32 implementation by processing 2 complex numbers per SIMD operation. Use this when single-precision accuracy is sufficient.
+
 ### Stockham Radix-2 (All Power-of-2 Sizes)
 
 Radix-2 Stockham FFT with SIMD acceleration - works for any power-of-2:
@@ -290,9 +339,11 @@ wat-fft/
 ├── modules/              # WAT source files
 │   ├── fft_combined.wat  # Combined radix-2/4 FFT (recommended)
 │   ├── fft_real_combined.wat # Combined real FFT (recommended)
-│   ├── fft_radix4.wat    # Radix-4 Stockham FFT with SIMD (fastest)
+│   ├── fft_stockham_f32_dual.wat # f32 dual-complex (fastest f32)
+│   ├── fft_radix4.wat    # Radix-4 Stockham FFT with SIMD (fastest f64)
 │   ├── fft_real_radix4.wat # Real FFT using Radix-4
 │   ├── fft_stockham.wat  # Stockham Radix-2 FFT with SIMD
+│   ├── fft_stockham_f32.wat # f32 Stockham FFT
 │   ├── fft_real.wat      # Real FFT (r2c) using Stockham
 │   ├── fft_fast.wat      # Radix-2 FFT (non-SIMD fallback)
 │   ├── reverse_bits.wat  # Bit reversal utility

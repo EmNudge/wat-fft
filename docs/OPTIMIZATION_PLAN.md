@@ -850,6 +850,209 @@ The original implementation used scalar f64 operations. Each pair required 8 f64
 
 ---
 
+## Future Optimization Opportunities (Research Summary)
+
+The remaining performance gap at large sizes (N ≥ 512) is primarily due to **precision difference**: fftw-js uses f32 (4 values per SIMD) while we use f64 (2 values per SIMD). This section documents potential optimizations researched but not yet implemented.
+
+### Priority I: f32 SIMD with Dual-Complex Processing ~~(Expected: +50-80%)~~ **IMPLEMENTED - UP TO +105%**
+
+**Status**: ✅ Implemented and validated
+
+**The Problem**: Our biggest competitive disadvantage:
+
+- wat-fft: f64x2 = 2 doubles per v128 = 1 complex number per SIMD op
+- fftw-js: f32x4 = 4 floats per v128 = 2 complex numbers per SIMD op
+
+This 2x SIMD throughput difference, combined with 50% memory bandwidth reduction (8 bytes vs 16 bytes per complex), explains most of the 40% gap at N=4096.
+
+**Solution Implemented**: `modules/fft_stockham_f32_dual.wat`
+
+```wat
+;; Process 2 complex f32 numbers per v128
+;; Layout: [re0, im0, re1, im1] as f32x4
+;; Pre-replicated twiddles: [w.re, w.im, w.re, w.im]
+```
+
+**Key Implementation Details**:
+
+1. **Pre-replicated twiddles**: Stored as `[w.re, w.im, w.re, w.im]` (16 bytes each) at precompute time
+2. **Separate code paths**: r<4 uses single-element processing, r>=4 uses dual-complex
+3. **Correct Stockham addressing**: i1 = i0 + r_bytes (not n2_bytes) - this was the critical bug fix
+4. **Inline dual-complex multiply**: No function call overhead
+
+**Benchmark Results** (vs original f32 and fft.js):
+
+| Size   | vs Original f32 | vs fft.js |
+| ------ | --------------- | --------- |
+| N=64   | +50.6%          | +64.1%    |
+| N=256  | +74.7%          | +110.0%   |
+| N=1024 | +92.1%          | +142.5%   |
+| N=2048 | +95.9%          | +164.6%   |
+| N=4096 | +104.8%         | +164.1%   |
+
+**Why Experiment 1 Failed**: Our initial f32 dual-complex attempt was 15-20% _slower_ because:
+
+1. Branch overhead: `if (r >= 2)` check in every iteration
+2. Twiddle replication at runtime (extra shuffle per group)
+3. Mixed r=1 and r>1 code paths hurt JIT optimization
+4. **CRITICAL BUG**: Wrong butterfly partner offset (used n2_bytes instead of r_bytes)
+
+**Files created**:
+
+- `modules/fft_stockham_f32_dual.wat` - Main dual-complex FFT implementation
+- `tests/fft_f32_dual.test.js` - Correctness tests
+- `benchmarks/fft_f32_dual.bench.js` - Performance benchmarks
+
+### Priority J: Relaxed SIMD FMA (Expected: +5-15%)
+
+**Status**: 🔬 Research complete, not implemented
+
+**The Problem**: Complex multiply currently requires 4 multiplies + 2 adds:
+
+```wat
+;; Current: a*b = (ar*br - ai*bi, ar*bi + ai*br)
+;; 4x f64.mul + 2x f64.add/sub
+```
+
+**Solution**: Use WebAssembly relaxed-simd FMA (fused multiply-add):
+
+```wat
+;; With FMA: 2x mul + 2x fma
+(f64x2.relaxed_madd ...)  ;; a*b + c in one instruction
+```
+
+**Benefits**:
+
+- ~25% fewer instructions in butterfly
+- Better numerical precision (intermediate rounding eliminated)
+- Single-cycle FMA on modern CPUs
+
+**Browser Support** (as of 2024):
+
+- Chrome 120+ ✓
+- Firefox 122+ ✓
+- Safari 17.4+ ✓
+
+**Implementation complexity**: Low
+
+- Add feature detection for relaxed-simd
+- Create FMA variant of `$simd_cmul`
+- Fall back to non-FMA for older runtimes
+
+### Priority K: Split-Radix Algorithm (Expected: +6-10%)
+
+**Status**: 🔬 Research complete, not implemented
+
+**Description**: Split-radix is a hybrid radix-2/radix-4 algorithm that achieves the lowest proven arithmetic count for power-of-2 FFTs.
+
+**How it works**:
+
+- DFT(N) = DFT(N/2) of even elements + two DFT(N/4) of interleaved odd elements
+- Radix-4 parts eliminate trivial twiddle multiplications (W^0 and W^{N/4})
+- Modified split-radix (Johnson & Frigo, 2007) achieves ~6% fewer flops than standard
+
+**Trade-offs**:
+
+- More complex recursion pattern
+- Multiple butterfly types
+- We already have radix-4 SIMD, so gains are incremental
+- At large sizes, memory bandwidth (not arithmetic) is the bottleneck
+
+**Implementation complexity**: High
+**Recommendation**: Lower priority than f32 SIMD. Consider only after f32 is implemented.
+
+### Priority L: Conjugate-Pair Split-Radix (Expected: +5-15% for rfft)
+
+**Status**: 🔬 Research complete, not implemented
+
+**Description**: Groups twiddle factors W^k and W^{N-k} (complex conjugates) together, reducing memory bandwidth for twiddle loads by ~50%.
+
+**How it works**:
+
+- For real input, output has Hermitian symmetry: X[k] = conj(X[N-k])
+- Process pairs (k, N-k) together, loading one twiddle for both
+- A depth-first iterative variant (IEEE 2021) is cache-friendly and table-free
+
+**Trade-offs**:
+
+- We already have SIMD post-processing optimization
+- Hierarchical codelets already use hardcoded twiddles up to N=1024
+- Main benefit is for N > 1024 where twiddle loads dominate
+
+**Implementation complexity**: Medium-High
+
+### Priority M: Better Register Scheduling for Codelets (Expected: +10-20%)
+
+**Status**: 🔬 Research complete, not implemented
+
+**The Problem**: Experiment 6 (codelet generator) produced correct but slow code because:
+
+- N=32 codelet: 320+ locals (32 inputs + 288 temps)
+- N=64 codelet: 768+ locals → register spills to stack
+
+FFTW's genfft solves this with optimal scheduling that minimizes simultaneous live values.
+
+**Solution**: Improve codelet generator with Sethi-Ullman style scheduling:
+
+1. Build dependency DAG of all operations
+2. Number nodes by minimum required registers
+3. Execute in order that keeps live values ≤ 16
+
+**Implementation complexity**: High
+**Recommendation**: High value for extending codelets beyond N=16, but requires significant codelet generator work.
+
+### Priority N: Memory Alignment Hints (Expected: +0-5%)
+
+**Status**: 🔬 Research complete, low priority
+
+**Description**: Modern CPUs handle unaligned SIMD access well, but aligned hints may help JIT optimization.
+
+**Implementation**:
+
+```wat
+;; Add alignment hint (currently omitted)
+(v128.load align=16 (local.get $addr))
+```
+
+**Reality check**: Intel benchmarks show "no meaningful performance difference between aligned and unaligned instructions" for data access.
+
+**Implementation complexity**: Low
+**Recommendation**: Lowest priority, minimal expected gain.
+
+### Not Applicable to Our Use Case
+
+The following optimizations were researched but found **not applicable**:
+
+| Optimization              | Why Not Applicable                                |
+| ------------------------- | ------------------------------------------------- |
+| **Bailey's 4-Step FFT**   | Only beneficial for N ≥ 1M (our max is N=4096)    |
+| **Cache blocking/tiling** | N=4096 working set (64KB) fits in L2 cache        |
+| **Depth-first recursion** | Already tried (Experiment 10), overhead > benefit |
+| **Runtime planning**      | fftw-js uses fixed plans, not dynamic selection   |
+
+### Optimization Priority Matrix
+
+| Priority | Optimization          | Expected Gain | Effort | Recommendation                     |
+| -------- | --------------------- | ------------- | ------ | ---------------------------------- |
+| **I**    | f32 SIMD dual-complex | **+50-80%**   | High   | **DO FIRST** - Primary opportunity |
+| **J**    | Relaxed SIMD FMA      | +5-15%        | Low    | Do second - Easy win               |
+| **M**    | Register scheduling   | +10-20%       | High   | Do if extending codelets           |
+| **K**    | Split-radix           | +6-10%        | High   | Lower priority                     |
+| **L**    | Conjugate-pair        | +5-15%        | Medium | Consider for rfft                  |
+| **N**    | Alignment hints       | +0-5%         | Low    | Lowest priority                    |
+
+### Key Insight
+
+The **40% gap at N=4096** is explained by:
+
+1. **Precision difference** (~2x): f32x4 vs f64x2 SIMD throughput
+2. **Memory bandwidth** (~50%): 8 bytes vs 16 bytes per complex number
+3. **FFTW's genfft codelets**: Better register scheduling, more CSE
+
+If matching fftw-js performance is the goal, **Priority I (f32 SIMD)** is the critical path. All other optimizations are secondary.
+
+---
+
 ## Phase 1: Testing & Benchmarking Infrastructure
 
 ### 1.1 Correctness Test Suite

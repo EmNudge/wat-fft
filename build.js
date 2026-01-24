@@ -438,6 +438,7 @@ function buildSelfContainedModule(name, outputName = null) {
 buildSelfContainedModule("fft_radix4");
 buildSelfContainedModule("fft_real_radix4");
 buildSelfContainedModule("fft_recursive");
+buildSelfContainedModule("fft_stockham_f32_dual");
 
 // Build Combined FFT modules (radix-2 + radix-4 with auto-dispatch)
 console.log("\nBuilding Combined FFT modules (radix-2 + radix-4)...");
