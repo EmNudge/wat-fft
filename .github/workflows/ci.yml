@@ -86,3 +86,115 @@ jobs:
 
       - name: Run benchmarks (smoke test)
         run: timeout 30s npm run bench || true
+
+  playground:
+    name: Playground Build
+    needs: wasm-build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install wasm-tools
+        env:
+          WASM_TOOLS_VERSION: "1.244.0"
+        run: |
+          curl -LO "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          tar xzf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          sudo mv "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux/wasm-tools" /usr/local/bin/
+          rm -rf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux" "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+
+      - name: Install wac-cli
+        env:
+          WAC_VERSION: "0.8.1"
+        run: |
+          curl -L "https://github.com/bytecodealliance/wac/releases/download/v${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl" -o wac
+          chmod +x wac
+          sudo mv wac /usr/local/bin/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build WASM modules
+        run: npm run build
+
+      - name: Setup playground
+        working-directory: playground
+        run: |
+          npm install
+          npm run setup
+
+      - name: Build playground
+        working-directory: playground
+        run: npm run build
+
+      - name: Upload playground build
+        uses: actions/upload-artifact@v4
+        with:
+          name: playground-dist
+          path: playground/dist/
+
+  deploy-pages:
+    name: Deploy to Cloudflare Pages
+    needs: playground
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+      pull-requests: write
+
+    steps:
+      - name: Download playground build
+        uses: actions/download-artifact@v4
+        with:
+          name: playground-dist
+          path: dist
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=wat-fft --branch=${{ github.head_ref || github.ref_name }}
+
+      - name: Comment preview URL on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const url = '${{ steps.deploy.outputs.deployment-url }}';
+            const sha = context.payload.pull_request.head.sha.substring(0, 7);
+            const body = `## Playground Preview\n\nDeployed to Cloudflare Pages:\n${url} (\`${sha}\`)`;
+
+            // Find existing bot comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const botComment = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('Playground Preview')
+            );
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
