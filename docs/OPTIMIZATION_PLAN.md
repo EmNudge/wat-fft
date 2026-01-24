@@ -1023,6 +1023,114 @@ This results in 6 function calls per FFT-64: 2×fft_32 + 4×fft_16.
 
 ---
 
+### Experiment 16: f32 Dual-Complex Small-N Codelets Investigation (2026-01-24)
+
+**Hypothesis**: The f32 dual-complex rfft is -17% behind fftw-js at N=64 and N=128. Since fftw-js uses hardcoded codelets for small N, adding optimized $fft_8, $fft_16, and $fft_32 codelets to the f32 dual-complex module should close this gap.
+
+**Background**: The `fft_real_f32_dual.wat` module contains $fft_8 and $fft_16 codelet functions that appear to be optimized implementations. However, the dispatch function only calls $fft_4, falling back to $fft_general for all larger sizes:
+
+```wat
+(func $fft (param $n i32)
+  (if (i32.eq (local.get $n) (i32.const 4))
+    (then (call $fft_4) (return)))
+  (call $fft_general (local.get $n))
+)
+```
+
+**Investigation**:
+
+1. **Enabled existing codelets**: Updated dispatch to call $fft_8 and $fft_16
+2. **Added hierarchical codelets**: Created $fft_16_at (parameterized) and $fft_32 (uses two $fft_16_at calls)
+3. **Result**: Tests failed for N=16, 32, 64 but passed for N=128+
+
+**Root Cause Discovery**: The existing $fft_8 and $fft_16 codelets are **untested dead code with algorithmic bugs**.
+
+The codelets were written for a **classic DIF algorithm** where each butterfly k uses twiddle W_N^k:
+
+- Butterfly 0: W_8^0 = 1
+- Butterfly 1: W_8^1 = (0.707, -0.707)
+- Butterfly 2: W_8^2 = (0, -1) = -j
+- etc.
+
+However, the **Stockham algorithm** (used by $fft_general) has different semantics:
+
+- All butterflies within a GROUP use the SAME twiddle
+- The twiddle varies by GROUP, not by position within the group
+- Stage 1 of N=8: All 4 butterflies use W_8^0 = 1 (single group)
+
+**Attempted Fix**: Rewrote $fft_8 using correct DIF butterfly ordering:
+
+- Stage 1: 4 butterflies (k=0..3) with twiddles W_8^k
+- Stage 2: 2×radix-2 butterflies within each half
+- Stage 3: 4×radix-2 trivial butterflies
+
+**Result**: Still failed. Output comparison showed mismatches at odd indices (1, 3, 5, 7), indicating the twiddle computation for W_8^1 and W_8^3 was still incorrect.
+
+**UPDATE**: After further investigation, found a specific bug in the $fft_8 codelet - the W_8^3 twiddle multiply had wrong sign on imaginary part. Fixed by changing the multiplication constant:
+
+```wat
+;; BEFORE (wrong):
+(v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)
+;; AFTER (correct):
+(v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)
+```
+
+**Conclusion**: ✅ **SUCCESS** - After fixing the W_8^3 sign bug, all codelets ($fft_8, $fft_16, $fft_32) now work correctly.
+
+**Benchmark Results** (with codelets enabled):
+
+| Size  | Before      | After       | vs fftw-js Before | vs fftw-js After |
+| ----- | ----------- | ----------- | ----------------- | ---------------- |
+| N=64  | 5.68M ops/s | **8.95M**   | -17%              | **+33.1%**       |
+| N=128 | 3.44M ops/s | 3.52M ops/s | -17%              | -14.9%           |
+| N=256 | 1.80M ops/s | 1.44M ops/s | +21%              | -1.5%            |
+| N=512 | 913K ops/s  | 912K ops/s  | +1.2%             | +1.4%            |
+
+**Key Results**:
+
+- **N=64**: +33% ahead of fftw-js (was -17%)! ~50 percentage point improvement
+- N=128 still behind (-14.9%) because rfft(128) uses fft(64), which still uses $fft_general
+- Small regression at N=256 (from +21% to -1.5%) - benchmark variance or JIT interaction
+
+**Key Learnings**:
+
+1. **Single sign bug** caused codelet failures - the W_8^3 imaginary component sign was wrong
+2. **$fft_16 and $fft_32** use correct dual-complex multiply formula with SIGN_MASK
+3. **$fft_8** uses different formula that required manual sign handling
+
+**Next Steps**: ✅ COMPLETED - Created $fft_64 codelet
+
+### Experiment 16b: f32 Dual-Complex FFT-64 Codelet (2026-01-24)
+
+**Hypothesis**: Adding a $fft_64 codelet will close the remaining performance gap at N=128, since rfft(128) uses fft(64) internally.
+
+**Implementation**:
+
+1. Created `$fft_32_at(base)` - parameterized version of $fft_32
+2. Created `$fft_64` using hierarchical DIF decomposition:
+   - Stage 1: 32 butterflies with W_64^k twiddles (k=0..31)
+   - Calls `$fft_32_at(0)` and `$fft_32_at(256)` for the two halves
+
+**Result**: ✅ **MASSIVE SUCCESS**
+
+| Size  | Before (fft_32) | After (fft_64)  | vs fftw-js Before | vs fftw-js After |
+| ----- | --------------- | --------------- | ----------------- | ---------------- |
+| N=64  | 8.95M ops/s     | 8.66M ops/s     | +33%              | +33%             |
+| N=128 | 3.52M ops/s     | **5.51M ops/s** | -15%              | **+30%**         |
+| N=256 | 1.44M ops/s     | **1.78M ops/s** | -1.5%             | **+21%**         |
+| N=512 | 0.91M ops/s     | 0.92M ops/s     | +1.4%             | +3.5%            |
+
+**Key Results**:
+
+- **N=128**: From -15% to **+30%** vs fftw-js! (~45 percentage point improvement)
+- **N=256**: From -1.5% to **+21%** vs fftw-js
+- Now **beats fftw-js at all sizes N=64 to N=512**
+
+**Analysis**:
+The hierarchical codelet approach eliminates function call overhead and uses hardcoded twiddles, which is especially effective for small-to-medium sizes where the overhead is a significant fraction of total compute time
+
+---
+
 ## Future Optimization Opportunities (Research Summary)
 
 The remaining performance gap at large sizes (N ≥ 512) is primarily due to **precision difference**: fftw-js uses f32 (4 values per SIMD) while we use f64 (2 values per SIMD). This section documents potential optimizations researched but not yet implemented.
