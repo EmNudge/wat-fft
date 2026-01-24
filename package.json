@@ -17,6 +17,7 @@
     "test:permutation": "node tests/permutation.test.js",
     "test:fft": "node tests/fft.test.js",
     "test:rfft": "node --test tests/rfft.test.js",
+    "test:f32": "node tests/fft_f32_dual.test.js",
     "test:property": "node tests/fft.property.test.js",
     "test:boundary": "node --test tests/boundary.test.js",
     "test:butterfly": "node tools/butterfly_tester.js",
@@ -34,6 +35,7 @@
     "build": "node build.js",
     "bench": "node benchmarks/fft.bench.js",
     "bench:rfft": "node benchmarks/rfft.bench.js",
+    "bench:f32": "node benchmarks/fft_f32_dual.bench.js",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."
