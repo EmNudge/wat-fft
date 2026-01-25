@@ -1491,16 +1491,17 @@
   ;; ============================================================================
 
   (func $fft (param $n i32)
+    ;; NOTE: The small-size codelets (fft_8 through fft_64) output in bit-reversed
+    ;; order, which is incompatible with the RFFT post-processing that expects
+    ;; natural order. We use fft_general for N >= 8 which outputs in natural order.
+    ;;
+    ;; IMPORTANT: fft_4 is an exception - it outputs in NATURAL order (not bit-reversed)
+    ;; because its particular DIF butterfly structure happens to produce natural order
+    ;; for N=4. Do NOT add a bit-reversal swap here!
     (if (i32.eq (local.get $n) (i32.const 4))
-      (then (call $fft_4) (return)))
-    (if (i32.eq (local.get $n) (i32.const 8))
-      (then (call $fft_8) (return)))
-    (if (i32.eq (local.get $n) (i32.const 16))
-      (then (call $fft_16) (return)))
-    (if (i32.eq (local.get $n) (i32.const 32))
-      (then (call $fft_32) (return)))
-    (if (i32.eq (local.get $n) (i32.const 64))
-      (then (call $fft_64) (return)))
+      (then
+        (call $fft_4)
+        (return)))
     (call $fft_general (local.get $n))
   )
 

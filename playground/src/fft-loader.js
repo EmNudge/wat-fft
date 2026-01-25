@@ -15,7 +15,9 @@ let fftwModule = null;
 async function getFFTW() {
   if (!fftwModule) {
     const fftw = await import("fftw-js");
-    fftwModule = await fftw.default();
+    // fftw-js is a CommonJS module that exports { FFT, RFFT } directly
+    // When imported as ESM, the default export is the module.exports object
+    fftwModule = fftw.default || fftw;
   }
   return fftwModule;
 }
@@ -237,6 +239,8 @@ function createJSFFTContext(module, size) {
     if (config.isReal) {
       // Real FFT using fft.js
       const realInput = new Float64Array(size);
+      // Pre-allocate output buffer for copying from Array to typed array
+      const outputBuffer = new Float64Array((size / 2 + 1) * 2);
 
       return {
         module,
@@ -248,14 +252,20 @@ function createJSFFTContext(module, size) {
         _fft: fft,
         _realInput: realInput,
         _complexOutput: complexOutput,
+        _outputBuffer: outputBuffer,
 
         getInputBuffer() {
           return this._realInput;
         },
 
         getOutputBuffer() {
-          // Return first N/2+1 complex values
-          return new Float64Array(this._complexOutput.buffer, 0, (size / 2 + 1) * 2);
+          // fft.js createComplexArray() returns a regular Array, not a typed array
+          // We need to copy the values to a Float64Array
+          const len = this._outputBuffer.length;
+          for (let i = 0; i < len; i++) {
+            this._outputBuffer[i] = this._complexOutput[i];
+          }
+          return this._outputBuffer;
         },
 
         run() {

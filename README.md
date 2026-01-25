@@ -46,15 +46,15 @@ xychart-beta
 
 Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft (f32)       | fftw-js (f32)     | Comparison |
-| ------ | ------------------- | ----------------- | ---------- |
-| N=64   | **8,660,000 ops/s** | 6,510,000 ops/s   | **+33%**   |
-| N=128  | **5,510,000 ops/s** | 4,220,000 ops/s   | **+30%**   |
-| N=256  | **1,780,000 ops/s** | 1,470,000 ops/s   | **+21%**   |
-| N=512  | **923,000 ops/s**   | 893,000 ops/s     | **+3.5%**  |
-| N=1024 | 422,000 ops/s       | **460,000 ops/s** | -8%        |
-| N=2048 | 219,000 ops/s       | **226,000 ops/s** | -3%        |
-| N=4096 | 102,000 ops/s       | **106,000 ops/s** | -4%        |
+| Size   | wat-fft (f32)       | fftw-js (f32)       | Comparison |
+| ------ | ------------------- | ------------------- | ---------- |
+| N=64   | 5,520,000 ops/s     | **6,740,000 ops/s** | -18%       |
+| N=128  | 3,540,000 ops/s     | **4,180,000 ops/s** | -15%       |
+| N=256  | **1,760,000 ops/s** | 1,500,000 ops/s     | **+17%**   |
+| N=512  | **931,000 ops/s**   | 901,000 ops/s       | **+3%**    |
+| N=1024 | 440,000 ops/s       | **465,000 ops/s**   | -5%        |
+| N=2048 | 221,000 ops/s       | **228,000 ops/s**   | -3%        |
+| N=4096 | 102,000 ops/s       | **107,000 ops/s**   | -4%        |
 
 ```mermaid
 ---
@@ -69,16 +69,16 @@ config:
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 10
-    line [6.99, 3.81, 1.79, 0.81, 0.36, 0.165, 0.063]
-    line [8.66, 5.51, 1.78, 0.92, 0.42, 0.219, 0.102]
-    line [6.51, 4.22, 1.47, 0.89, 0.46, 0.226, 0.106]
-    line [2.93, 1.77, 0.74, 0.42, 0.17, 0.092, 0.039]
+    y-axis "Million ops/s" 0 --> 8
+    line [4.80, 2.99, 1.28, 0.76, 0.27, 0.16, 0.062]
+    line [5.52, 3.54, 1.76, 0.93, 0.44, 0.221, 0.102]
+    line [6.79, 4.23, 1.49, 0.90, 0.46, 0.226, 0.106]
+    line [2.93, 1.74, 0.75, 0.42, 0.17, 0.094, 0.039]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
 
-**wat-fft f32 wins at N=256 (+21%) and N=512 (+1%)** and is nearly at parity with fftw-js at larger sizes (within 4%). At small sizes (N≤128), fftw-js's optimized codelets have an edge. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 wins at N=256 (+17%) and N=512 (+3%)** and is competitive with fftw-js at larger sizes (within 5%). At small sizes (N≤128), fftw-js's optimized codelets have an edge. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 

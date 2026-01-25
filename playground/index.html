@@ -29,10 +29,12 @@
         min-width: 200px;
         max-width: 600px;
         padding: 15px;
-        overflow-y: auto;
+        overflow-y: hidden;
         border-right: none;
         background: #16213e;
         flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
       }
 
       .resize-handle {
@@ -78,6 +80,7 @@
         color: #4ade80;
         margin: 0 0 5px 0;
         font-size: 1.3rem;
+        flex-shrink: 0;
       }
 
       h2 {
@@ -96,6 +99,7 @@
         color: #888;
         margin: 0 0 10px 0;
         font-size: 0.8rem;
+        flex-shrink: 0;
       }
 
       .controls {
@@ -390,6 +394,41 @@
         gap: 4px;
       }
 
+      #spectrogram-mode {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+
+      #analyzer-mode {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      .tab-content::-webkit-scrollbar,
+      #analyzer-mode::-webkit-scrollbar {
+        width: 6px;
+      }
+
+      .tab-content::-webkit-scrollbar-track,
+      #analyzer-mode::-webkit-scrollbar-track {
+        background: #0f0f23;
+        border-radius: 3px;
+      }
+
+      .tab-content::-webkit-scrollbar-thumb,
+      #analyzer-mode::-webkit-scrollbar-thumb {
+        background: #333;
+        border-radius: 3px;
+      }
+
+      .tab-content::-webkit-scrollbar-thumb:hover,
+      #analyzer-mode::-webkit-scrollbar-thumb:hover {
+        background: #4ade80;
+      }
+
       .fft-option {
         padding: 6px 10px;
         border: 2px solid #333;
@@ -538,6 +577,7 @@
         background: #0f0f23;
         border-radius: 6px;
         padding: 3px;
+        flex-shrink: 0;
       }
 
       .tab {
@@ -566,10 +606,14 @@
 
       .tab-content {
         display: none;
+        flex-direction: column;
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
       }
 
       .tab-content.active {
-        display: block;
+        display: flex;
       }
 
       .file-hint {
@@ -587,6 +631,7 @@
         border-radius: 8px;
         padding: 4px;
         border: 2px solid #333;
+        flex-shrink: 0;
       }
 
       .mode-option {
@@ -820,14 +865,16 @@
 
             <h2>Colors</h2>
             <div class="controls">
-              <div class="color-row" id="color-selector">
-                <div class="color-option selected" data-color="magma">Magma</div>
-                <div class="color-option" data-color="inferno">Inferno</div>
-                <div class="color-option" data-color="viridis">Viridis</div>
-              </div>
-              <div class="color-row" style="margin-top: 6px">
-                <div class="color-option" data-color="hot">Hot</div>
-                <div class="color-option" data-color="grayscale">Gray</div>
+              <div id="color-selector">
+                <div class="color-row">
+                  <div class="color-option selected" data-color="magma">Magma</div>
+                  <div class="color-option" data-color="inferno">Inferno</div>
+                  <div class="color-option" data-color="viridis">Viridis</div>
+                </div>
+                <div class="color-row" style="margin-top: 6px">
+                  <div class="color-option" data-color="hot">Hot</div>
+                  <div class="color-option" data-color="grayscale">Gray</div>
+                </div>
               </div>
             </div>
           </div>
