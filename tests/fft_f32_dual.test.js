@@ -97,7 +97,7 @@ async function runTests() {
     // f32 should be within 1e-4 of reference
     const threshold = 1e-4;
     const dualPassed = dualErr < threshold;
-    const origPassed = origErr < threshold;
+    const _origPassed = origErr < threshold;
 
     const status = dualPassed ? "PASS" : "FAIL";
     console.log(

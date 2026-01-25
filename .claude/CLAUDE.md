@@ -1,4 +1,16 @@
-# Project Instructions
+This project is aimed to be the fastest implementation of the fft for all environments that support JavaScript. It is doing this by building it from scratch in webassembly.
+
+Our README should be concise and convincing. We should generate docs so sessions have memory.
+Docs should be generated in the docs folder. Individual docs should not get too large.
+Always summarize for eseential data.
+
+After making a big change, spin up a sub-agent to properly document the changes.
+
+If attempting a complex task, spin up a sub-agent to investigate if there is a tool or process available to make this task simpler.
+
+Always add new tests when you find a possible flaw. Use debug tools to better understand the problems and possible solutions.
+
+Always attempt to automate a kind of testing or performance analysis into the regular flow of work. We should get deep rich automated signals for how to best optimize our programs.
 
 ## Before Starting New Work
 
@@ -32,6 +44,7 @@ For optimization work, read docs in this order:
 - Document in EXPERIMENT_LOG.md with hypothesis, results, and analysis
 - Update OPTIMIZATION_PLAN.md status if completing a priority
 - Update README.md performance tables if top-line metrics change
+- Run "npm run format" so we format our markdown appropriately
 
 ## Keeping Documentation in Sync
 

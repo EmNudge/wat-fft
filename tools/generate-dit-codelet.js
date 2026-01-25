@@ -155,9 +155,9 @@ function generateCodelet() {
       // Determine output register
       // After butterfly, posA gets sum, posB gets diff
       const outRegA = Math.floor(bf.posA / 2);
-      const outSlotA = bf.posA % 2;
+      const _outSlotA = bf.posA % 2;
       const outRegB = Math.floor(bf.posB / 2);
-      const outSlotB = bf.posB % 2;
+      const _outSlotB = bf.posB % 2;
 
       if (regA === regB) {
         // Within-register butterfly
@@ -212,7 +212,6 @@ function generateCodelet() {
     lines.push(``);
 
     // Swap register sets
-    const tmp = srcSet;
     srcSet = dstSet;
     dstSet = regSets[(regSets.indexOf(dstSet) + 1) % regSets.length];
     if (dstSet === srcSet) {
