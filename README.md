@@ -427,6 +427,7 @@ Features:
 - **Multiple FFT implementations**: Compare performance of different wat-fft modules
 - **Audio sources**: Generate synthetic sine wave combinations using Web Audio API's OfflineAudioContext, or load your own audio files
 - **Spectrogram visualization**: Real-time spectrogram rendering with configurable FFT size, hop size, and color scales
+- **Spectrum analyzer**: Live microphone input with bar, curve, and mirrored visualization modes
 - **Performance metrics**: Track FFT execution time and throughput
 
 Add your own sample audio files to `playground/public/samples/`.

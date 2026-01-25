@@ -6,6 +6,8 @@
 import { loadFFTModule, createFFTContext } from "./fft-loader.js";
 import { generateSyntheticAudio, loadAudioFile, loadAudioFromUrl } from "./audio-sources.js";
 import { generateSpectrogram, renderSpectrogram, analyzeFrequencyRange } from "./spectrogram.js";
+import { SpectrumAnalyzer } from "./spectrum-analyzer.js";
+import { LiveRecorder } from "./live-recorder.js";
 import SAMPLE_FILES from "virtual:sample-files";
 
 // State
@@ -24,6 +26,17 @@ let loadedAudioSamples = null;
 let isProcessing = false;
 let pendingRegenerate = false;
 let lastSpectrogram = null;
+
+// Analyzer state
+let analyzerModule = null;
+let analyzerModuleId = "real_f32_dual";
+let analyzer = null;
+let analyzerStatsInterval = null;
+let currentMode = "spectrogram"; // "spectrogram" or "analyzer"
+
+// Live recorder state
+let liveRecorder = null;
+let recordTimeInterval = null;
 
 // Sine wave components
 let sineComponents = [
@@ -56,8 +69,8 @@ const elements = {
   maxFreq: document.getElementById("max-freq"),
   maxFreqValue: document.getElementById("max-freq-value"),
   autoFreq: document.getElementById("auto-freq"),
-  freqLabelTop: document.getElementById("freq-label-top"),
-  freqLabelBottom: document.getElementById("freq-label-bottom"),
+  freqLabels: document.getElementById("freq-labels"),
+  canvasContainer: document.querySelector(".canvas-container"),
   colorSelector: document.getElementById("color-selector"),
   sourceToggle: document.getElementById("source-toggle"),
   syntheticControls: document.getElementById("synthetic-controls"),
@@ -79,6 +92,31 @@ const elements = {
     fftsPerSec: document.getElementById("stat-ffts-per-sec"),
     frames: document.getElementById("stat-frames"),
   },
+  // Analyzer elements
+  analyzerToggle: document.getElementById("analyzer-toggle"),
+  analyzerStatus: document.getElementById("analyzer-status"),
+  analyzerFftSelector: document.getElementById("analyzer-fft-selector"),
+  analyzerFftSize: document.getElementById("analyzer-fft-size"),
+  analyzerFftSizeValue: document.getElementById("analyzer-fft-size-value"),
+  analyzerSmoothing: document.getElementById("analyzer-smoothing"),
+  analyzerSmoothingValue: document.getElementById("analyzer-smoothing-value"),
+  analyzerMinFreq: document.getElementById("analyzer-min-freq"),
+  analyzerMinFreqValue: document.getElementById("analyzer-min-freq-value"),
+  analyzerMaxFreq: document.getElementById("analyzer-max-freq"),
+  analyzerMaxFreqValue: document.getElementById("analyzer-max-freq-value"),
+  analyzerMinDb: document.getElementById("analyzer-min-db"),
+  analyzerMinDbValue: document.getElementById("analyzer-min-db-value"),
+  analyzerMaxDb: document.getElementById("analyzer-max-db"),
+  analyzerMaxDbValue: document.getElementById("analyzer-max-db-value"),
+  displayModeSelector: document.getElementById("display-mode-selector"),
+  analyzerColorSelector: document.getElementById("analyzer-color-selector"),
+  // Record controls
+  recordControls: document.getElementById("record-controls"),
+  recordBtn: document.getElementById("record-btn"),
+  pauseBtn: document.getElementById("pause-btn"),
+  recordTime: document.getElementById("record-time"),
+  recordIndicator: document.getElementById("record-indicator"),
+  recordHint: document.getElementById("record-hint"),
 };
 
 // Debounce helper
@@ -98,10 +136,119 @@ function formatFreq(hz) {
   return hz + " Hz";
 }
 
-// Update frequency labels
+// Standard frequency points for labeling (in Hz)
+const FREQ_LABEL_POINTS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000];
+
+// Update frequency labels (generate and position)
 function updateFreqLabels() {
-  elements.freqLabelTop.textContent = formatFreq(maxFreq);
-  elements.freqLabelBottom.textContent = formatFreq(minFreq);
+  generateFreqLabels();
+  positionFreqLabels();
+}
+
+// Generate frequency label elements based on current scale and range
+function generateFreqLabels() {
+  const labels = elements.freqLabels;
+  if (!labels) return;
+
+  // Clear existing labels
+  labels.innerHTML = "";
+
+  // Get frequencies to show (filter to visible range)
+  const visibleFreqs = FREQ_LABEL_POINTS.filter((f) => f >= minFreq && f <= maxFreq);
+
+  // Always include min and max if not already close to a standard point
+  const freqsToShow = [...visibleFreqs];
+  if (!visibleFreqs.some((f) => Math.abs(f - minFreq) / minFreq < 0.2)) {
+    freqsToShow.push(minFreq);
+  }
+  if (!visibleFreqs.some((f) => Math.abs(f - maxFreq) / maxFreq < 0.2)) {
+    freqsToShow.push(maxFreq);
+  }
+  freqsToShow.sort((a, b) => b - a); // Sort descending (top to bottom)
+
+  // Create label elements
+  for (const freq of freqsToShow) {
+    const label = document.createElement("span");
+    label.className = "freq-label";
+    label.textContent = formatFreq(freq);
+    label.dataset.freq = freq;
+    labels.appendChild(label);
+  }
+}
+
+// Position frequency labels to align with actual canvas content
+function positionFreqLabels() {
+  const canvas = elements.canvas;
+  const container = elements.canvasContainer;
+  const labelsContainer = elements.freqLabels;
+
+  if (!canvas || !container || !labelsContainer) return;
+
+  // Get the container dimensions
+  const containerRect = container.getBoundingClientRect();
+  const containerWidth = containerRect.width;
+  const containerHeight = containerRect.height;
+
+  // Get the canvas intrinsic dimensions
+  const canvasWidth = canvas.width;
+  const canvasHeight = canvas.height;
+
+  if (canvasWidth === 0 || canvasHeight === 0) return;
+
+  // Calculate the rendered size of the canvas (with object-fit: contain)
+  const containerAspect = containerWidth / containerHeight;
+  const canvasAspect = canvasWidth / canvasHeight;
+
+  let renderedHeight, offsetY;
+
+  if (canvasAspect > containerAspect) {
+    // Canvas is wider than container - limited by width
+    renderedHeight = containerWidth / canvasAspect;
+    offsetY = (containerHeight - renderedHeight) / 2;
+  } else {
+    // Canvas is taller than container - limited by height
+    renderedHeight = containerHeight;
+    offsetY = 0;
+  }
+
+  // Position the labels container
+  labelsContainer.style.top = offsetY + "px";
+  labelsContainer.style.height = renderedHeight + "px";
+
+  // Position each label according to frequency scale
+  const labels = labelsContainer.querySelectorAll(".freq-label");
+  const padding = 6; // Padding from top/bottom edges
+
+  labels.forEach((label) => {
+    const freq = parseFloat(label.dataset.freq);
+    let position;
+
+    if (freqScale === "log") {
+      // Logarithmic positioning
+      const logMin = Math.log10(minFreq);
+      const logMax = Math.log10(maxFreq);
+      const logFreq = Math.log10(freq);
+      position = 1 - (logFreq - logMin) / (logMax - logMin); // 0 = top, 1 = bottom
+    } else if (freqScale === "mel") {
+      // Mel scale positioning
+      const hzToMel = (hz) => 2595 * Math.log10(1 + hz / 700);
+      const melMin = hzToMel(minFreq);
+      const melMax = hzToMel(maxFreq);
+      const melFreq = hzToMel(freq);
+      position = 1 - (melFreq - melMin) / (melMax - melMin);
+    } else {
+      // Linear positioning
+      position = 1 - (freq - minFreq) / (maxFreq - minFreq);
+    }
+
+    // Convert to pixel position with padding
+    const usableHeight = renderedHeight - padding * 2;
+    const pixelPos = padding + position * usableHeight;
+
+    label.style.position = "absolute";
+    label.style.top = pixelPos + "px";
+    label.style.transform = "translateY(-50%)";
+  });
 }
 
 // Show/hide processing indicator
@@ -194,14 +341,14 @@ function setupSpectrogramControls() {
   elements.gain.addEventListener("input", () => {
     gain = parseInt(elements.gain.value);
     elements.gainValue.textContent = gain + " dB";
-    triggerRegenerate();
+    updateRecorderAndRegenerate({ gain });
   });
 
   // Range
   elements.range.addEventListener("input", () => {
     range = parseInt(elements.range.value);
     elements.rangeValue.textContent = range + " dB";
-    triggerRegenerate();
+    updateRecorderAndRegenerate({ range });
   });
 
   // Frequency scale
@@ -211,7 +358,7 @@ function setupSpectrogramControls() {
       freqScaleOptions.forEach((o) => o.classList.remove("selected"));
       option.classList.add("selected");
       freqScale = option.dataset.scale;
-      triggerRegenerate();
+      updateRecorderAndRegenerate({ freqScale });
     });
   });
 
@@ -219,14 +366,14 @@ function setupSpectrogramControls() {
   elements.minFreq.addEventListener("input", () => {
     minFreq = parseInt(elements.minFreq.value);
     elements.minFreqValue.textContent = minFreq + " Hz";
-    triggerRegenerate();
+    updateRecorderAndRegenerate({ minFreq });
   });
 
   // Max frequency
   elements.maxFreq.addEventListener("input", () => {
     maxFreq = parseInt(elements.maxFreq.value);
     elements.maxFreqValue.textContent = formatFreq(maxFreq);
-    triggerRegenerate();
+    updateRecorderAndRegenerate({ maxFreq });
   });
 
   // Auto-detect frequency range
@@ -245,7 +392,7 @@ function setupSpectrogramControls() {
     elements.maxFreq.value = maxFreq;
     elements.maxFreqValue.textContent = formatFreq(maxFreq);
 
-    triggerRegenerate();
+    updateRecorderAndRegenerate({ minFreq, maxFreq });
   });
 
   // Color scale
@@ -255,9 +402,24 @@ function setupSpectrogramControls() {
       colorOptions.forEach((o) => o.classList.remove("selected"));
       option.classList.add("selected");
       colorScale = option.dataset.color;
-      triggerRegenerate();
+      updateRecorderAndRegenerate({ colorScale });
     });
   });
+}
+
+// Helper to update live recorder settings and trigger appropriate regeneration
+function updateRecorderAndRegenerate(settings) {
+  // If in record mode with active recorder, update and redraw
+  if (sourceType === "record" && liveRecorder) {
+    liveRecorder.updateSettings(settings);
+    // If recording or has frames, redraw immediately
+    if (liveRecorder.isRecording || liveRecorder.hasFrames()) {
+      liveRecorder.redraw();
+      return; // Don't trigger normal regenerate
+    }
+  }
+  // Otherwise trigger normal spectrogram regeneration
+  triggerRegenerate();
 }
 
 // Audio source toggle
@@ -269,12 +431,18 @@ function setupSourceToggle() {
       const source = option.dataset.source;
       if (source === sourceType) return;
 
+      // Stop any active recording when switching away
+      if (sourceType === "record" && liveRecorder && liveRecorder.isRecording) {
+        stopRecording();
+      }
+
       options.forEach((o) => o.classList.remove("selected"));
       option.classList.add("selected");
 
       sourceType = source;
       elements.syntheticControls.classList.toggle("hidden", source !== "synthetic");
       elements.fileControls.classList.toggle("hidden", source !== "file");
+      elements.recordControls.classList.toggle("hidden", source !== "record");
 
       if (source === "synthetic") {
         triggerRegenerate();
@@ -286,9 +454,133 @@ function setupSourceToggle() {
         } else if (loadedAudioSamples) {
           triggerRegenerate();
         }
+      } else if (source === "record") {
+        // Clear canvas and show ready state
+        const ctx = elements.canvas.getContext("2d");
+        ctx.fillStyle = "#0f0f23";
+        ctx.fillRect(0, 0, elements.canvas.width, elements.canvas.height);
+        // Reset stats
+        elements.stats.fftTime.textContent = "-";
+        elements.stats.totalTime.textContent = "-";
+        elements.stats.fftsPerSec.textContent = "-";
+        elements.stats.frames.textContent = "-";
       }
     });
   });
+}
+
+// Setup live recording controls
+function setupRecordingControls() {
+  // Create live recorder instance
+  liveRecorder = new LiveRecorder({
+    canvas: elements.canvas,
+    onUpdate: (status) => {
+      // Update time display
+      const duration = status.duration;
+      const mins = Math.floor(duration / 60);
+      const secs = Math.floor(duration % 60);
+      elements.recordTime.textContent = `${mins}:${secs.toString().padStart(2, "0")}`;
+
+      // Update stats
+      elements.stats.frames.textContent = status.frames.toLocaleString();
+    },
+    onComplete: (result) => {
+      // Store recorded audio as loaded audio
+      loadedAudioSamples = result;
+      elements.recordHint.textContent = `Recorded ${result.duration.toFixed(1)}s - click Record to start over`;
+    },
+  });
+
+  // Record button
+  elements.recordBtn.addEventListener("click", async () => {
+    if (liveRecorder.isRecording) {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  });
+
+  // Pause button
+  elements.pauseBtn.addEventListener("click", () => {
+    if (!liveRecorder.isRecording) return;
+
+    if (liveRecorder.isPaused) {
+      liveRecorder.resume();
+      elements.pauseBtn.textContent = "Pause";
+      elements.recordIndicator.classList.remove("paused");
+      elements.recordHint.textContent = "Recording...";
+    } else {
+      liveRecorder.pause();
+      elements.pauseBtn.textContent = "Resume";
+      elements.recordIndicator.classList.add("paused");
+      elements.recordHint.textContent = "Paused - click Resume to continue";
+    }
+  });
+}
+
+// Start recording
+async function startRecording() {
+  try {
+    // Update recorder settings from current FFT settings
+    const fftSize = Math.pow(2, parseInt(elements.fftSize.value));
+    const hopSize = Math.pow(2, parseInt(elements.hopSize.value));
+
+    liveRecorder.updateSettings({
+      fftSize,
+      hopSize,
+      windowType,
+      zeroPadding,
+      gain,
+      range,
+      colorScale,
+      freqScale,
+      minFreq,
+      maxFreq,
+    });
+
+    // Set FFT context
+    const fftContext = createFFTContext(currentModule, fftSize);
+    liveRecorder.setFFTContext(fftContext);
+
+    // Start recording
+    const result = await liveRecorder.start();
+
+    // Update UI
+    elements.recordBtn.textContent = "Stop";
+    elements.recordBtn.classList.add("recording");
+    elements.pauseBtn.disabled = false;
+    elements.recordIndicator.classList.remove("hidden");
+    elements.recordHint.textContent = "Recording...";
+
+    // Update implementation display
+    elements.implName.textContent = currentModule.config.name + " (Recording)";
+  } catch (err) {
+    console.error("Failed to start recording:", err);
+    elements.recordHint.textContent = "Error: " + (err.message || "Microphone access denied");
+  }
+}
+
+// Stop recording
+function stopRecording() {
+  if (!liveRecorder || !liveRecorder.isRecording) return;
+
+  const result = liveRecorder.stop();
+
+  // Update UI
+  elements.recordBtn.textContent = "Record";
+  elements.recordBtn.classList.remove("recording");
+  elements.pauseBtn.textContent = "Pause";
+  elements.pauseBtn.disabled = true;
+  elements.recordIndicator.classList.add("hidden");
+  elements.recordIndicator.classList.remove("paused");
+
+  // Update implementation display
+  updateImplName();
+
+  // Regenerate spectrogram with recorded audio
+  if (result && result.samples.length > 0) {
+    triggerRegenerate();
+  }
 }
 
 // Load a sample file from URL
@@ -454,6 +746,265 @@ function setupFileInput() {
   });
 }
 
+// Analyzer setup
+async function setupAnalyzer() {
+  // Create analyzer instance
+  analyzer = new SpectrumAnalyzer({
+    canvas: elements.canvas,
+    fftSize: Math.pow(2, parseInt(elements.analyzerFftSize.value)),
+    smoothing: parseInt(elements.analyzerSmoothing.value) / 100,
+    minFreq: parseInt(elements.analyzerMinFreq.value),
+    maxFreq: parseInt(elements.analyzerMaxFreq.value),
+    minDb: parseInt(elements.analyzerMinDb.value),
+    maxDb: parseInt(elements.analyzerMaxDb.value),
+    displayMode: "bars",
+    colorScheme: "gradient",
+  });
+
+  // Load default analyzer FFT module
+  try {
+    analyzerModule = await loadFFTModule(analyzerModuleId);
+    const fftSize = Math.pow(2, parseInt(elements.analyzerFftSize.value));
+    const fftContext = createFFTContext(analyzerModule, fftSize);
+    analyzer.setFFTContext(fftContext, analyzerModule);
+  } catch (err) {
+    console.error("Failed to load analyzer FFT module:", err);
+  }
+
+  // Toggle button
+  elements.analyzerToggle.addEventListener("click", async () => {
+    if (analyzer.isRunning) {
+      stopAnalyzer();
+    } else {
+      await startAnalyzer();
+    }
+  });
+
+  // FFT implementation selector
+  const analyzerFftOptions = elements.analyzerFftSelector.querySelectorAll(".fft-option");
+  analyzerFftOptions.forEach((option) => {
+    option.addEventListener("click", async () => {
+      const moduleId = option.dataset.fft;
+      if (moduleId === analyzerModuleId) return;
+
+      analyzerFftOptions.forEach((o) => o.classList.remove("selected"));
+      option.classList.add("selected");
+
+      try {
+        analyzerModule = await loadFFTModule(moduleId);
+        analyzerModuleId = moduleId;
+
+        // Update analyzer FFT context
+        const fftSize = Math.pow(2, parseInt(elements.analyzerFftSize.value));
+        const fftContext = createFFTContext(analyzerModule, fftSize);
+        analyzer.setFFTContext(fftContext, analyzerModule);
+
+        // Update implementation display if running
+        if (analyzer.isRunning) {
+          updateAnalyzerImplName();
+        }
+      } catch (err) {
+        console.error("Failed to load analyzer module:", err);
+      }
+    });
+  });
+
+  // FFT Size slider
+  elements.analyzerFftSize.addEventListener("input", () => {
+    const fftSize = Math.pow(2, parseInt(elements.analyzerFftSize.value));
+    elements.analyzerFftSizeValue.textContent = fftSize;
+
+    if (analyzerModule) {
+      const fftContext = createFFTContext(analyzerModule, fftSize);
+      analyzer.setFFTContext(fftContext, analyzerModule);
+    }
+  });
+
+  // Smoothing slider
+  elements.analyzerSmoothing.addEventListener("input", () => {
+    const smoothing = parseInt(elements.analyzerSmoothing.value) / 100;
+    elements.analyzerSmoothingValue.textContent = elements.analyzerSmoothing.value + "%";
+    analyzer.updateSettings({ smoothing });
+  });
+
+  // Min frequency slider
+  elements.analyzerMinFreq.addEventListener("input", () => {
+    const minFreq = parseInt(elements.analyzerMinFreq.value);
+    elements.analyzerMinFreqValue.textContent = minFreq + " Hz";
+    analyzer.updateSettings({ minFreq });
+  });
+
+  // Max frequency slider
+  elements.analyzerMaxFreq.addEventListener("input", () => {
+    const maxFreq = parseInt(elements.analyzerMaxFreq.value);
+    elements.analyzerMaxFreqValue.textContent = formatFreq(maxFreq);
+    analyzer.updateSettings({ maxFreq });
+  });
+
+  // Min dB slider
+  elements.analyzerMinDb.addEventListener("input", () => {
+    const minDb = parseInt(elements.analyzerMinDb.value);
+    elements.analyzerMinDbValue.textContent = minDb + " dB";
+    analyzer.updateSettings({ minDb });
+  });
+
+  // Max dB slider
+  elements.analyzerMaxDb.addEventListener("input", () => {
+    const maxDb = parseInt(elements.analyzerMaxDb.value);
+    elements.analyzerMaxDbValue.textContent = maxDb + " dB";
+    analyzer.updateSettings({ maxDb });
+  });
+
+  // Display mode selector
+  const displayModeOptions = elements.displayModeSelector.querySelectorAll(".color-option");
+  displayModeOptions.forEach((option) => {
+    option.addEventListener("click", () => {
+      displayModeOptions.forEach((o) => o.classList.remove("selected"));
+      option.classList.add("selected");
+      analyzer.updateSettings({ displayMode: option.dataset.mode });
+    });
+  });
+
+  // Color scheme selector
+  const analyzerColorOptions = elements.analyzerColorSelector.querySelectorAll(".color-option");
+  analyzerColorOptions.forEach((option) => {
+    option.addEventListener("click", () => {
+      analyzerColorOptions.forEach((o) => o.classList.remove("selected"));
+      option.classList.add("selected");
+      analyzer.updateSettings({ colorScheme: option.dataset.color });
+    });
+  });
+}
+
+// Start analyzer
+async function startAnalyzer() {
+  try {
+    const result = await analyzer.start();
+    elements.analyzerToggle.textContent = "Stop Microphone";
+    elements.analyzerToggle.classList.add("danger");
+    elements.analyzerStatus.textContent = `Listening at ${result.sampleRate} Hz`;
+    updateAnalyzerImplName();
+
+    // Start stats update interval
+    analyzerStatsInterval = setInterval(updateAnalyzerStats, 100);
+  } catch (err) {
+    console.error("Failed to start analyzer:", err);
+    elements.analyzerStatus.textContent = "Error: " + (err.message || "Microphone access denied");
+  }
+}
+
+// Stop analyzer
+function stopAnalyzer() {
+  analyzer.stop();
+  elements.analyzerToggle.textContent = "Start Microphone";
+  elements.analyzerToggle.classList.remove("danger");
+  elements.analyzerStatus.textContent = "Click to start real-time analysis";
+
+  // Stop stats update interval
+  if (analyzerStatsInterval) {
+    clearInterval(analyzerStatsInterval);
+    analyzerStatsInterval = null;
+  }
+
+  // Reset stats display
+  elements.stats.fftTime.textContent = "-";
+  elements.stats.totalTime.textContent = "-";
+  elements.stats.fftsPerSec.textContent = "-";
+  elements.stats.frames.textContent = "-";
+
+  // Reset implementation display
+  elements.implName.textContent = "Stopped";
+  elements.implName.classList.remove("alt");
+}
+
+// Update analyzer stats display
+function updateAnalyzerStats() {
+  if (!analyzer || !analyzer.isRunning) return;
+
+  const stats = analyzer.getStats();
+  // FFT (ms): actual FFT computation time
+  elements.stats.fftTime.textContent = stats.fftTime.toFixed(2);
+  // Total (ms): frame time (1000/fps)
+  const frameTime = stats.fps > 0 ? (1000 / stats.fps).toFixed(1) : "-";
+  elements.stats.totalTime.textContent = frameTime;
+  // FFTs/sec: same as FPS since we do 1 FFT per frame
+  elements.stats.fftsPerSec.textContent = stats.fps.toLocaleString();
+  // Frames: show sample rate
+  elements.stats.frames.textContent = (stats.sampleRate / 1000).toFixed(1) + "k";
+}
+
+// Update analyzer implementation name
+function updateAnalyzerImplName() {
+  if (!analyzerModule) return;
+  const { name } = analyzerModule.config;
+  const isAlt = !analyzerModule.config.isWatFft;
+  elements.implName.textContent = name + " (Live)";
+  elements.implName.classList.toggle("alt", isAlt);
+}
+
+// Mode toggle handling (Spectrogram vs Live Analyzer)
+function setupModeToggle() {
+  const modeToggle = document.getElementById("mode-toggle");
+  const spectrogramMode = document.getElementById("spectrogram-mode");
+  const analyzerModeEl = document.getElementById("analyzer-mode");
+  const modeOptions = modeToggle.querySelectorAll(".mode-option");
+
+  modeOptions.forEach((option) => {
+    option.addEventListener("click", () => {
+      const newMode = option.dataset.mode;
+      if (newMode === currentMode) return;
+
+      const previousMode = currentMode;
+      currentMode = newMode;
+
+      // Update toggle UI
+      modeOptions.forEach((o) => o.classList.remove("selected"));
+      option.classList.add("selected");
+
+      // Handle mode transitions
+      if (previousMode === "analyzer" && analyzer && analyzer.isRunning) {
+        // Leaving analyzer mode while running - stop analyzer
+        stopAnalyzer();
+      }
+
+      if (newMode === "analyzer") {
+        // Switch to analyzer mode
+        spectrogramMode.classList.add("hidden");
+        analyzerModeEl.classList.remove("hidden");
+
+        // Clear canvas and show ready state
+        const ctx = elements.canvas.getContext("2d");
+        ctx.fillStyle = "#0f0f23";
+        ctx.fillRect(0, 0, elements.canvas.width, elements.canvas.height);
+
+        // Hide vertical frequency labels (analyzer draws its own)
+        elements.freqLabels.style.display = "none";
+
+        // Reset stats
+        elements.stats.fftTime.textContent = "-";
+        elements.stats.totalTime.textContent = "-";
+        elements.stats.fftsPerSec.textContent = "-";
+        elements.stats.frames.textContent = "-";
+        elements.implName.textContent = "Stopped";
+        elements.implName.classList.remove("alt");
+      } else {
+        // Switch to spectrogram mode
+        spectrogramMode.classList.remove("hidden");
+        analyzerModeEl.classList.add("hidden");
+
+        // Show vertical frequency labels
+        elements.freqLabels.style.display = "";
+
+        // Regenerate spectrogram
+        updateImplName();
+        if (lastSpectrogram || sourceType === "synthetic" || loadedAudioSamples) {
+          triggerRegenerate();
+        }
+      }
+    });
+  });
+}
+
 // Get current audio samples
 async function getAudioSamples() {
   const sampleRateIndex = parseInt(elements.sampleRate.value);
@@ -467,15 +1018,16 @@ async function getAudioSamples() {
       components: sineComponents,
     });
     return { samples, sampleRate };
-  } else {
+  } else if (sourceType === "file" || sourceType === "record") {
     if (!loadedAudioSamples) {
-      throw new Error("No audio file loaded");
+      throw new Error(sourceType === "record" ? "No recording yet" : "No audio file loaded");
     }
     return {
       samples: loadedAudioSamples.samples,
       sampleRate: loadedAudioSamples.sampleRate,
     };
   }
+  throw new Error("Unknown source type");
 }
 
 // Main generation function
@@ -559,6 +1111,9 @@ async function init() {
   setupSyntheticControls();
   setupSampleFileSelector();
   setupFileInput();
+  setupRecordingControls();
+  setupModeToggle();
+  await setupAnalyzer();
   renderSineComponents();
 
   // Initialize display values
@@ -596,6 +1151,13 @@ async function init() {
   } else {
     generate();
   }
+
+  // Update label positions when canvas container resizes
+  const resizeObserver = new ResizeObserver(debounce(positionFreqLabels, 50));
+  resizeObserver.observe(elements.canvasContainer);
+
+  // Initial label positioning (after first render)
+  requestAnimationFrame(() => positionFreqLabels());
 }
 
 init();
