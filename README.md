@@ -48,13 +48,13 @@ Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten
 
 | Size   | wat-fft (f32)       | fftw-js (f32)       | Comparison |
 | ------ | ------------------- | ------------------- | ---------- |
-| N=64   | 6,480,000 ops/s     | **6,860,000 ops/s** | -6%        |
-| N=128  | 4,140,000 ops/s     | **4,170,000 ops/s** | -1%        |
-| N=256  | **2,180,000 ops/s** | 1,480,000 ops/s     | **+47%**   |
-| N=512  | **1,130,000 ops/s** | 880,000 ops/s       | **+29%**   |
-| N=1024 | **516,000 ops/s**   | 454,000 ops/s       | **+14%**   |
-| N=2048 | **267,000 ops/s**   | 225,000 ops/s       | **+19%**   |
-| N=4096 | **122,000 ops/s**   | 104,000 ops/s       | **+17%**   |
+| N=64   | 6,680,000 ops/s     | **6,780,000 ops/s** | -1%        |
+| N=128  | **4,060,000 ops/s** | 4,030,000 ops/s     | **+1%**    |
+| N=256  | **2,110,000 ops/s** | 1,460,000 ops/s     | **+44%**   |
+| N=512  | **1,080,000 ops/s** | 876,000 ops/s       | **+24%**   |
+| N=1024 | **504,000 ops/s**   | 458,000 ops/s       | **+10%**   |
+| N=2048 | **263,000 ops/s**   | 225,000 ops/s       | **+17%**   |
+| N=4096 | **116,000 ops/s**   | 101,000 ops/s       | **+15%**   |
 
 ```mermaid
 ---
@@ -71,14 +71,14 @@ xychart-beta
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
     line [4.80, 2.99, 1.28, 0.76, 0.27, 0.16, 0.062]
-    line [6.48, 4.14, 2.18, 1.13, 0.52, 0.267, 0.122]
-    line [6.86, 4.17, 1.48, 0.88, 0.45, 0.225, 0.104]
+    line [6.68, 4.06, 2.11, 1.08, 0.504, 0.263, 0.116]
+    line [6.78, 4.03, 1.46, 0.876, 0.458, 0.225, 0.101]
     line [2.93, 1.74, 0.75, 0.42, 0.17, 0.094, 0.039]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats fftw-js at all sizes N≥256** (+14% to +47%) and is within 6% at N=64 and N=128. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats fftw-js at all sizes N≥128** (+1% to +44%) and is within 1% at N=64. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 

@@ -29,6 +29,7 @@ Detailed record of all optimization experiments.
 | 20  | Dual-Complex r < 2          | SUCCESS +5-12pp  | Process r=2 stages with dual-complex SIMD     |
 | 21  | Dual-Group r=1 Stage        | SUCCESS +11-20pp | Process 2 groups at once, massive improvement |
 | 22  | Dispatch Order Optimization | INCONCLUSIVE     | Gap at N=64/128 within benchmark variance     |
+| 23  | Unrolled RFFT-64 Post-Proc  | SUCCESS +3pp     | Inline twiddles, no loops, N=64 gap → -1.5%   |
 
 ---
 
@@ -327,3 +328,34 @@ Multiple runs showed N=64 gap ranging from -0.8% to -7.5%, and N=128 gap from -3
 - Twiddle factor loading
 
 **Conclusion**: The N=64/128 gap (~3-5%) is within measurement noise and likely represents the fundamental algorithmic difference between our Stockham implementation and FFTW's genfft codelets. Further optimization at these sizes would require significant codelet restructuring with uncertain returns.
+
+---
+
+## Experiment 23: Unrolled RFFT-64 Post-Processing (2026-01-25)
+
+**Hypothesis**: Eliminating loop overhead and twiddle memory loads for N=64 RFFT post-processing by creating a fully unrolled codelet with inline v128.const twiddles.
+
+**Approach**:
+
+- Created `$rfft_postprocess_64` - a specialized function for n2=32 (N=64 RFFT)
+- Fully unrolled all 7 SIMD iterations (processing pairs k=1..15)
+- Replaced memory twiddle loads with `v128.const` inline constants
+- Hardcoded all addresses (8, 24, 40, etc.)
+
+**Result**: SUCCESS - N=64 gap reduced
+
+| Metric    | Before | After | Improvement |
+| --------- | ------ | ----- | ----------- |
+| N=64 gap  | -4.7%  | -1.5% | +3.2pp      |
+| N=128 gap | +0.1%  | +1.5% | +1.4pp      |
+
+**Analysis**: The improvement is modest but consistent across multiple benchmark runs. The gains come from:
+
+1. Zero loop counter overhead
+2. Zero memory loads for twiddles (14 loads eliminated)
+3. No branch prediction at loop boundaries
+4. Compiler can better schedule instructions without loop constraints
+
+**Lesson**: Even for small loops (7 iterations), full unrolling with inline constants can provide measurable gains. The approach is limited by code size - for larger N, the code bloat would hurt I-cache performance.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`
