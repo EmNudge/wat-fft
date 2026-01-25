@@ -11,7 +11,8 @@
   "main": "index.js",
   "scripts": {
     "test": "npm run test:swap && npm run test:reverse_bits && npm run test:fft",
-    "test:all": "npm run test && npm run test:rfft && npm run test:property && npm run test:boundary && npm run test:correctness",
+    "test:all": "npm run test && npm run test:rfft && npm run test:property && npm run test:boundary && npm run test:correctness && npm run test:output-order",
+    "test:output-order": "node --test tests/output-order.test.js",
     "test:swap": "node tests/swap.test.js",
     "test:reverse_bits": "node tests/reverse_bits.test.js",
     "test:permutation": "node tests/permutation.test.js",

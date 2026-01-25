@@ -15699,19 +15699,11 @@
   )
 
   ;; Internal FFT dispatcher (uses optimal algorithm based on size)
+  ;; NOTE: The fused codelets (fft_32 through fft_1024) output in bit-reversed order,
+  ;; which is incompatible with the RFFT post-processing that expects natural order.
+  ;; We use the general algorithms (fft_radix4/fft_stockham) which output in natural order.
+  ;; TODO: Fix the codelets to output in natural order for better performance.
   (func $fft (param $n i32)
-    ;; Special case: N=32 uses hierarchical composition (2x fft_16)
-    (if (i32.eq (local.get $n) (i32.const 32)) (then (call $fft_32) (return)))
-    ;; Special case: N=64 uses hierarchical composition (2x fft_32)
-    (if (i32.eq (local.get $n) (i32.const 64)) (then (call $fft_64_fused) (return)))
-    ;; Special case: N=128 uses hierarchical composition (2x fft_64)
-    (if (i32.eq (local.get $n) (i32.const 128)) (then (call $fft_128) (return)))
-    ;; Special case: N=256 uses hierarchical composition (2x fft_128)
-    (if (i32.eq (local.get $n) (i32.const 256)) (then (call $fft_256) (return)))
-    ;; Special case: N=512 uses hierarchical composition (2x fft_256)
-    (if (i32.eq (local.get $n) (i32.const 512)) (then (call $fft_512) (return)))
-    ;; Special case: N=1024 uses hierarchical composition (2x fft_512)
-    (if (i32.eq (local.get $n) (i32.const 1024)) (then (call $fft_1024) (return)))
     (if (call $is_power_of_4 (local.get $n))
       (then (call $fft_radix4 (local.get $n)))
       (else (call $fft_stockham (local.get $n)))
