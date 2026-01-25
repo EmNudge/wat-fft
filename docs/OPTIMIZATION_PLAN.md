@@ -1129,6 +1129,185 @@ However, the **Stockham algorithm** (used by $fft_general) has different semanti
 **Analysis**:
 The hierarchical codelet approach eliminates function call overhead and uses hardcoded twiddles, which is especially effective for small-to-medium sizes where the overhead is a significant fraction of total compute time
 
+### Experiment 17: Bit-Reversal Permutation to Enable f32 RFFT Codelets (2026-01-25)
+
+**Hypothesis**: The f32 dual-complex module has optimized codelets ($fft_8, $fft_16, $fft_32, $fft_64) that were disabled because they produce bit-reversed output, incompatible with RFFT post-processing. Adding a standard bit-reversal permutation step after the codelets should enable them.
+
+**Background**: The f32 rfft benchmark showed -17% vs fftw-js at N=64 and N=128, despite having codelets in the module. Investigation revealed that the $fft dispatch function only used $fft_4, falling back to $fft_general for all larger sizes due to the output order issue.
+
+**Implementation**:
+
+1. Added `$swap_complex_f32` helper function for efficient 8-byte swaps using f64 load/store
+2. Added specialized unrolled bit-reversal functions for each size:
+   - `$bitrev_8`: 2 swaps
+   - `$bitrev_16`: 6 swaps
+   - `$bitrev_32`: 12 swaps
+   - `$bitrev_64`: 28 swaps
+3. Updated `$fft` dispatch to use codelets followed by bit-reversal for N=8, 16, 32, 64
+
+**Result**: ❌ **FAILURE - Incorrect output**
+
+Testing revealed that the hierarchical DIF codelets produce a **non-standard permutation**, NOT simple bit-reversal:
+
+```
+Testing N=64 sine wave:
+  Expected: peak at bin 1
+  Actual: peak at bin 3
+
+Testing N=32 impulse:
+  Output has incorrect values at odd-indexed bins (1, 3, 9, 11, 21, 23, 29, 31)
+```
+
+**Root Cause Analysis**:
+
+The hierarchical DIF codelets (e.g., `$fft_32` which calls `$fft_16_at` twice) produce a complex permutation that is NOT equivalent to standard bit-reversal:
+
+1. **Standard DIF** (single codelet): produces bit-reversed output where index i maps to bit_reverse(i)
+2. **Hierarchical DIF** (composition): each sub-FFT produces bit-reversed output within its half, but the inter-half relationship is different
+
+For a hierarchical FFT-32 that does:
+
+- Stage 1: DIF butterflies between x[k] and x[k+16]
+- FFT-16 on first half (produces 4-bit reversed within that half)
+- FFT-16 on second half (produces 4-bit reversed within that half)
+
+The overall permutation is: for index `b4 b3 b2 b1 b0`:
+
+- Standard bit-reversal: `b0 b1 b2 b3 b4`
+- Hierarchical DIF: `b4 b0 b1 b2 b3` (MSB stays, lower bits reversed)
+
+**Why this matters**: The standard bit-reversal swaps I implemented assumed the first pattern, but the codelets produce the second pattern.
+
+**Conclusion**: Enabling the hierarchical DIF codelets for RFFT requires either:
+
+1. Deriving and implementing the correct (complex) un-permutation for hierarchical DIF, OR
+2. Rewriting the codelets to use Stockham-style ping-pong buffers (natural order output)
+
+Both options are complex and not worth the effort given the modest expected gains. The $fft_general Stockham loop is already well-optimized and produces natural order output.
+
+**Files modified**: None (changes reverted)
+
+### Experiment 18: DIT Codelets with Natural Order Output (2026-01-25)
+
+**Hypothesis**: Instead of trying to un-permute the hierarchical DIF codelet output, create new DIT (Decimation in Time) codelets that load input in bit-reversed order and output in natural order. This is compatible with RFFT post-processing.
+
+**Background**: Following the failure of Experiment 17, this approach addresses the root cause differently. DIT FFT naturally produces natural-order output when input is bit-reversed, which is exactly what we need for RFFT compatibility.
+
+**Implementation**:
+
+1. Created `$fft_8_dit` codelet:
+   - Loads 8 complex values in bit-reversed order (0,4,2,6,1,5,3,7)
+   - Performs 3 stages of DIT butterflies with hardcoded twiddles
+   - Outputs in natural order (0,1,2,3,4,5,6,7)
+   - Uses v128.load64_zero for individual complex loads
+
+2. Created `$fft_16_dit` codelet:
+   - Loads 16 complex values in bit-reversed order using v128.load64_lane
+   - Performs 4 stages of DIT butterflies
+   - Uses within-register and cross-register shuffle patterns
+   - Outputs in natural order via shuffled stores
+
+3. Updated `$fft` dispatch:
+   - N=4: $fft_4 (already natural order)
+   - N=8: $fft_8_dit
+   - N=16: $fft_16_dit
+   - N>=32: $fft_general (Stockham, natural order)
+
+**Result**: ✅ **SUCCESS - All tests pass**
+
+- 132/132 FFT tests pass
+- 78/78 RFFT tests pass
+- 42/42 output-order tests pass
+
+**Performance Impact**:
+
+The DIT codelets affect performance at various sizes:
+
+- rfft(16) uses fft(8) → $fft_8_dit
+- rfft(32) uses fft(16) → $fft_16_dit
+- rfft(64) uses fft(32) → $fft_32_dit (generated)
+- rfft(128) uses fft(64) → $fft_general (Stockham)
+
+**Codelet Generator Tool**: Created `tools/generate-dit-codelet.js` to automatically generate DIT codelets:
+
+```bash
+node tools/generate-dit-codelet.js 32  # Generates $fft_32_dit (755 lines)
+node tools/generate-dit-codelet.js 64  # Generates $fft_64_dit (1845 lines)
+```
+
+**Benchmark Results** (vs fftw-js):
+
+| Size  | Before | After  | Change            |
+| ----- | ------ | ------ | ----------------- |
+| N=64  | -17.6% | -13.3% | +4.3% improvement |
+| N=128 | -16.7% | -16.9% | unchanged         |
+
+**Note on $fft_64_dit**: A generated N=64 codelet was tested but proved **slower** than the Stockham algorithm (-27.5% vs -16.7%). The shuffle overhead for 32 dual-complex registers exceeds the benefit of avoiding memory access. The codelet is included in the source but not used.
+
+**Technical Notes**:
+
+The DIT codelet approach uses more complex shuffle patterns than DIF because:
+
+1. Input must be loaded from scattered (bit-reversed) addresses
+2. Intermediate stages require cross-register data reorganization
+3. Output requires recombining registers into natural order
+
+For $fft_16_dit, each stage requires:
+
+- Shuffle to reorganize register pairs for butterfly pairing
+- Twiddle multiplication (optimized for special cases like W=1, W=-j)
+- Butterfly add/sub
+- Shuffle back to prepare for next stage or output
+
+**Files modified**:
+
+- `modules/fft_real_f32_dual.wat` - Added $fft_8_dit, $fft_16_dit, $fft_32_dit, $fft_64_dit (unused)
+- `tools/generate-dit-codelet.js` - New codelet generator tool
+
+**Conclusion**: DIT codelets are effective up to N=32 (providing ~4% improvement at the benchmarked N=64 size), but the approach has diminishing returns for larger sizes where register shuffling overhead exceeds the benefit.
+
+---
+
+### Experiment 19: SIMD RFFT Post-Processing Threshold (2026-01-25)
+
+**Hypothesis**: The RFFT post-processing was using scalar code for N=64 (threshold was N >= 128 for SIMD). Lowering the threshold to N >= 64 should improve small-size RFFT performance.
+
+**Background**: CPU profiling revealed that ~37% of time for rfft(64) was spent in the scalar post-processing loop, not in the FFT itself. The SIMD post-processing function already handles the N=64 case correctly (n2=32, processing 14 pairs in 7 SIMD iterations).
+
+**Implementation**: Changed threshold in `$rfft` from `N >= 128` to `N >= 64`:
+
+```wat
+;; Before: (if (i32.ge_u (local.get $n) (i32.const 128))
+(if (i32.ge_u (local.get $n) (i32.const 64))
+  (then
+    (call $rfft_postprocess_simd (local.get $n2))
+    (return)))
+```
+
+**Profile Results** (500K iterations of rfft(64)):
+
+| Metric                  | Before (Scalar) | After (SIMD) | Change |
+| ----------------------- | --------------- | ------------ | ------ |
+| Post-processing samples | 21              | 12           | -43%   |
+| Total time              | 75.1ms          | 68.2ms       | -9.2%  |
+| Throughput              | 6.66M ops/s     | 7.33M ops/s  | +10%   |
+
+**Benchmark Results** (vs fftw-js):
+
+| Size  | Before | After  | Change                     |
+| ----- | ------ | ------ | -------------------------- |
+| N=64  | -12.5% | -4.2%  | **+8.3 percentage points** |
+| N=128 | -16.8% | -19.4% | (noise)                    |
+| N=256 | +20.4% | +20.7% | unchanged                  |
+
+**Result**: ✅ **SUCCESS**
+
+This simple one-line change dramatically improved N=64 performance by enabling SIMD post-processing. The N=128 variation is benchmark noise since that code path didn't change.
+
+**Files modified**:
+
+- `modules/fft_real_f32_dual.wat` - Changed SIMD threshold from 128 to 64
+
 ---
 
 ## Future Optimization Opportunities (Research Summary)
