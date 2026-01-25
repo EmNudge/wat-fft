@@ -4,28 +4,30 @@ Detailed record of all optimization experiments.
 
 ## Quick Reference
 
-| #   | Experiment                 | Result          | Key Finding                                   |
-| --- | -------------------------- | --------------- | --------------------------------------------- |
-| 1   | Dual-Complex f32 SIMD      | FAILURE -15-20% | Branch overhead, twiddle replication hurt JIT |
-| 2   | N=8 Codelet                | FAILURE         | Stockham permutation semantics complex        |
-| 3   | Radix-4 Stockham SIMD      | SUCCESS +51%    | Fewer stages + inlined SIMD crucial           |
-| 4   | N=16 Codelet               | SUCCESS +54%    | Unrolled with inline twiddles                 |
-| 5   | Real FFT + Radix-4         | SUCCESS         | Tests pass, faster rfft                       |
-| 6   | Codelet Generator          | PARTIAL         | Correct but 320+ locals cause spills          |
-| 7   | Inline SIMD cmul           | NO CHANGE       | V8 already inlines small functions            |
-| 8   | Fused rfft Codelets        | SUCCESS +123%   | N=8, N=32 fused codelets                      |
-| 9   | Hierarchical FFT           | SUCCESS +30pp   | DIF composition, optimal at N=1024            |
-| 10  | Depth-First DIF            | FAILURE -55%    | Call overhead > cache benefit                 |
-| 11  | SIMD Post-Processing       | SUCCESS +2-8pp  | v128 ops in rfft post-process                 |
-| 12  | Relaxed SIMD FMA           | SUCCESS +1-5%   | Modest gains, V8 optimizes well               |
-| 13  | f32 Dual-Complex rfft      | SUCCESS +73%    | Combined with dual-complex FFT                |
-| 14  | f32x4 SIMD Post-Process    | SUCCESS +13pp   | Process 2 pairs per iteration                 |
-| 15  | Fused FFT-64 Codelet       | SUCCESS +8%     | Eliminated 6 function calls                   |
-| 16  | f32 Small-N Codelets       | SUCCESS +50pp   | Fixed W_8^3 sign bug                          |
-| 16b | f32 FFT-64 Codelet         | SUCCESS +45pp   | N=128 now +30% vs fftw-js                     |
-| 17  | Bit-Reversal Permutation   | FAILURE         | Hierarchical DIF != standard bitrev           |
-| 18  | DIT Natural Order Codelets | SUCCESS +4%     | Loads bit-reversed, outputs natural           |
-| 19  | SIMD Threshold N=64        | SUCCESS +8pp    | Lowered threshold from 128 to 64              |
+| #   | Experiment                 | Result           | Key Finding                                   |
+| --- | -------------------------- | ---------------- | --------------------------------------------- |
+| 1   | Dual-Complex f32 SIMD      | FAILURE -15-20%  | Branch overhead, twiddle replication hurt JIT |
+| 2   | N=8 Codelet                | FAILURE          | Stockham permutation semantics complex        |
+| 3   | Radix-4 Stockham SIMD      | SUCCESS +51%     | Fewer stages + inlined SIMD crucial           |
+| 4   | N=16 Codelet               | SUCCESS +54%     | Unrolled with inline twiddles                 |
+| 5   | Real FFT + Radix-4         | SUCCESS          | Tests pass, faster rfft                       |
+| 6   | Codelet Generator          | PARTIAL          | Correct but 320+ locals cause spills          |
+| 7   | Inline SIMD cmul           | NO CHANGE        | V8 already inlines small functions            |
+| 8   | Fused rfft Codelets        | SUCCESS +123%    | N=8, N=32 fused codelets                      |
+| 9   | Hierarchical FFT           | SUCCESS +30pp    | DIF composition, optimal at N=1024            |
+| 10  | Depth-First DIF            | FAILURE -55%     | Call overhead > cache benefit                 |
+| 11  | SIMD Post-Processing       | SUCCESS +2-8pp   | v128 ops in rfft post-process                 |
+| 12  | Relaxed SIMD FMA           | SUCCESS +1-5%    | Modest gains, V8 optimizes well               |
+| 13  | f32 Dual-Complex rfft      | SUCCESS +73%     | Combined with dual-complex FFT                |
+| 14  | f32x4 SIMD Post-Process    | SUCCESS +13pp    | Process 2 pairs per iteration                 |
+| 15  | Fused FFT-64 Codelet       | SUCCESS +8%      | Eliminated 6 function calls                   |
+| 16  | f32 Small-N Codelets       | SUCCESS +50pp    | Fixed W_8^3 sign bug                          |
+| 16b | f32 FFT-64 Codelet         | SUCCESS +45pp    | N=128 now +30% vs fftw-js                     |
+| 17  | Bit-Reversal Permutation   | FAILURE          | Hierarchical DIF != standard bitrev           |
+| 18  | DIT Natural Order Codelets | SUCCESS +4%      | Loads bit-reversed, outputs natural           |
+| 19  | SIMD Threshold N=64        | SUCCESS +8pp     | Lowered threshold from 128 to 64              |
+| 20  | Dual-Complex r < 2         | SUCCESS +5-12pp  | Process r=2 stages with dual-complex SIMD     |
+| 21  | Dual-Group r=1 Stage       | SUCCESS +11-20pp | Process 2 groups at once, massive improvement |
 
 ---
 
@@ -253,3 +255,50 @@ Changed SIMD threshold from N >= 128 to N >= 64. Simple one-line change with dra
 | Size | Before | After |
 | ---- | ------ | ----- |
 | N=64 | -12.5% | -4.2% |
+
+---
+
+## Experiment 20: Dual-Complex Threshold r < 2 (2026-01-25)
+
+**Result**: SUCCESS - +5pp at N=128, +7-12pp at larger sizes
+
+Changed dual-complex processing threshold from `r < 4` to `r < 2` in fft_general. This allows the r=2 stage to use SIMD dual-complex processing (2 butterflies at once) instead of single-element processing.
+
+For r=2 stages, each group has 2 elements per half, which is enough for dual-complex vectorization.
+
+| Size   | Before | After  |
+| ------ | ------ | ------ |
+| N=128  | -17.3% | -12.1% |
+| N=256  | +20.1% | +27.4% |
+| N=512  | +2.9%  | +14.7% |
+| N=1024 | -6.5%  | -2.5%  |
+| N=2048 | -4.0%  | +7.7%  |
+| N=4096 | -3.1%  | -0.7%  |
+
+---
+
+## Experiment 21: Dual-Group Processing for r=1 Stage (2026-01-25)
+
+**Result**: MASSIVE SUCCESS - N=128 gap closed to -1%
+
+For the r=1 stage (final stage of Stockham FFT), redesigned the loop to process 2 groups at once instead of 1. This leverages the contiguous memory layout where two groups' inputs span 4 consecutive complex numbers (32 bytes = 2 v128 loads).
+
+Key insights:
+
+- Input pairs for 2 consecutive groups are at addresses (i0, i0+8) and (i0+16, i0+24)
+- Load both pairs with two v128.load operations
+- Shuffle to separate first and second elements: [A, C] and [B, D]
+- Load and combine twiddles for both groups
+- Process both butterflies with dual-complex multiply
+
+| Size   | Before | After  | Improvement |
+| ------ | ------ | ------ | ----------- |
+| N=64   | -6.7%  | -5.6%  | +1.1pp      |
+| N=128  | -12.1% | -0.6%  | +11.5pp     |
+| N=256  | +27.4% | +47.1% | +19.7pp     |
+| N=512  | +14.7% | +28.9% | +14.2pp     |
+| N=1024 | -2.5%  | +13.7% | +16.2pp     |
+| N=2048 | +7.7%  | +18.7% | +11.0pp     |
+| N=4096 | -0.7%  | +17.4% | +18.1pp     |
+
+**Combined result**: wat-fft f32 now beats fftw-js at all sizes N≥256, and is within 6% at N=64/128.

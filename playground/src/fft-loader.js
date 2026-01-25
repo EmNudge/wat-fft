@@ -294,10 +294,7 @@ function createJSFFTContext(module, size) {
     }
   } else if (library === "fft-js") {
     // fft-js uses array of [real, imag] pairs
-    const signal = new Array(size);
-    for (let i = 0; i < size; i++) {
-      signal[i] = [0, 0];
-    }
+    const signal = Array.from({ length: size }, () => [0, 0]);
     const complexInput = new Float64Array(size * 2);
     let outputPhasors = null;
 

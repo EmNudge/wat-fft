@@ -36,7 +36,7 @@ let currentMode = "spectrogram"; // "spectrogram" or "analyzer"
 
 // Live recorder state
 let liveRecorder = null;
-let recordTimeInterval = null;
+let _recordTimeInterval = null;
 
 // Sine wave components
 let sineComponents = [
@@ -550,7 +550,7 @@ async function startRecording() {
     liveRecorder.setFFTContext(fftContext);
 
     // Start recording
-    const result = await liveRecorder.start();
+    await liveRecorder.start();
 
     // Update UI
     elements.recordBtn.textContent = "Stop";

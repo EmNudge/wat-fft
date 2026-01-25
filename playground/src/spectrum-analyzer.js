@@ -7,7 +7,7 @@
  * - Mirrored: Symmetric visualization
  */
 
-import { WINDOW_FUNCTIONS, COLOR_SCALES } from "./spectrogram.js";
+import { WINDOW_FUNCTIONS } from "./spectrogram.js";
 
 /**
  * Spectrum Analyzer class
