@@ -85,6 +85,7 @@ const elements = {
   sampleFile: document.getElementById("sample-file"),
   audioFile: document.getElementById("audio-file"),
   canvas: document.getElementById("spectrogram"),
+  stretchIndicator: document.getElementById("stretch-indicator"),
   implName: document.getElementById("impl-name"),
   stats: {
     fftTime: document.getElementById("stat-fft-time"),
@@ -181,6 +182,7 @@ function positionFreqLabels() {
   const canvas = elements.canvas;
   const container = elements.canvasContainer;
   const labelsContainer = elements.freqLabels;
+  const stretchIndicator = elements.stretchIndicator;
 
   if (!canvas || !container || !labelsContainer) return;
 
@@ -195,25 +197,30 @@ function positionFreqLabels() {
 
   if (canvasWidth === 0 || canvasHeight === 0) return;
 
-  // Calculate the rendered size of the canvas (with object-fit: contain)
-  const containerAspect = containerWidth / containerHeight;
-  const canvasAspect = canvasWidth / canvasHeight;
+  // With object-fit: fill, the canvas fills the entire container
+  // Calculate stretch factors for each dimension
+  const stretchX = containerWidth / canvasWidth;
+  const stretchY = containerHeight / canvasHeight;
 
-  let renderedHeight, offsetY;
-
-  if (canvasAspect > containerAspect) {
-    // Canvas is wider than container - limited by width
-    renderedHeight = containerWidth / canvasAspect;
-    offsetY = (containerHeight - renderedHeight) / 2;
-  } else {
-    // Canvas is taller than container - limited by height
-    renderedHeight = containerHeight;
-    offsetY = 0;
+  // Update stretch indicator
+  if (stretchIndicator) {
+    // Determine which dimension is stretched more relative to the other
+    const aspectRatio = stretchX / stretchY;
+    if (Math.abs(aspectRatio - 1) < 0.01) {
+      // Essentially uniform scaling
+      stretchIndicator.textContent = "";
+    } else if (aspectRatio > 1) {
+      // Stretched horizontally
+      stretchIndicator.textContent = `H: ${aspectRatio.toFixed(2)}x`;
+    } else {
+      // Stretched vertically
+      stretchIndicator.textContent = `V: ${(1 / aspectRatio).toFixed(2)}x`;
+    }
   }
 
-  // Position the labels container
-  labelsContainer.style.top = offsetY + "px";
-  labelsContainer.style.height = renderedHeight + "px";
+  // Position the labels container (fills entire height with object-fit: fill)
+  labelsContainer.style.top = "0px";
+  labelsContainer.style.height = containerHeight + "px";
 
   // Position each label according to frequency scale
   const labels = labelsContainer.querySelectorAll(".freq-label");
@@ -242,7 +249,7 @@ function positionFreqLabels() {
     }
 
     // Convert to pixel position with padding
-    const usableHeight = renderedHeight - padding * 2;
+    const usableHeight = containerHeight - padding * 2;
     const pixelPos = padding + position * usableHeight;
 
     label.style.position = "absolute";

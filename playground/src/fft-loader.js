@@ -99,13 +99,6 @@ const JS_MODULES = {
     isWatFft: false,
     library: "fft-js",
   },
-  fftw: {
-    name: "FFTW",
-    desc: "WASM port",
-    isReal: false,
-    isWatFft: false,
-    library: "fftw",
-  },
   fftw_real: {
     name: "FFTW Real",
     desc: "WASM real",
@@ -345,71 +338,39 @@ function createJSFFTContext(module, size) {
     };
   } else if (library === "fftw") {
     // FFTW context - uses pre-loaded module
+    // Note: fftw-js only has real-to-complex FFT (FFT class) and real-to-real halfcomplex (RFFT class)
+    // We use FFT class (r2c) for all options since it outputs interleaved complex which
+    // is compatible with the spectrogram's computeMagnitude function
     const fftw = module._fftw;
+    const realInput = new Float32Array(size);
+    let output = null;
 
-    if (config.isReal) {
-      // Real FFT
-      const realInput = new Float32Array(size);
-      let output = null;
+    return {
+      module,
+      size,
+      inputSize: size,
+      outputSize: (size / 2 + 1) * 2,
+      ArrayType: Float32Array,
+      isReal: true,
+      _realInput: realInput,
+      _fft: new fftw.FFT(size),
 
-      return {
-        module,
-        size,
-        inputSize: size,
-        outputSize: (size / 2 + 1) * 2,
-        ArrayType: Float32Array,
-        isReal: true,
-        _realInput: realInput,
-        _rfft: new fftw.RFFT(size),
+      getInputBuffer() {
+        return this._realInput;
+      },
 
-        getInputBuffer() {
-          return this._realInput;
-        },
+      getOutputBuffer() {
+        return output || new Float32Array((size / 2 + 1) * 2);
+      },
 
-        getOutputBuffer() {
-          return output || new Float32Array((size / 2 + 1) * 2);
-        },
+      run() {
+        output = this._fft.forward(this._realInput);
+      },
 
-        run() {
-          output = this._rfft.forward(this._realInput);
-        },
-
-        dispose() {
-          this._rfft.dispose();
-        },
-      };
-    } else {
-      // Complex FFT
-      const complexInput = new Float32Array(size * 2);
-      let output = null;
-
-      return {
-        module,
-        size,
-        inputSize: size * 2,
-        outputSize: size * 2,
-        ArrayType: Float32Array,
-        isReal: false,
-        _complexInput: complexInput,
-        _fft: new fftw.FFT(size),
-
-        getInputBuffer() {
-          return this._complexInput;
-        },
-
-        getOutputBuffer() {
-          return output || new Float32Array(size * 2);
-        },
-
-        run() {
-          output = this._fft.forward(this._complexInput);
-        },
-
-        dispose() {
-          this._fft.dispose();
-        },
-      };
-    }
+      dispose() {
+        this._fft.dispose();
+      },
+    };
   } else if (library === "kissfft") {
     const fftInstance = new kissfft.FFT(size);
     const complexInput = new Float64Array(size * 2);
