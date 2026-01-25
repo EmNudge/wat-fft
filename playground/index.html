@@ -258,23 +258,20 @@
       .freq-labels {
         position: absolute;
         left: 8px;
-        top: 0;
-        bottom: 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        padding: 10px 0;
         pointer-events: none;
         z-index: 1;
       }
 
       .freq-label {
-        font-size: 11px;
+        position: absolute;
+        left: 0;
+        font-size: 10px;
         font-family: monospace;
-        color: rgba(255, 255, 255, 0.8);
-        background: rgba(0, 0, 0, 0.5);
-        padding: 2px 6px;
+        color: rgba(255, 255, 255, 0.9);
+        background: rgba(0, 0, 0, 0.6);
+        padding: 1px 5px;
         border-radius: 3px;
+        white-space: nowrap;
       }
 
       canvas {
@@ -580,6 +577,107 @@
         color: #666;
         margin: 8px 0 0 0;
       }
+
+      /* Mode toggle (top-level switch) */
+      .mode-toggle {
+        display: flex;
+        gap: 0;
+        margin-bottom: 15px;
+        background: #0a0a1a;
+        border-radius: 8px;
+        padding: 4px;
+        border: 2px solid #333;
+      }
+
+      .mode-option {
+        flex: 1;
+        padding: 10px 12px;
+        text-align: center;
+        font-size: 13px;
+        font-weight: bold;
+        color: #888;
+        background: transparent;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .mode-option:hover {
+        color: #ccc;
+        background: rgba(255, 255, 255, 0.05);
+      }
+
+      .mode-option.selected {
+        color: #1a1a2e;
+        background: #4ade80;
+      }
+
+      /* Recording controls */
+      .record-buttons {
+        display: flex;
+        gap: 8px;
+      }
+
+      .record-buttons button {
+        flex: 1;
+      }
+
+      .record-btn {
+        background: #ef4444 !important;
+      }
+
+      .record-btn:hover {
+        background: #dc2626 !important;
+      }
+
+      .record-btn.recording {
+        background: #666 !important;
+        animation: pulse-record 1s infinite;
+      }
+
+      @keyframes pulse-record {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.7;
+        }
+      }
+
+      .record-status {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 10px;
+        font-family: monospace;
+        font-size: 18px;
+        color: #4ade80;
+      }
+
+      .record-indicator {
+        width: 12px;
+        height: 12px;
+        background: #ef4444;
+        border-radius: 50%;
+        animation: blink 1s infinite;
+      }
+
+      .record-indicator.paused {
+        animation: none;
+        background: #f59e0b;
+      }
+
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
     </style>
   </head>
   <body>
@@ -590,189 +688,322 @@
         <h1>wat-fft Playground</h1>
         <p class="subtitle">Real-time FFT performance comparison</p>
 
-        <div class="tabs">
-          <button class="tab active" data-tab="fft">FFT</button>
-          <button class="tab" data-tab="audio">Audio</button>
+        <div class="mode-toggle" id="mode-toggle">
+          <div class="mode-option selected" data-mode="spectrogram">Spectrogram</div>
+          <div class="mode-option" data-mode="analyzer">Live Analyzer</div>
         </div>
 
-        <!-- FFT Tab -->
-        <div class="tab-content active" id="tab-fft">
+        <div id="spectrogram-mode">
+          <div class="tabs">
+            <button class="tab active" data-tab="fft">FFT</button>
+            <button class="tab" data-tab="audio">Audio</button>
+          </div>
+
+          <!-- FFT Tab -->
+          <div class="tab-content active" id="tab-fft">
+            <h2>Implementation</h2>
+            <div class="fft-selector" id="fft-selector">
+              <div class="fft-group-label">wat-fft (this project)</div>
+              <div class="fft-option selected" data-fft="combined">
+                <span class="name">Combined</span>
+                <span class="desc">f64 auto</span>
+              </div>
+              <div class="fft-option" data-fft="combined_stockham">
+                <span class="name">Stockham</span>
+                <span class="desc">f64 SIMD</span>
+              </div>
+              <div class="fft-option" data-fft="f32_dual">
+                <span class="name">f32 Dual</span>
+                <span class="desc">fastest</span>
+              </div>
+              <div class="fft-option" data-fft="real_combined">
+                <span class="name">Real FFT</span>
+                <span class="desc">f64 real</span>
+              </div>
+              <div class="fft-option" data-fft="real_f32_dual">
+                <span class="name">Real f32</span>
+                <span class="desc">fast real</span>
+              </div>
+
+              <div class="fft-group-label alt">Alternatives</div>
+              <div class="fft-option alt" data-fft="fftjs">
+                <span class="name">fft.js</span>
+                <span class="desc">JS radix-4</span>
+              </div>
+              <div class="fft-option alt" data-fft="fftjs_real">
+                <span class="name">fft.js Real</span>
+                <span class="desc">JS real</span>
+              </div>
+              <div class="fft-option alt" data-fft="fft_js">
+                <span class="name">fft-js</span>
+                <span class="desc">JS Cooley-Tukey</span>
+              </div>
+              <div class="fft-option alt" data-fft="fftw">
+                <span class="name">FFTW</span>
+                <span class="desc">WASM port</span>
+              </div>
+              <div class="fft-option alt" data-fft="fftw_real">
+                <span class="name">FFTW Real</span>
+                <span class="desc">WASM real</span>
+              </div>
+              <div class="fft-option alt" data-fft="kissfft">
+                <span class="name">KissFFT</span>
+                <span class="desc">WASM port</span>
+              </div>
+            </div>
+
+            <h2>Spectrogram</h2>
+            <div class="controls">
+              <div class="slider-row">
+                <label>FFT Size</label>
+                <input type="range" id="fft-size" min="8" max="13" value="10" step="1" />
+                <span class="slider-value" id="fft-size-value">1024</span>
+              </div>
+              <div class="slider-row">
+                <label>Hop Size</label>
+                <input type="range" id="hop-size" min="5" max="10" value="7" step="1" />
+                <span class="slider-value" id="hop-size-value">128</span>
+              </div>
+              <div class="slider-row">
+                <label>Zero Pad</label>
+                <input type="range" id="zero-padding" min="0" max="2" value="1" step="1" />
+                <span class="slider-value" id="zero-padding-value">2x</span>
+              </div>
+            </div>
+
+            <h2>Window</h2>
+            <div class="controls">
+              <select id="window-type">
+                <option value="hann" selected>Hann</option>
+                <option value="hamming">Hamming</option>
+                <option value="blackman">Blackman</option>
+                <option value="blackmanHarris">Blackman-Harris</option>
+                <option value="rectangular">Rectangular</option>
+              </select>
+            </div>
+
+            <h2>Display</h2>
+            <div class="controls">
+              <div class="slider-row">
+                <label>Gain (dB)</label>
+                <input type="range" id="gain" min="-60" max="0" value="-20" step="1" />
+                <span class="slider-value" id="gain-value">-20 dB</span>
+              </div>
+              <div class="slider-row">
+                <label>Range (dB)</label>
+                <input type="range" id="range" min="20" max="120" value="80" step="5" />
+                <span class="slider-value" id="range-value">80 dB</span>
+              </div>
+            </div>
+
+            <h2>Freq Scale</h2>
+            <div class="controls">
+              <div class="color-row" id="freq-scale-selector">
+                <div class="color-option" data-scale="linear">Linear</div>
+                <div class="color-option selected" data-scale="log">Log</div>
+                <div class="color-option" data-scale="mel">Mel</div>
+              </div>
+              <div class="slider-row" style="margin-top: 8px">
+                <label>Min Freq</label>
+                <input type="range" id="min-freq" min="20" max="500" value="50" step="10" />
+                <span class="slider-value" id="min-freq-value">50 Hz</span>
+              </div>
+              <div class="slider-row">
+                <label>Max Freq</label>
+                <input type="range" id="max-freq" min="1000" max="22050" value="8000" step="500" />
+                <span class="slider-value" id="max-freq-value">8 kHz</span>
+              </div>
+              <button id="auto-freq" class="secondary small" style="margin-top: 6px; width: 100%">
+                Auto-detect Range
+              </button>
+            </div>
+
+            <h2>Colors</h2>
+            <div class="controls">
+              <div class="color-row" id="color-selector">
+                <div class="color-option selected" data-color="magma">Magma</div>
+                <div class="color-option" data-color="inferno">Inferno</div>
+                <div class="color-option" data-color="viridis">Viridis</div>
+              </div>
+              <div class="color-row" style="margin-top: 6px">
+                <div class="color-option" data-color="hot">Hot</div>
+                <div class="color-option" data-color="grayscale">Gray</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Audio Tab -->
+          <div class="tab-content" id="tab-audio">
+            <h2>Source Type</h2>
+            <div class="source-toggle" id="source-toggle">
+              <div class="source-option selected" data-source="synthetic">Synthetic</div>
+              <div class="source-option" data-source="file">File</div>
+              <div class="source-option" data-source="record">Record</div>
+            </div>
+
+            <div id="record-controls" class="hidden">
+              <h2>Microphone Recording</h2>
+              <div class="controls">
+                <div class="record-buttons">
+                  <button id="record-btn" class="record-btn">Record</button>
+                  <button id="pause-btn" class="secondary" disabled>Pause</button>
+                </div>
+                <div class="record-status">
+                  <span id="record-time">0:00</span>
+                  <span id="record-indicator" class="record-indicator hidden"></span>
+                </div>
+                <p class="file-hint" id="record-hint">Click Record to start capturing audio</p>
+              </div>
+            </div>
+
+            <div id="synthetic-controls">
+              <h2>Generation</h2>
+              <div class="controls">
+                <div class="slider-row">
+                  <label>Duration</label>
+                  <input type="range" id="duration" min="0.5" max="5" value="2" step="0.25" />
+                  <span class="slider-value" id="duration-value">2.0s</span>
+                </div>
+                <div class="slider-row">
+                  <label>Sample Rate</label>
+                  <input type="range" id="sample-rate" min="0" max="2" value="1" step="1" />
+                  <span class="slider-value" id="sample-rate-value">44.1k</span>
+                </div>
+              </div>
+
+              <h2>Sine Waves</h2>
+              <div class="sine-components" id="sine-components"></div>
+              <div class="add-sine-row">
+                <button id="add-sine" class="secondary small">+ Add Wave</button>
+                <button id="add-harmonic" class="secondary small">+ Harmonic</button>
+              </div>
+            </div>
+
+            <div id="file-controls" class="hidden">
+              <div id="sample-file-section">
+                <h2>Sample Files</h2>
+                <div class="controls">
+                  <select id="sample-file">
+                    <option value="">-- Select a sample --</option>
+                  </select>
+                </div>
+              </div>
+
+              <h2>Or Upload</h2>
+              <div class="controls">
+                <input type="file" id="audio-file" accept="audio/*" />
+                <p class="file-hint">Supports WAV, MP3, OGG, FLAC</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Analyzer Mode -->
+        <div id="analyzer-mode" class="hidden">
+          <h2>Microphone</h2>
+          <div class="controls">
+            <button id="analyzer-toggle" style="width: 100%">Start Microphone</button>
+            <p class="file-hint" id="analyzer-status">Click to start real-time analysis</p>
+          </div>
+
           <h2>Implementation</h2>
-          <div class="fft-selector" id="fft-selector">
+          <div class="fft-selector" id="analyzer-fft-selector">
             <div class="fft-group-label">wat-fft (this project)</div>
-            <div class="fft-option selected" data-fft="combined">
-              <span class="name">Combined</span>
-              <span class="desc">f64 auto</span>
-            </div>
-            <div class="fft-option" data-fft="combined_stockham">
-              <span class="name">Stockham</span>
-              <span class="desc">f64 SIMD</span>
-            </div>
-            <div class="fft-option" data-fft="f32_dual">
-              <span class="name">f32 Dual</span>
+            <div class="fft-option selected" data-fft="real_f32_dual">
+              <span class="name">Real f32</span>
               <span class="desc">fastest</span>
             </div>
             <div class="fft-option" data-fft="real_combined">
               <span class="name">Real FFT</span>
               <span class="desc">f64 real</span>
             </div>
-            <div class="fft-option" data-fft="real_f32_dual">
-              <span class="name">Real f32</span>
-              <span class="desc">fast real</span>
+            <div class="fft-option" data-fft="f32_dual">
+              <span class="name">f32 Dual</span>
+              <span class="desc">complex</span>
+            </div>
+            <div class="fft-option" data-fft="combined">
+              <span class="name">Combined</span>
+              <span class="desc">f64 auto</span>
             </div>
 
             <div class="fft-group-label alt">Alternatives</div>
-            <div class="fft-option alt" data-fft="fftjs">
-              <span class="name">fft.js</span>
-              <span class="desc">JS radix-4</span>
-            </div>
             <div class="fft-option alt" data-fft="fftjs_real">
               <span class="name">fft.js Real</span>
               <span class="desc">JS real</span>
-            </div>
-            <div class="fft-option alt" data-fft="fft_js">
-              <span class="name">fft-js</span>
-              <span class="desc">JS Cooley-Tukey</span>
-            </div>
-            <div class="fft-option alt" data-fft="fftw">
-              <span class="name">FFTW</span>
-              <span class="desc">WASM port</span>
             </div>
             <div class="fft-option alt" data-fft="fftw_real">
               <span class="name">FFTW Real</span>
               <span class="desc">WASM real</span>
             </div>
-            <div class="fft-option alt" data-fft="kissfft">
-              <span class="name">KissFFT</span>
-              <span class="desc">WASM port</span>
+          </div>
+
+          <h2>Display Mode</h2>
+          <div class="controls">
+            <div class="color-row" id="display-mode-selector">
+              <div class="color-option selected" data-mode="bars">Bars</div>
+              <div class="color-option" data-mode="curve">Curve</div>
+              <div class="color-option" data-mode="mirrored">Mirror</div>
             </div>
           </div>
 
-          <h2>Spectrogram</h2>
+          <h2>Color Scheme</h2>
+          <div class="controls">
+            <div class="color-row" id="analyzer-color-selector">
+              <div class="color-option selected" data-color="gradient">Rainbow</div>
+              <div class="color-option" data-color="green">Green</div>
+            </div>
+            <div class="color-row" style="margin-top: 6px">
+              <div class="color-option" data-color="blue">Blue</div>
+              <div class="color-option" data-color="fire">Fire</div>
+            </div>
+          </div>
+
+          <h2>FFT Settings</h2>
           <div class="controls">
             <div class="slider-row">
               <label>FFT Size</label>
-              <input type="range" id="fft-size" min="8" max="13" value="10" step="1" />
-              <span class="slider-value" id="fft-size-value">1024</span>
+              <input type="range" id="analyzer-fft-size" min="9" max="13" value="11" step="1" />
+              <span class="slider-value" id="analyzer-fft-size-value">2048</span>
             </div>
             <div class="slider-row">
-              <label>Hop Size</label>
-              <input type="range" id="hop-size" min="5" max="10" value="7" step="1" />
-              <span class="slider-value" id="hop-size-value">128</span>
-            </div>
-            <div class="slider-row">
-              <label>Zero Pad</label>
-              <input type="range" id="zero-padding" min="0" max="2" value="1" step="1" />
-              <span class="slider-value" id="zero-padding-value">2x</span>
+              <label>Smoothing</label>
+              <input type="range" id="analyzer-smoothing" min="0" max="95" value="80" step="5" />
+              <span class="slider-value" id="analyzer-smoothing-value">80%</span>
             </div>
           </div>
 
-          <h2>Window</h2>
-          <div class="controls">
-            <select id="window-type">
-              <option value="hann" selected>Hann</option>
-              <option value="hamming">Hamming</option>
-              <option value="blackman">Blackman</option>
-              <option value="blackmanHarris">Blackman-Harris</option>
-              <option value="rectangular">Rectangular</option>
-            </select>
-          </div>
-
-          <h2>Display</h2>
+          <h2>Frequency Range</h2>
           <div class="controls">
             <div class="slider-row">
-              <label>Gain (dB)</label>
-              <input type="range" id="gain" min="-60" max="0" value="-20" step="1" />
-              <span class="slider-value" id="gain-value">-20 dB</span>
-            </div>
-            <div class="slider-row">
-              <label>Range (dB)</label>
-              <input type="range" id="range" min="20" max="120" value="80" step="5" />
-              <span class="slider-value" id="range-value">80 dB</span>
-            </div>
-          </div>
-
-          <h2>Freq Scale</h2>
-          <div class="controls">
-            <div class="color-row" id="freq-scale-selector">
-              <div class="color-option" data-scale="linear">Linear</div>
-              <div class="color-option selected" data-scale="log">Log</div>
-              <div class="color-option" data-scale="mel">Mel</div>
-            </div>
-            <div class="slider-row" style="margin-top: 8px">
               <label>Min Freq</label>
-              <input type="range" id="min-freq" min="20" max="500" value="50" step="10" />
-              <span class="slider-value" id="min-freq-value">50 Hz</span>
+              <input type="range" id="analyzer-min-freq" min="20" max="500" value="20" step="10" />
+              <span class="slider-value" id="analyzer-min-freq-value">20 Hz</span>
             </div>
             <div class="slider-row">
               <label>Max Freq</label>
-              <input type="range" id="max-freq" min="1000" max="22050" value="8000" step="500" />
-              <span class="slider-value" id="max-freq-value">8 kHz</span>
+              <input
+                type="range"
+                id="analyzer-max-freq"
+                min="5000"
+                max="22050"
+                value="20000"
+                step="1000"
+              />
+              <span class="slider-value" id="analyzer-max-freq-value">20 kHz</span>
             </div>
-            <button id="auto-freq" class="secondary small" style="margin-top: 6px; width: 100%">
-              Auto-detect Range
-            </button>
           </div>
 
-          <h2>Colors</h2>
+          <h2>Sensitivity</h2>
           <div class="controls">
-            <div class="color-row" id="color-selector">
-              <div class="color-option selected" data-color="magma">Magma</div>
-              <div class="color-option" data-color="inferno">Inferno</div>
-              <div class="color-option" data-color="viridis">Viridis</div>
+            <div class="slider-row">
+              <label>Floor (dB)</label>
+              <input type="range" id="analyzer-min-db" min="-120" max="-40" value="-90" step="5" />
+              <span class="slider-value" id="analyzer-min-db-value">-90 dB</span>
             </div>
-            <div class="color-row" style="margin-top: 6px">
-              <div class="color-option" data-color="hot">Hot</div>
-              <div class="color-option" data-color="grayscale">Gray</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Audio Tab -->
-        <div class="tab-content" id="tab-audio">
-          <h2>Source Type</h2>
-          <div class="source-toggle" id="source-toggle">
-            <div class="source-option selected" data-source="synthetic">Synthetic</div>
-            <div class="source-option" data-source="file">Audio File</div>
-          </div>
-
-          <div id="synthetic-controls">
-            <h2>Generation</h2>
-            <div class="controls">
-              <div class="slider-row">
-                <label>Duration</label>
-                <input type="range" id="duration" min="0.5" max="5" value="2" step="0.25" />
-                <span class="slider-value" id="duration-value">2.0s</span>
-              </div>
-              <div class="slider-row">
-                <label>Sample Rate</label>
-                <input type="range" id="sample-rate" min="0" max="2" value="1" step="1" />
-                <span class="slider-value" id="sample-rate-value">44.1k</span>
-              </div>
-            </div>
-
-            <h2>Sine Waves</h2>
-            <div class="sine-components" id="sine-components"></div>
-            <div class="add-sine-row">
-              <button id="add-sine" class="secondary small">+ Add Wave</button>
-              <button id="add-harmonic" class="secondary small">+ Harmonic</button>
-            </div>
-          </div>
-
-          <div id="file-controls" class="hidden">
-            <div id="sample-file-section">
-              <h2>Sample Files</h2>
-              <div class="controls">
-                <select id="sample-file">
-                  <option value="">-- Select a sample --</option>
-                </select>
-              </div>
-            </div>
-
-            <h2>Or Upload</h2>
-            <div class="controls">
-              <input type="file" id="audio-file" accept="audio/*" />
-              <p class="file-hint">Supports WAV, MP3, OGG, FLAC</p>
+            <div class="slider-row">
+              <label>Ceiling (dB)</label>
+              <input type="range" id="analyzer-max-db" min="-30" max="0" value="-10" step="5" />
+              <span class="slider-value" id="analyzer-max-db-value">-10 dB</span>
             </div>
           </div>
         </div>
@@ -782,10 +1013,7 @@
 
       <main class="main">
         <div class="canvas-container">
-          <div class="freq-labels">
-            <span class="freq-label top" id="freq-label-top">8 kHz</span>
-            <span class="freq-label bottom" id="freq-label-bottom">50 Hz</span>
-          </div>
+          <div class="freq-labels" id="freq-labels"></div>
           <canvas id="spectrogram" width="1024" height="512"></canvas>
         </div>
 
