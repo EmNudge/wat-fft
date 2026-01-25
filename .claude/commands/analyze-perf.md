@@ -1,96 +1,154 @@
 # Performance Analysis Command
 
-Analyze wat-fft performance benchmarks, identify where we lose to competitors, and suggest optimization strategies.
+Analyze wat-fft performance, identify gaps vs competitors, and optionally implement optimizations.
 
-## Your Task
+## Arguments
 
-You are a performance optimization expert analyzing the wat-fft WebAssembly FFT library. Your goal is to:
+- `--implement` or `-i`: After analysis, implement the top-priority optimization
+- `--quick` or `-q`: Skip benchmarks, use cached results from docs
+- No args: Full analysis with fresh benchmarks
 
-1. **Understand current performance** by running benchmarks
-2. **Identify gaps** where competitors (fftw-js, fft.js) beat us
-3. **Analyze root causes** using profiling tools
-4. **Propose concrete optimizations** based on experiment history
+## Quick Start
 
-## Documentation to Read First
+1. **Build**: `npm run build`
+2. **Run main benchmark**: `npm run bench:rfft32` (f32 RFFT vs fftw-js)
+3. **Analyze results** and propose optimizations
 
-Read these files in order to understand context:
+## Key Context (Don't Re-read Unless Needed)
 
-1. **docs/OPTIMIZATION_PLAN.md** - Overview of what worked/failed, current status
-2. **docs/optimization/EXPERIMENT_LOG.md** - Detailed experiment history (check before suggesting something already tried)
-3. **docs/optimization/COMPLETED_PRIORITIES.md** - What's already implemented
-4. **docs/optimization/FUTURE_PRIORITIES.md** - Research done but not implemented
-5. **benchmarks/README.md** - How to run benchmarks and interpret results
+**Current Status** (from OPTIMIZATION_PLAN.md):
 
-## Available Tools
+- f32 RFFT: Beats fftw-js at N≥256 (+13-49%), loses at N=64 (-7%), N=128 (-3%)
+- Complex FFT: Beats fft.js by +40-90% at all sizes
+- f64 RFFT: Loses to fftw-js (expected - f64x2 vs f32x4 SIMD)
 
-### Benchmarking (run `npm run build` first!)
+**What Already Failed** (from EXPERIMENT_LOG.md):
 
-| Command                | What it measures                                |
-| ---------------------- | ----------------------------------------------- |
-| `npm run bench`        | Complex FFT (f64) vs fft.js, fft-js, kissfft-js |
-| `npm run bench:rfft`   | Real FFT (f64) vs fftw-js, kissfft-js           |
-| `npm run bench:f32`    | Complex FFT (f32) vs fft.js                     |
-| `npm run bench:rfft32` | Real FFT (f32) vs fftw-js - **main competitor** |
+- Depth-first recursive: -55% (call overhead)
+- Large codelets (N>32): Register spills (300+ locals)
+- Manual function inlining: No gain (V8 already inlines)
+- Hierarchical beyond N=1024: I-cache thrashing
 
-### Debug Tools (in tools/ directory)
+**Key Constraints**:
 
-| Tool                       | Purpose                         | Command                            |
-| -------------------------- | ------------------------------- | ---------------------------------- |
-| `stockham_reference.js`    | JS reference with stage logging | `npm run debug:ref -- 16 -v`       |
-| `index_visualizer.js`      | Show read/write patterns        | `npm run debug:index -- 32 verify` |
-| `wasm_compare.js`          | Compare WASM vs JS vs DFT       | `npm run debug:stockham -- multi`  |
-| `butterfly_tester.js`      | Test butterfly math             | `npm run test:butterfly`           |
-| `permutation_validator.js` | Validate data flow              | `npm run debug:perm -- 16`         |
-
-### V8 Profiling
-
-```bash
-# Generate V8 profile
-node --prof benchmarks/rfft_f32_dual.bench.js
-node --prof-process isolate-*.log > profile.txt
-
-# Flamegraph with 0x
-npx 0x benchmarks/rfft_f32_dual.bench.js
-```
+- Optimal codelet ceiling: N=1024
+- Keep codelets small: N ≤ 16 to avoid register spills
+- f32 gives 2x SIMD throughput vs f64
 
 ## Analysis Workflow
 
-1. **Build the project**: `npm run build`
+### Step 1: Run Benchmarks (skip with --quick)
 
-2. **Run benchmarks** to get current performance data:
-   - `npm run bench:rfft32` (our main competition is fftw-js for real FFT)
-   - `npm run bench` (complex FFT vs fft.js)
+```bash
+npm run build && npm run bench:rfft32
+```
 
-3. **Identify problem sizes**: Note which N values we lose at
+Focus on f32 RFFT - this is where we compete with fftw-js.
 
-4. **Read experiment history**: Check if the optimization was already tried in EXPERIMENT_LOG.md
+### Step 2: Identify Gaps
 
-5. **Profile if needed**: Use V8 profiling to find bottlenecks
+Look for sizes where we lose. Currently:
 
-6. **Cross-reference with FFTW_ANALYSIS.md**: Understand why FFTW is fast
+- N=64: ~-7% vs fftw-js
+- N=128: ~-3% vs fftw-js
 
-7. **Propose optimizations** with:
-   - Specific hypothesis
-   - Which sizes would improve
-   - Implementation approach
-   - Expected gains
-   - Risks (check what failed before)
+### Step 3: Propose Optimizations
 
-## Key Constraints
+For each gap, propose a fix with:
 
-- **Optimal codelet ceiling is N=1024** - Beyond this, simple loops beat hierarchical composition
-- **Keep codelets small (N <= 16)** - Large codelets cause register spills
-- **V8 already inlines small functions** - Manual inlining rarely helps
-- **f32 gives ~2x SIMD throughput** - This is fftw-js's main advantage
+- **Hypothesis**: Why we're slow
+- **Approach**: Specific code changes
+- **Expected gain**: Based on similar experiments
+- **Risk**: What could go wrong
+
+### Step 4: Implement (if --implement flag)
+
+After analysis, implement the top optimization:
+
+1. Create a new experiment branch
+2. Modify the relevant WAT module
+3. Run `npm run build && npm run bench:rfft32`
+4. Compare before/after
+5. If successful:
+   - Add entry to EXPERIMENT_LOG.md
+   - Update OPTIMIZATION_PLAN.md if metrics changed
+   - Commit with descriptive message
 
 ## Output Format
 
-Provide a structured analysis with:
+```markdown
+# Performance Analysis
 
-1. **Current Performance Summary** - Table of benchmark results
-2. **Gap Analysis** - Where we lose and by how much
-3. **Root Cause Analysis** - Why we lose at those sizes
-4. **Optimization Recommendations** - Ranked by expected impact
-5. **Implementation Plan** - Concrete next steps
+## Benchmark Results
 
-Focus on actionable insights, not general advice.
+[Table of current performance]
+
+## Gap Analysis
+
+[Where we lose and by how much]
+
+## Top Optimization Opportunity
+
+**Target**: [Size and gap]
+**Hypothesis**: [Why we're slow]
+**Approach**: [Specific changes]
+**Expected Gain**: [Estimate]
+**Files to Modify**: [List]
+
+## Implementation Plan
+
+[Step-by-step if --implement]
+```
+
+## Implementation Guidelines
+
+When implementing optimizations:
+
+1. **Measure first**: Get baseline numbers before changing anything
+2. **Change one thing**: Don't combine multiple optimizations
+3. **Test correctness**: Run `npm test` after changes
+4. **Benchmark thoroughly**: Run benchmark 2-3 times for stable results
+5. **Document everything**: Update EXPERIMENT_LOG.md with results
+
+### Common Optimization Patterns
+
+**Fused codelets** (Experiments 8, 15, 16b):
+
+- Combine FFT + post-processing into single function
+- Eliminate function call overhead
+- Hardcode twiddle factors
+
+**Dual-complex processing** (Experiments 13, 14, 20, 21):
+
+- Process 2 f32 complex numbers per v128
+- Requires restructuring loops and shuffles
+- Best gains at larger N
+
+**SIMD threshold tuning** (Experiment 19):
+
+- Simple one-line changes can have big impact
+- Lower thresholds to use SIMD at smaller N
+
+### Files Reference
+
+| File                                  | Purpose                      |
+| ------------------------------------- | ---------------------------- |
+| `modules/fft_real_f32_dual.wat`       | Main f32 RFFT implementation |
+| `modules/fft_stockham_f32_dual.wat`   | f32 complex FFT              |
+| `benchmarks/rfft_f32_dual.bench.js`   | RFFT benchmark               |
+| `docs/optimization/EXPERIMENT_LOG.md` | Record results here          |
+
+## Profiling Commands
+
+```bash
+# V8 profile
+node --prof benchmarks/rfft_f32_dual.bench.js
+node --prof-process isolate-*.log > profile.txt
+
+# Quick size-specific test
+node -e "
+const fft = require('./dist/fft_real_f32_dual.js');
+const N = 64;
+for(let i=0; i<1000000; i++) fft.rfft(new Float32Array(N));
+"
+```

@@ -4769,26 +4769,20 @@
     ;; Use DIT codelets for small sizes - they load bit-reversed and output natural order.
     ;; This is compatible with RFFT post-processing.
     ;;
-    ;; fft_4: outputs natural order (DIF happens to produce natural order for N=4)
-    ;; fft_8_dit: DIT codelet that loads bit-reversed, outputs natural order
-    ;; fft_16_dit: DIT codelet that loads bit-reversed, outputs natural order
-    ;; fft_32_dit: DIT codelet that loads bit-reversed, outputs natural order (GENERATED)
-    (if (i32.eq (local.get $n) (i32.const 4))
+    ;; Note: Dispatch order doesn't significantly affect performance (tested).
+    ;; The gap at N=64/128 vs fftw-js is within benchmark variance (~3-5%).
+    (if (i32.le_u (local.get $n) (i32.const 32))
       (then
+        (if (i32.eq (local.get $n) (i32.const 32))
+          (then (call $fft_32_dit) (return)))
+        (if (i32.eq (local.get $n) (i32.const 16))
+          (then (call $fft_16_dit) (return)))
+        (if (i32.eq (local.get $n) (i32.const 8))
+          (then (call $fft_8_dit) (return)))
         (call $fft_4)
-        (return)))
-    (if (i32.eq (local.get $n) (i32.const 8))
-      (then
-        (call $fft_8_dit)
-        (return)))
-    (if (i32.eq (local.get $n) (i32.const 16))
-      (then
-        (call $fft_16_dit)
-        (return)))
-    (if (i32.eq (local.get $n) (i32.const 32))
-      (then
-        (call $fft_32_dit)
-        (return)))
+        (return)
+      )
+    )
     ;; N>=64: Fall back to Stockham (fft_64_dit has too many locals, causing register spills)
     (call $fft_general (local.get $n))
   )
@@ -4843,7 +4837,7 @@
     (call $fft (local.get $n2))
 
     ;; Step 2: Post-processing
-    ;; Use SIMD for N >= 64 (n2 >= 32, need at least ~14 pairs for SIMD loop)
+    ;; Use SIMD for N >= 64 (n2 >= 32)
     (if (i32.ge_u (local.get $n) (i32.const 64))
       (then
         (call $rfft_postprocess_simd (local.get $n2))
