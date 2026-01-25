@@ -314,7 +314,3264 @@
 
 
   ;; ============================================================================
-  ;; N=16 Dual-Complex Kernel
+  ;; N=8 DIT Codelet (Natural Order Output)
+  ;; ============================================================================
+  ;; Uses Decimation in Time with bit-reversed INPUT loading.
+  ;; Produces NATURAL ORDER output (compatible with RFFT post-processing).
+  ;;
+  ;; DIT algorithm:
+  ;; - Load in bit-reversed order: positions 0,4,2,6,1,5,3,7
+  ;; - Stage 1 (span 1): butterflies with W_2^0 = 1
+  ;; - Stage 2 (span 2): butterflies with W_4^k
+  ;; - Stage 3 (span 4): butterflies with W_8^k
+  ;; - Output in natural order: 0,1,2,3,4,5,6,7
+
+  (func $fft_8_dit
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $x4 v128) (local $x5 v128) (local $x6 v128) (local $x7 v128)
+    (local $t v128) (local $sum v128) (local $diff v128)
+
+    ;; Load in bit-reversed order: 0,4,2,6,1,5,3,7
+    (local.set $x0 (v128.load64_zero (i32.const 0)))   ;; index 0
+    (local.set $x1 (v128.load64_zero (i32.const 32)))  ;; index 4
+    (local.set $x2 (v128.load64_zero (i32.const 16)))  ;; index 2
+    (local.set $x3 (v128.load64_zero (i32.const 48)))  ;; index 6
+    (local.set $x4 (v128.load64_zero (i32.const 8)))   ;; index 1
+    (local.set $x5 (v128.load64_zero (i32.const 40)))  ;; index 5
+    (local.set $x6 (v128.load64_zero (i32.const 24)))  ;; index 3
+    (local.set $x7 (v128.load64_zero (i32.const 56)))  ;; index 7
+
+    ;; ============ Stage 1 (span 1): all twiddles W_2^0 = 1 ============
+    ;; DIT butterfly: a' = a + b, b' = a - b (since W=1)
+    ;; Pairs: (0,1), (2,3), (4,5), (6,7)
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x1)))
+    (local.set $x1 (f32x4.sub (local.get $x0) (local.get $x1)))
+    (local.set $x0 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x2) (local.get $x3)))
+    (local.set $x3 (f32x4.sub (local.get $x2) (local.get $x3)))
+    (local.set $x2 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x4) (local.get $x5)))
+    (local.set $x5 (f32x4.sub (local.get $x4) (local.get $x5)))
+    (local.set $x4 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x6) (local.get $x7)))
+    (local.set $x7 (f32x4.sub (local.get $x6) (local.get $x7)))
+    (local.set $x6 (local.get $sum))
+
+    ;; ============ Stage 2 (span 2): W_4^0=1, W_4^1=-j ============
+    ;; DIT butterfly: a' = a + b*W, b' = a - b*W
+    ;; Pairs: (0,2) W=1, (1,3) W=-j, (4,6) W=1, (5,7) W=-j
+
+    ;; (0,2) with W_4^0 = 1
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x2)))
+    (local.set $x2 (f32x4.sub (local.get $x0) (local.get $x2)))
+    (local.set $x0 (local.get $sum))
+
+    ;; (1,3) with W_4^1 = -j: b*(-j) = [b.im, -b.re]
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x3) (local.get $x3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x1) (local.get $t)))
+    (local.set $x3 (f32x4.sub (local.get $x1) (local.get $t)))
+    (local.set $x1 (local.get $sum))
+
+    ;; (4,6) with W_4^0 = 1
+    (local.set $sum (f32x4.add (local.get $x4) (local.get $x6)))
+    (local.set $x6 (f32x4.sub (local.get $x4) (local.get $x6)))
+    (local.set $x4 (local.get $sum))
+
+    ;; (5,7) with W_4^1 = -j
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x7) (local.get $x7))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x5) (local.get $t)))
+    (local.set $x7 (f32x4.sub (local.get $x5) (local.get $t)))
+    (local.set $x5 (local.get $sum))
+
+    ;; ============ Stage 3 (span 4): W_8^0=1, W_8^1, W_8^2=-j, W_8^3 ============
+    ;; Pairs: (0,4) W_8^0=1, (1,5) W_8^1, (2,6) W_8^2=-j, (3,7) W_8^3
+
+    ;; (0,4) with W_8^0 = 1
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x4)))
+    (local.set $x4 (f32x4.sub (local.get $x0) (local.get $x4)))
+    (local.set $x0 (local.get $sum))
+
+    ;; (1,5) with W_8^1 = (0.7071068, -0.7071068)
+    ;; b*W = [b.re*0.707 - b.im*(-0.707), b.re*(-0.707) + b.im*0.707]
+    ;;     = [0.707*(b.re + b.im), 0.707*(b.im - b.re)]
+    (local.set $t (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x5) (local.get $x5)))
+    (local.set $t (f32x4.mul
+      (f32x4.add (local.get $x5) (f32x4.mul (local.get $t) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)))
+    (local.set $sum (f32x4.add (local.get $x1) (local.get $t)))
+    (local.set $x5 (f32x4.sub (local.get $x1) (local.get $t)))
+    (local.set $x1 (local.get $sum))
+
+    ;; (2,6) with W_8^2 = -j: b*(-j) = [b.im, -b.re]
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x6) (local.get $x6))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x2) (local.get $t)))
+    (local.set $x6 (f32x4.sub (local.get $x2) (local.get $t)))
+    (local.set $x2 (local.get $sum))
+
+    ;; (3,7) with W_8^3 = (-0.7071068, -0.7071068)
+    ;; b*W = [b.re*(-0.707) - b.im*(-0.707), b.re*(-0.707) + b.im*(-0.707)]
+    ;;     = [0.707*(b.im - b.re), -0.707*(b.re + b.im)]
+    (local.set $t (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x7) (local.get $x7)))
+    (local.set $t (f32x4.mul
+      (f32x4.sub (local.get $t) (f32x4.mul (local.get $x7) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)))
+    (local.set $sum (f32x4.add (local.get $x3) (local.get $t)))
+    (local.set $x7 (f32x4.sub (local.get $x3) (local.get $t)))
+    (local.set $x3 (local.get $sum))
+
+    ;; ============ Output in natural order: 0,1,2,3,4,5,6,7 ============
+    (v128.store64_lane 0 (i32.const 0) (local.get $x0))
+    (v128.store64_lane 0 (i32.const 8) (local.get $x1))
+    (v128.store64_lane 0 (i32.const 16) (local.get $x2))
+    (v128.store64_lane 0 (i32.const 24) (local.get $x3))
+    (v128.store64_lane 0 (i32.const 32) (local.get $x4))
+    (v128.store64_lane 0 (i32.const 40) (local.get $x5))
+    (v128.store64_lane 0 (i32.const 48) (local.get $x6))
+    (v128.store64_lane 0 (i32.const 56) (local.get $x7))
+  )
+
+
+  ;; ============================================================================
+  ;; N=16 DIT Dual-Complex Kernel (natural order output)
+  ;; ============================================================================
+  ;; Loads in bit-reversed order, outputs in natural order.
+  ;; Compatible with RFFT post-processing.
+  ;;
+  ;; Bit-reversed order for N=16: 0,8,4,12,2,10,6,14,1,9,5,13,3,11,7,15
+
+  (func $fft_16_dit
+    (local $d0 v128) (local $d1 v128) (local $d2 v128) (local $d3 v128)
+    (local $d4 v128) (local $d5 v128) (local $d6 v128) (local $d7 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    (local $t4 v128) (local $t5 v128) (local $t6 v128) (local $t7 v128)
+    (local $u0 v128) (local $u1 v128) (local $u2 v128) (local $u3 v128)
+    (local $u4 v128) (local $u5 v128) (local $u6 v128) (local $u7 v128)
+    (local $swapped v128) (local $prod v128)
+
+    ;; ============ Load in bit-reversed order ============
+    ;; d0 = [pos0, pos1] = [input[0], input[8]]
+    (local.set $d0 (v128.load64_lane 1 (i32.const 64)
+      (v128.load64_zero (i32.const 0))))
+    ;; d1 = [pos2, pos3] = [input[4], input[12]]
+    (local.set $d1 (v128.load64_lane 1 (i32.const 96)
+      (v128.load64_zero (i32.const 32))))
+    ;; d2 = [pos4, pos5] = [input[2], input[10]]
+    (local.set $d2 (v128.load64_lane 1 (i32.const 80)
+      (v128.load64_zero (i32.const 16))))
+    ;; d3 = [pos6, pos7] = [input[6], input[14]]
+    (local.set $d3 (v128.load64_lane 1 (i32.const 112)
+      (v128.load64_zero (i32.const 48))))
+    ;; d4 = [pos8, pos9] = [input[1], input[9]]
+    (local.set $d4 (v128.load64_lane 1 (i32.const 72)
+      (v128.load64_zero (i32.const 8))))
+    ;; d5 = [pos10, pos11] = [input[5], input[13]]
+    (local.set $d5 (v128.load64_lane 1 (i32.const 104)
+      (v128.load64_zero (i32.const 40))))
+    ;; d6 = [pos12, pos13] = [input[3], input[11]]
+    (local.set $d6 (v128.load64_lane 1 (i32.const 88)
+      (v128.load64_zero (i32.const 24))))
+    ;; d7 = [pos14, pos15] = [input[7], input[15]]
+    (local.set $d7 (v128.load64_lane 1 (i32.const 120)
+      (v128.load64_zero (i32.const 56))))
+
+    ;; ============ Stage 1 (span 1): all twiddles = 1 ============
+    ;; Butterflies: (0,1), (2,3), (4,5), ..., (14,15)
+    ;; Each d register has [pos_2k, pos_2k+1], so we do within-register butterflies
+    ;; DIT butterfly: a' = a + b, b' = a - b (since W=1)
+
+    ;; For within-register butterfly: d=[a,b] -> [a+b, a-b]
+    ;; swap = [b, a], then (d + swap)/2 has both halves as (a+b), (d - swap) has [a-b, -(a-b)]
+    ;; Better: use shuffle to duplicate then combine
+
+    ;; d0: [a,b] -> [a+b, a-b]
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d0) (local.get $d0)))
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d0) (local.get $swapped))
+      (f32x4.sub (local.get $d0) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d1) (local.get $d1)))
+    (local.set $t1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d1) (local.get $swapped))
+      (f32x4.sub (local.get $d1) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d2) (local.get $d2)))
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d2) (local.get $swapped))
+      (f32x4.sub (local.get $d2) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d3) (local.get $d3)))
+    (local.set $t3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d3) (local.get $swapped))
+      (f32x4.sub (local.get $d3) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d4) (local.get $d4)))
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d4) (local.get $swapped))
+      (f32x4.sub (local.get $d4) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d5) (local.get $d5)))
+    (local.set $t5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d5) (local.get $swapped))
+      (f32x4.sub (local.get $d5) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d6) (local.get $d6)))
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d6) (local.get $swapped))
+      (f32x4.sub (local.get $d6) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $d7) (local.get $d7)))
+    (local.set $t7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d7) (local.get $swapped))
+      (f32x4.sub (local.get $d7) (local.get $swapped))))
+
+    ;; After Stage 1:
+    ;; t0 = [W'[0], W'[1]], t1 = [W'[2], W'[3]], t2 = [W'[4], W'[5]], t3 = [W'[6], W'[7]]
+    ;; t4 = [W'[8], W'[9]], t5 = [W'[10], W'[11]], t6 = [W'[12], W'[13]], t7 = [W'[14], W'[15]]
+
+    ;; ============ Stage 2 (span 2): W_4^k twiddles ============
+    ;; Butterflies: (0,2), (1,3), (4,6), (5,7), (8,10), (9,11), (12,14), (13,15)
+    ;; k=0 mod 2 -> W_4^0 = 1
+    ;; k=1 mod 2 -> W_4^1 = -j = (0, -1) -> multiply gives [im, -re]
+
+    ;; Need to reorganize: pair up t0 with t1, t2 with t3, etc.
+    ;; t0=[W'0,W'1], t1=[W'2,W'3] -> need (W'0,W'2) and (W'1,W'3)
+    ;; u0 = [t0.low, t1.low] = [W'0, W'2]
+    ;; u1 = [t0.high, t1.high] = [W'1, W'3]
+
+    (local.set $u0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $t0) (local.get $t1)))
+    (local.set $u1 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $t0) (local.get $t1)))
+
+    (local.set $u2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $t2) (local.get $t3)))
+    (local.set $u3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $t2) (local.get $t3)))
+
+    (local.set $u4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $t4) (local.get $t5)))
+    (local.set $u5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $t4) (local.get $t5)))
+
+    (local.set $u6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $t6) (local.get $t7)))
+    (local.set $u7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $t6) (local.get $t7)))
+
+    ;; Now: u0=[W'0,W'2], u1=[W'1,W'3], u2=[W'4,W'6], u3=[W'5,W'7], ...
+    ;; Butterfly (0,2): u0=[a,b] -> [a+b, a-b] with twiddle=1
+    ;; Butterfly (1,3): u1=[a,b] -> [a+b*(-j), a-b*(-j)]
+
+    ;; u0, u2, u4, u6: twiddle = 1, do within-register butterfly
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $u0) (local.get $u0)))
+    (local.set $d0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $u0) (local.get $swapped))
+      (f32x4.sub (local.get $u0) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $u2) (local.get $u2)))
+    (local.set $d2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $u2) (local.get $swapped))
+      (f32x4.sub (local.get $u2) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $u4) (local.get $u4)))
+    (local.set $d4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $u4) (local.get $swapped))
+      (f32x4.sub (local.get $u4) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $u6) (local.get $u6)))
+    (local.set $d6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $u6) (local.get $swapped))
+      (f32x4.sub (local.get $u6) (local.get $swapped))))
+
+    ;; u1, u3, u5, u7: twiddle = -j for the b term
+    ;; DIT butterfly: a' = a + b*W, b' = a - b*W
+    ;; b*(-j) = [b.re*0 - b.im*(-1), b.re*(-1) + b.im*0] = [b.im, -b.re]
+    ;; u1=[a,b] where a=[a.re,a.im,?,?], b=[?,?,b.re,b.im]
+    ;; b*(-j) = [b.im, -b.re] in high position
+
+    ;; First apply -j to the high element (b) of each register
+    ;; prod = [a.re, a.im, b.im, -b.re]
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $u1) (local.get $u1)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    ;; Now prod = [a, b*(-j)]
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $u3) (local.get $u3)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $u5) (local.get $u5)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $u7) (local.get $u7)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    ;; After Stage 2: d0-d7 contain [W''[k], W''[k+2]] pairs
+    ;; d0=[W''0,W''2], d1=[W''1,W''3], d2=[W''4,W''6], d3=[W''5,W''7]
+    ;; d4=[W''8,W''10], d5=[W''9,W''11], d6=[W''12,W''14], d7=[W''13,W''15]
+
+    ;; ============ Stage 3 (span 4): W_8^k twiddles ============
+    ;; Butterflies: (0,4), (1,5), (2,6), (3,7), (8,12), (9,13), (10,14), (11,15)
+    ;; k=0: W_8^0 = 1
+    ;; k=1: W_8^1 = (0.7071068, -0.7071068)
+    ;; k=2: W_8^2 = -j
+    ;; k=3: W_8^3 = (-0.7071068, -0.7071068)
+
+    ;; Reorganize: pair d0 with d2, d1 with d3, d4 with d6, d5 with d7
+    ;; t0 = [d0.low, d2.low] = [W''0, W''4]
+    ;; t1 = [d0.high, d2.high] = [W''2, W''6]
+    ;; etc.
+
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $d0) (local.get $d2)))
+    (local.set $t1 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $d0) (local.get $d2)))
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $d1) (local.get $d3)))
+    (local.set $t3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $d1) (local.get $d3)))
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $d4) (local.get $d6)))
+    (local.set $t5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $d4) (local.get $d6)))
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $d5) (local.get $d7)))
+    (local.set $t7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $d5) (local.get $d7)))
+
+    ;; t0=[W''0,W''4], t1=[W''2,W''6]: butterflies (0,4) and (2,6)
+    ;; t2=[W''1,W''5], t3=[W''3,W''7]: butterflies (1,5) and (3,7)
+    ;; t4=[W''8,W''12], t5=[W''10,W''14]: butterflies (8,12) and (10,14)
+    ;; t6=[W''9,W''13], t7=[W''11,W''15]: butterflies (9,13) and (11,15)
+
+    ;; t0, t4: twiddle = W_8^0 = 1
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $t0) (local.get $t0)))
+    (local.set $u0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $t0) (local.get $swapped))
+      (f32x4.sub (local.get $t0) (local.get $swapped))))
+
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $t4) (local.get $t4)))
+    (local.set $u4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $t4) (local.get $swapped))
+      (f32x4.sub (local.get $t4) (local.get $swapped))))
+
+    ;; t1, t5: twiddle = W_8^2 = -j
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $t1) (local.get $t1)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $t5) (local.get $t5)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    ;; t2, t6: twiddle = W_8^1 = (0.7071068, -0.7071068)
+    ;; b*W = [b.re*0.707 + b.im*0.707, -b.re*0.707 + b.im*0.707] = [0.707*(b.re+b.im), 0.707*(b.im-b.re)]
+    ;; First compute b*W for the high element
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t2) (local.get $t2)))  ;; [b, b]
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))  ;; [b.im, b.re, b.im, b.re]
+    (local.set $prod (f32x4.mul
+      (f32x4.add (local.get $prod) (f32x4.mul (local.get $swapped) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)))
+    ;; prod = [b*W, b*W] in both halves, we need it in high half
+    ;; Combine: [a, b*W]
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t2) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t6) (local.get $t6)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    (local.set $prod (f32x4.mul
+      (f32x4.add (local.get $prod) (f32x4.mul (local.get $swapped) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t6) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    ;; t3, t7: twiddle = W_8^3 = (-0.7071068, -0.7071068)
+    ;; b*W = [b.re*(-0.707) - b.im*(-0.707), b.re*(-0.707) + b.im*(-0.707)]
+    ;;     = [0.707*(b.im - b.re), -0.707*(b.re + b.im)]
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t3) (local.get $t3)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    (local.set $prod (f32x4.mul
+      (f32x4.sub (local.get $swapped) (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t3) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t7) (local.get $t7)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    (local.set $prod (f32x4.mul
+      (f32x4.sub (local.get $swapped) (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t7) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $u7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))
+
+    ;; After Stage 3: u0-u7 contain [W'''[k], W'''[k+4]] pairs
+    ;; u0=[W'''0,W'''4], u1=[W'''2,W'''6], u2=[W'''1,W'''5], u3=[W'''3,W'''7]
+    ;; u4=[W'''8,W'''12], u5=[W'''10,W'''14], u6=[W'''9,W'''13], u7=[W'''11,W'''15]
+
+    ;; ============ Stage 4 (span 8): W_16^k twiddles ============
+    ;; Butterflies: (0,8), (1,9), (2,10), (3,11), (4,12), (5,13), (6,14), (7,15)
+    ;; k=0: W_16^0 = 1
+    ;; k=1: W_16^1 = (0.9238795, -0.3826834)
+    ;; k=2: W_16^2 = (0.7071068, -0.7071068)
+    ;; k=3: W_16^3 = (0.3826834, -0.9238795)
+    ;; k=4: W_16^4 = -j
+    ;; k=5: W_16^5 = (-0.3826834, -0.9238795)
+    ;; k=6: W_16^6 = (-0.7071068, -0.7071068)
+    ;; k=7: W_16^7 = (-0.9238795, -0.3826834)
+
+    ;; Reorganize: pair u0 with u4, u1 with u5, u2 with u6, u3 with u7
+    ;; t0 = [u0.low, u4.low] = [W'''0, W'''8] -> butterfly (0,8)
+    ;; t1 = [u0.high, u4.high] = [W'''4, W'''12] -> butterfly (4,12)
+    ;; etc.
+
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $u0) (local.get $u4)))  ;; [0,8]
+    (local.set $t1 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $u0) (local.get $u4)))  ;; [4,12]
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $u1) (local.get $u5)))  ;; [2,10]
+    (local.set $t3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $u1) (local.get $u5)))  ;; [6,14]
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $u2) (local.get $u6)))  ;; [1,9]
+    (local.set $t5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $u2) (local.get $u6)))  ;; [5,13]
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (local.get $u3) (local.get $u7)))  ;; [3,11]
+    (local.set $t7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+      (local.get $u3) (local.get $u7)))  ;; [7,15]
+
+    ;; t0: [0,8] -> butterfly with W_16^0 = 1
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $t0) (local.get $t0)))
+    (local.set $d0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $t0) (local.get $swapped))
+      (f32x4.sub (local.get $t0) (local.get $swapped))))  ;; d0 = [out0, out8]
+
+    ;; t1: [4,12] -> butterfly with W_16^4 = -j
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11
+      (local.get $t1) (local.get $t1)))
+    (local.set $prod (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d4 = [out4, out12]
+
+    ;; t2: [2,10] -> butterfly with W_16^2 = (0.7071068, -0.7071068)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t2) (local.get $t2)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    (local.set $prod (f32x4.mul
+      (f32x4.add (local.get $prod) (f32x4.mul (local.get $swapped) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t2) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d2 = [out2, out10]
+
+    ;; t3: [6,14] -> butterfly with W_16^6 = (-0.7071068, -0.7071068)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t3) (local.get $t3)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    (local.set $prod (f32x4.mul
+      (f32x4.sub (local.get $swapped) (f32x4.mul (local.get $prod) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t3) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d6 = [out6, out14]
+
+    ;; t4: [1,9] -> butterfly with W_16^1 = (0.9238795, -0.3826834)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t4) (local.get $t4)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    ;; b*W = [b.re*0.9238795 + b.im*0.3826834, b.im*0.9238795 - b.re*0.3826834]
+    (local.set $prod (f32x4.add
+      (f32x4.mul (local.get $prod) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (local.get $swapped) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t4) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d1 = [out1, out9]
+
+    ;; t5: [5,13] -> butterfly with W_16^5 = (-0.3826834, -0.9238795)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t5) (local.get $t5)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    ;; b*W = [b.re*(-0.3826834) + b.im*0.9238795, b.im*(-0.3826834) - b.re*0.9238795]
+    (local.set $prod (f32x4.add
+      (f32x4.mul (local.get $prod) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (local.get $swapped) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t5) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d5 = [out5, out13]
+
+    ;; t6: [3,11] -> butterfly with W_16^3 = (0.3826834, -0.9238795)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t6) (local.get $t6)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    ;; b*W = [b.re*0.3826834 + b.im*0.9238795, b.im*0.3826834 - b.re*0.9238795]
+    (local.set $prod (f32x4.add
+      (f32x4.mul (local.get $prod) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (local.get $swapped) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t6) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d3 = [out3, out11]
+
+    ;; t7: [7,15] -> butterfly with W_16^7 = (-0.9238795, -0.3826834)
+    (local.set $prod (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15
+      (local.get $t7) (local.get $t7)))
+    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+      (local.get $prod) (local.get $prod)))
+    ;; b*W = [b.re*(-0.9238795) + b.im*0.3826834, b.im*(-0.9238795) - b.re*0.3826834]
+    (local.set $prod (f32x4.add
+      (f32x4.mul (local.get $prod) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (local.get $swapped) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $prod (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31
+      (local.get $t7) (local.get $prod)))
+    (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+      (local.get $prod) (local.get $prod)))
+    (local.set $d7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $prod) (local.get $swapped))
+      (f32x4.sub (local.get $prod) (local.get $swapped))))  ;; d7 = [out7, out15]
+
+    ;; ============ Store in natural order ============
+    ;; d0=[out0,out8], d1=[out1,out9], d2=[out2,out10], d3=[out3,out11]
+    ;; d4=[out4,out12], d5=[out5,out13], d6=[out6,out14], d7=[out7,out15]
+    ;; Need to store: [out0,out1], [out2,out3], [out4,out5], [out6,out7],
+    ;;                [out8,out9], [out10,out11], [out12,out13], [out14,out15]
+
+    (v128.store (i32.const 0)
+      (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d0) (local.get $d1)))
+    (v128.store (i32.const 16)
+      (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d2) (local.get $d3)))
+    (v128.store (i32.const 32)
+      (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d4) (local.get $d5)))
+    (v128.store (i32.const 48)
+      (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d6) (local.get $d7)))
+    (v128.store (i32.const 64)
+      (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d0) (local.get $d1)))
+    (v128.store (i32.const 80)
+      (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d2) (local.get $d3)))
+    (v128.store (i32.const 96)
+      (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d4) (local.get $d5)))
+    (v128.store (i32.const 112)
+      (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d6) (local.get $d7)))
+  )
+
+  ;; ============================================================================
+  ;; N=32 DIT Dual-Complex Kernel (natural order output) - GENERATED
+  ;; ============================================================================
+  ;; 32 complex numbers = 16 dual-packed v128 values
+  ;; Generated by: node tools/generate-dit-codelet.js 32
+
+  (func $fft_32_dit
+    (local $d0 v128) (local $d1 v128) (local $d2 v128) (local $d3 v128) (local $d4 v128) (local $d5 v128) (local $d6 v128) (local $d7 v128) (local $d8 v128) (local $d9 v128) (local $d10 v128) (local $d11 v128) (local $d12 v128) (local $d13 v128) (local $d14 v128) (local $d15 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128) (local $t4 v128) (local $t5 v128) (local $t6 v128) (local $t7 v128) (local $t8 v128) (local $t9 v128) (local $t10 v128) (local $t11 v128) (local $t12 v128) (local $t13 v128) (local $t14 v128) (local $t15 v128)
+    (local $u0 v128) (local $u1 v128) (local $u2 v128) (local $u3 v128) (local $u4 v128) (local $u5 v128) (local $u6 v128) (local $u7 v128) (local $u8 v128) (local $u9 v128) (local $u10 v128) (local $u11 v128) (local $u12 v128) (local $u13 v128) (local $u14 v128) (local $u15 v128)
+    (local $v0 v128) (local $v1 v128) (local $v2 v128) (local $v3 v128) (local $v4 v128) (local $v5 v128) (local $v6 v128) (local $v7 v128) (local $v8 v128) (local $v9 v128) (local $v10 v128) (local $v11 v128) (local $v12 v128) (local $v13 v128) (local $v14 v128) (local $v15 v128)
+    (local $tmp v128) (local $tmp2 v128) (local $a v128) (local $b v128)
+
+    ;; ============ Load in bit-reversed order ============
+    (local.set $d0 (v128.load64_lane 1 (i32.const 128) (v128.load64_zero (i32.const 0))))
+    (local.set $d1 (v128.load64_lane 1 (i32.const 192) (v128.load64_zero (i32.const 64))))
+    (local.set $d2 (v128.load64_lane 1 (i32.const 160) (v128.load64_zero (i32.const 32))))
+    (local.set $d3 (v128.load64_lane 1 (i32.const 224) (v128.load64_zero (i32.const 96))))
+    (local.set $d4 (v128.load64_lane 1 (i32.const 144) (v128.load64_zero (i32.const 16))))
+    (local.set $d5 (v128.load64_lane 1 (i32.const 208) (v128.load64_zero (i32.const 80))))
+    (local.set $d6 (v128.load64_lane 1 (i32.const 176) (v128.load64_zero (i32.const 48))))
+    (local.set $d7 (v128.load64_lane 1 (i32.const 240) (v128.load64_zero (i32.const 112))))
+    (local.set $d8 (v128.load64_lane 1 (i32.const 136) (v128.load64_zero (i32.const 8))))
+    (local.set $d9 (v128.load64_lane 1 (i32.const 200) (v128.load64_zero (i32.const 72))))
+    (local.set $d10 (v128.load64_lane 1 (i32.const 168) (v128.load64_zero (i32.const 40))))
+    (local.set $d11 (v128.load64_lane 1 (i32.const 232) (v128.load64_zero (i32.const 104))))
+    (local.set $d12 (v128.load64_lane 1 (i32.const 152) (v128.load64_zero (i32.const 24))))
+    (local.set $d13 (v128.load64_lane 1 (i32.const 216) (v128.load64_zero (i32.const 88))))
+    (local.set $d14 (v128.load64_lane 1 (i32.const 184) (v128.load64_zero (i32.const 56))))
+    (local.set $d15 (v128.load64_lane 1 (i32.const 248) (v128.load64_zero (i32.const 120))))
+
+    ;; ============ Stage 1 (span 1): W_2 twiddles ============
+    ;; Butterfly (0,1): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d0) (local.get $d0)))
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d0) (local.get $tmp))
+      (f32x4.sub (local.get $d0) (local.get $tmp))))
+    ;; Butterfly (2,3): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d1) (local.get $d1)))
+    (local.set $t1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d1) (local.get $tmp))
+      (f32x4.sub (local.get $d1) (local.get $tmp))))
+    ;; Butterfly (4,5): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d2) (local.get $d2)))
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d2) (local.get $tmp))
+      (f32x4.sub (local.get $d2) (local.get $tmp))))
+    ;; Butterfly (6,7): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d3) (local.get $d3)))
+    (local.set $t3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d3) (local.get $tmp))
+      (f32x4.sub (local.get $d3) (local.get $tmp))))
+    ;; Butterfly (8,9): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d4) (local.get $d4)))
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d4) (local.get $tmp))
+      (f32x4.sub (local.get $d4) (local.get $tmp))))
+    ;; Butterfly (10,11): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d5) (local.get $d5)))
+    (local.set $t5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d5) (local.get $tmp))
+      (f32x4.sub (local.get $d5) (local.get $tmp))))
+    ;; Butterfly (12,13): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d6) (local.get $d6)))
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d6) (local.get $tmp))
+      (f32x4.sub (local.get $d6) (local.get $tmp))))
+    ;; Butterfly (14,15): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d7) (local.get $d7)))
+    (local.set $t7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d7) (local.get $tmp))
+      (f32x4.sub (local.get $d7) (local.get $tmp))))
+    ;; Butterfly (16,17): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d8) (local.get $d8)))
+    (local.set $t8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d8) (local.get $tmp))
+      (f32x4.sub (local.get $d8) (local.get $tmp))))
+    ;; Butterfly (18,19): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d9) (local.get $d9)))
+    (local.set $t9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d9) (local.get $tmp))
+      (f32x4.sub (local.get $d9) (local.get $tmp))))
+    ;; Butterfly (20,21): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d10) (local.get $d10)))
+    (local.set $t10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d10) (local.get $tmp))
+      (f32x4.sub (local.get $d10) (local.get $tmp))))
+    ;; Butterfly (22,23): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d11) (local.get $d11)))
+    (local.set $t11 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d11) (local.get $tmp))
+      (f32x4.sub (local.get $d11) (local.get $tmp))))
+    ;; Butterfly (24,25): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d12) (local.get $d12)))
+    (local.set $t12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d12) (local.get $tmp))
+      (f32x4.sub (local.get $d12) (local.get $tmp))))
+    ;; Butterfly (26,27): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d13) (local.get $d13)))
+    (local.set $t13 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d13) (local.get $tmp))
+      (f32x4.sub (local.get $d13) (local.get $tmp))))
+    ;; Butterfly (28,29): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d14) (local.get $d14)))
+    (local.set $t14 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d14) (local.get $tmp))
+      (f32x4.sub (local.get $d14) (local.get $tmp))))
+    ;; Butterfly (30,31): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d15) (local.get $d15)))
+    (local.set $t15 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d15) (local.get $tmp))
+      (f32x4.sub (local.get $d15) (local.get $tmp))))
+
+    ;; ============ Stage 2 (span 2): W_4 twiddles ============
+    ;; Butterflies (0,2) and (1,3)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t0) (local.get $t1))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t0) (local.get $t1))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u1 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,6) and (5,7)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t2) (local.get $t3))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t2) (local.get $t3))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,10) and (9,11)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t4) (local.get $t5))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t4) (local.get $t5))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (12,14) and (13,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t6) (local.get $t7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t6) (local.get $t7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,18) and (17,19)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t8) (local.get $t9))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t8) (local.get $t9))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u9 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (20,22) and (21,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t10) (local.get $t11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t10) (local.get $t11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (24,26) and (25,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t12) (local.get $t13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t12) (local.get $t13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (28,30) and (29,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t14) (local.get $t15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t14) (local.get $t15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u14 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 3 (span 4): W_8 twiddles ============
+    ;; Butterflies (0,4) and (1,5)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u0) (local.get $u2))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u0) (local.get $u2))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v2 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,6) and (3,7)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u1) (local.get $u3))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u1) (local.get $u3))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,12) and (9,13)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u4) (local.get $u6))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u4) (local.get $u6))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v6 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (10,14) and (11,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u5) (local.get $u7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u5) (local.get $u7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,20) and (17,21)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u8) (local.get $u10))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u8) (local.get $u10))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v10 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (18,22) and (19,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u9) (local.get $u11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u9) (local.get $u11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (24,28) and (25,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u12) (local.get $u14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u12) (local.get $u14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (26,30) and (27,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u13) (local.get $u15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u13) (local.get $u15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v13 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 4 (span 8): W_16 twiddles ============
+    ;; Butterflies (0,8) and (1,9)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v0) (local.get $v4))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v0) (local.get $v4))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d4 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,10) and (3,11)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v1) (local.get $v5))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v1) (local.get $v5))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,12) and (5,13)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v2) (local.get $v6))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v2) (local.get $v6))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d6 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (6,14) and (7,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v3) (local.get $v7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v3) (local.get $v7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,24) and (17,25)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v8) (local.get $v12))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v8) (local.get $v12))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d12 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (18,26) and (19,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v9) (local.get $v13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v9) (local.get $v13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (20,28) and (21,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v10) (local.get $v14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v10) (local.get $v14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (22,30) and (23,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v11) (local.get $v15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v11) (local.get $v15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d11 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 5 (span 16): W_32 twiddles ============
+    ;; Butterflies (0,16) and (1,17)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d0) (local.get $d8))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d0) (local.get $d8))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9807853 0.9807853 0.9807853 0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t8 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,18) and (3,19)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d1) (local.get $d9))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d1) (local.get $d9))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.8314696 0.8314696 0.8314696 0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t9 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,20) and (5,21)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d2) (local.get $d10))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d2) (local.get $d10))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.5555702 0.5555702 0.5555702 0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t10 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (6,22) and (7,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d3) (local.get $d11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d3) (local.get $d11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.1950903 0.1950903 0.1950903 0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,24) and (9,25)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d4) (local.get $d12))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d4) (local.get $d12))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.1950903 -0.1950903 -0.1950903 -0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t12 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (10,26) and (11,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d5) (local.get $d13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d5) (local.get $d13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.5555702 -0.5555702 -0.5555702 -0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (12,28) and (13,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d6) (local.get $d14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d6) (local.get $d14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.8314696 -0.8314696 -0.8314696 -0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (14,30) and (15,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d7) (local.get $d15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d7) (local.get $d15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9807853 -0.9807853 -0.9807853 -0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Store in natural order ============
+    (v128.store (i32.const 0) (local.get $t0))
+    (v128.store (i32.const 16) (local.get $t1))
+    (v128.store (i32.const 32) (local.get $t2))
+    (v128.store (i32.const 48) (local.get $t3))
+    (v128.store (i32.const 64) (local.get $t4))
+    (v128.store (i32.const 80) (local.get $t5))
+    (v128.store (i32.const 96) (local.get $t6))
+    (v128.store (i32.const 112) (local.get $t7))
+    (v128.store (i32.const 128) (local.get $t8))
+    (v128.store (i32.const 144) (local.get $t9))
+    (v128.store (i32.const 160) (local.get $t10))
+    (v128.store (i32.const 176) (local.get $t11))
+    (v128.store (i32.const 192) (local.get $t12))
+    (v128.store (i32.const 208) (local.get $t13))
+    (v128.store (i32.const 224) (local.get $t14))
+    (v128.store (i32.const 240) (local.get $t15))
+  )
+
+
+
+  ;; ============================================================================
+  ;; N=64 DIT Dual-Complex Kernel (natural order output) - GENERATED
+  ;; ============================================================================
+  ;; 64 complex numbers = 32 dual-packed v128 values
+  ;; Generated by: node tools/generate-dit-codelet.js 64
+
+  (func $fft_64_dit
+    (local $d0 v128) (local $d1 v128) (local $d2 v128) (local $d3 v128) (local $d4 v128) (local $d5 v128) (local $d6 v128) (local $d7 v128) (local $d8 v128) (local $d9 v128) (local $d10 v128) (local $d11 v128) (local $d12 v128) (local $d13 v128) (local $d14 v128) (local $d15 v128) (local $d16 v128) (local $d17 v128) (local $d18 v128) (local $d19 v128) (local $d20 v128) (local $d21 v128) (local $d22 v128) (local $d23 v128) (local $d24 v128) (local $d25 v128) (local $d26 v128) (local $d27 v128) (local $d28 v128) (local $d29 v128) (local $d30 v128) (local $d31 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128) (local $t4 v128) (local $t5 v128) (local $t6 v128) (local $t7 v128) (local $t8 v128) (local $t9 v128) (local $t10 v128) (local $t11 v128) (local $t12 v128) (local $t13 v128) (local $t14 v128) (local $t15 v128) (local $t16 v128) (local $t17 v128) (local $t18 v128) (local $t19 v128) (local $t20 v128) (local $t21 v128) (local $t22 v128) (local $t23 v128) (local $t24 v128) (local $t25 v128) (local $t26 v128) (local $t27 v128) (local $t28 v128) (local $t29 v128) (local $t30 v128) (local $t31 v128)
+    (local $u0 v128) (local $u1 v128) (local $u2 v128) (local $u3 v128) (local $u4 v128) (local $u5 v128) (local $u6 v128) (local $u7 v128) (local $u8 v128) (local $u9 v128) (local $u10 v128) (local $u11 v128) (local $u12 v128) (local $u13 v128) (local $u14 v128) (local $u15 v128) (local $u16 v128) (local $u17 v128) (local $u18 v128) (local $u19 v128) (local $u20 v128) (local $u21 v128) (local $u22 v128) (local $u23 v128) (local $u24 v128) (local $u25 v128) (local $u26 v128) (local $u27 v128) (local $u28 v128) (local $u29 v128) (local $u30 v128) (local $u31 v128)
+    (local $v0 v128) (local $v1 v128) (local $v2 v128) (local $v3 v128) (local $v4 v128) (local $v5 v128) (local $v6 v128) (local $v7 v128) (local $v8 v128) (local $v9 v128) (local $v10 v128) (local $v11 v128) (local $v12 v128) (local $v13 v128) (local $v14 v128) (local $v15 v128) (local $v16 v128) (local $v17 v128) (local $v18 v128) (local $v19 v128) (local $v20 v128) (local $v21 v128) (local $v22 v128) (local $v23 v128) (local $v24 v128) (local $v25 v128) (local $v26 v128) (local $v27 v128) (local $v28 v128) (local $v29 v128) (local $v30 v128) (local $v31 v128)
+    (local $tmp v128) (local $tmp2 v128) (local $a v128) (local $b v128)
+
+    ;; ============ Load in bit-reversed order ============
+    (local.set $d0 (v128.load64_lane 1 (i32.const 256) (v128.load64_zero (i32.const 0))))
+    (local.set $d1 (v128.load64_lane 1 (i32.const 384) (v128.load64_zero (i32.const 128))))
+    (local.set $d2 (v128.load64_lane 1 (i32.const 320) (v128.load64_zero (i32.const 64))))
+    (local.set $d3 (v128.load64_lane 1 (i32.const 448) (v128.load64_zero (i32.const 192))))
+    (local.set $d4 (v128.load64_lane 1 (i32.const 288) (v128.load64_zero (i32.const 32))))
+    (local.set $d5 (v128.load64_lane 1 (i32.const 416) (v128.load64_zero (i32.const 160))))
+    (local.set $d6 (v128.load64_lane 1 (i32.const 352) (v128.load64_zero (i32.const 96))))
+    (local.set $d7 (v128.load64_lane 1 (i32.const 480) (v128.load64_zero (i32.const 224))))
+    (local.set $d8 (v128.load64_lane 1 (i32.const 272) (v128.load64_zero (i32.const 16))))
+    (local.set $d9 (v128.load64_lane 1 (i32.const 400) (v128.load64_zero (i32.const 144))))
+    (local.set $d10 (v128.load64_lane 1 (i32.const 336) (v128.load64_zero (i32.const 80))))
+    (local.set $d11 (v128.load64_lane 1 (i32.const 464) (v128.load64_zero (i32.const 208))))
+    (local.set $d12 (v128.load64_lane 1 (i32.const 304) (v128.load64_zero (i32.const 48))))
+    (local.set $d13 (v128.load64_lane 1 (i32.const 432) (v128.load64_zero (i32.const 176))))
+    (local.set $d14 (v128.load64_lane 1 (i32.const 368) (v128.load64_zero (i32.const 112))))
+    (local.set $d15 (v128.load64_lane 1 (i32.const 496) (v128.load64_zero (i32.const 240))))
+    (local.set $d16 (v128.load64_lane 1 (i32.const 264) (v128.load64_zero (i32.const 8))))
+    (local.set $d17 (v128.load64_lane 1 (i32.const 392) (v128.load64_zero (i32.const 136))))
+    (local.set $d18 (v128.load64_lane 1 (i32.const 328) (v128.load64_zero (i32.const 72))))
+    (local.set $d19 (v128.load64_lane 1 (i32.const 456) (v128.load64_zero (i32.const 200))))
+    (local.set $d20 (v128.load64_lane 1 (i32.const 296) (v128.load64_zero (i32.const 40))))
+    (local.set $d21 (v128.load64_lane 1 (i32.const 424) (v128.load64_zero (i32.const 168))))
+    (local.set $d22 (v128.load64_lane 1 (i32.const 360) (v128.load64_zero (i32.const 104))))
+    (local.set $d23 (v128.load64_lane 1 (i32.const 488) (v128.load64_zero (i32.const 232))))
+    (local.set $d24 (v128.load64_lane 1 (i32.const 280) (v128.load64_zero (i32.const 24))))
+    (local.set $d25 (v128.load64_lane 1 (i32.const 408) (v128.load64_zero (i32.const 152))))
+    (local.set $d26 (v128.load64_lane 1 (i32.const 344) (v128.load64_zero (i32.const 88))))
+    (local.set $d27 (v128.load64_lane 1 (i32.const 472) (v128.load64_zero (i32.const 216))))
+    (local.set $d28 (v128.load64_lane 1 (i32.const 312) (v128.load64_zero (i32.const 56))))
+    (local.set $d29 (v128.load64_lane 1 (i32.const 440) (v128.load64_zero (i32.const 184))))
+    (local.set $d30 (v128.load64_lane 1 (i32.const 376) (v128.load64_zero (i32.const 120))))
+    (local.set $d31 (v128.load64_lane 1 (i32.const 504) (v128.load64_zero (i32.const 248))))
+
+    ;; ============ Stage 1 (span 1): W_2 twiddles ============
+    ;; Butterfly (0,1): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d0) (local.get $d0)))
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d0) (local.get $tmp))
+      (f32x4.sub (local.get $d0) (local.get $tmp))))
+    ;; Butterfly (2,3): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d1) (local.get $d1)))
+    (local.set $t1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d1) (local.get $tmp))
+      (f32x4.sub (local.get $d1) (local.get $tmp))))
+    ;; Butterfly (4,5): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d2) (local.get $d2)))
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d2) (local.get $tmp))
+      (f32x4.sub (local.get $d2) (local.get $tmp))))
+    ;; Butterfly (6,7): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d3) (local.get $d3)))
+    (local.set $t3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d3) (local.get $tmp))
+      (f32x4.sub (local.get $d3) (local.get $tmp))))
+    ;; Butterfly (8,9): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d4) (local.get $d4)))
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d4) (local.get $tmp))
+      (f32x4.sub (local.get $d4) (local.get $tmp))))
+    ;; Butterfly (10,11): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d5) (local.get $d5)))
+    (local.set $t5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d5) (local.get $tmp))
+      (f32x4.sub (local.get $d5) (local.get $tmp))))
+    ;; Butterfly (12,13): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d6) (local.get $d6)))
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d6) (local.get $tmp))
+      (f32x4.sub (local.get $d6) (local.get $tmp))))
+    ;; Butterfly (14,15): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d7) (local.get $d7)))
+    (local.set $t7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d7) (local.get $tmp))
+      (f32x4.sub (local.get $d7) (local.get $tmp))))
+    ;; Butterfly (16,17): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d8) (local.get $d8)))
+    (local.set $t8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d8) (local.get $tmp))
+      (f32x4.sub (local.get $d8) (local.get $tmp))))
+    ;; Butterfly (18,19): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d9) (local.get $d9)))
+    (local.set $t9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d9) (local.get $tmp))
+      (f32x4.sub (local.get $d9) (local.get $tmp))))
+    ;; Butterfly (20,21): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d10) (local.get $d10)))
+    (local.set $t10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d10) (local.get $tmp))
+      (f32x4.sub (local.get $d10) (local.get $tmp))))
+    ;; Butterfly (22,23): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d11) (local.get $d11)))
+    (local.set $t11 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d11) (local.get $tmp))
+      (f32x4.sub (local.get $d11) (local.get $tmp))))
+    ;; Butterfly (24,25): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d12) (local.get $d12)))
+    (local.set $t12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d12) (local.get $tmp))
+      (f32x4.sub (local.get $d12) (local.get $tmp))))
+    ;; Butterfly (26,27): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d13) (local.get $d13)))
+    (local.set $t13 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d13) (local.get $tmp))
+      (f32x4.sub (local.get $d13) (local.get $tmp))))
+    ;; Butterfly (28,29): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d14) (local.get $d14)))
+    (local.set $t14 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d14) (local.get $tmp))
+      (f32x4.sub (local.get $d14) (local.get $tmp))))
+    ;; Butterfly (30,31): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d15) (local.get $d15)))
+    (local.set $t15 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d15) (local.get $tmp))
+      (f32x4.sub (local.get $d15) (local.get $tmp))))
+    ;; Butterfly (32,33): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d16) (local.get $d16)))
+    (local.set $t16 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d16) (local.get $tmp))
+      (f32x4.sub (local.get $d16) (local.get $tmp))))
+    ;; Butterfly (34,35): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d17) (local.get $d17)))
+    (local.set $t17 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d17) (local.get $tmp))
+      (f32x4.sub (local.get $d17) (local.get $tmp))))
+    ;; Butterfly (36,37): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d18) (local.get $d18)))
+    (local.set $t18 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d18) (local.get $tmp))
+      (f32x4.sub (local.get $d18) (local.get $tmp))))
+    ;; Butterfly (38,39): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d19) (local.get $d19)))
+    (local.set $t19 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d19) (local.get $tmp))
+      (f32x4.sub (local.get $d19) (local.get $tmp))))
+    ;; Butterfly (40,41): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d20) (local.get $d20)))
+    (local.set $t20 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d20) (local.get $tmp))
+      (f32x4.sub (local.get $d20) (local.get $tmp))))
+    ;; Butterfly (42,43): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d21) (local.get $d21)))
+    (local.set $t21 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d21) (local.get $tmp))
+      (f32x4.sub (local.get $d21) (local.get $tmp))))
+    ;; Butterfly (44,45): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d22) (local.get $d22)))
+    (local.set $t22 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d22) (local.get $tmp))
+      (f32x4.sub (local.get $d22) (local.get $tmp))))
+    ;; Butterfly (46,47): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d23) (local.get $d23)))
+    (local.set $t23 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d23) (local.get $tmp))
+      (f32x4.sub (local.get $d23) (local.get $tmp))))
+    ;; Butterfly (48,49): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d24) (local.get $d24)))
+    (local.set $t24 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d24) (local.get $tmp))
+      (f32x4.sub (local.get $d24) (local.get $tmp))))
+    ;; Butterfly (50,51): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d25) (local.get $d25)))
+    (local.set $t25 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d25) (local.get $tmp))
+      (f32x4.sub (local.get $d25) (local.get $tmp))))
+    ;; Butterfly (52,53): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d26) (local.get $d26)))
+    (local.set $t26 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d26) (local.get $tmp))
+      (f32x4.sub (local.get $d26) (local.get $tmp))))
+    ;; Butterfly (54,55): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d27) (local.get $d27)))
+    (local.set $t27 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d27) (local.get $tmp))
+      (f32x4.sub (local.get $d27) (local.get $tmp))))
+    ;; Butterfly (56,57): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d28) (local.get $d28)))
+    (local.set $t28 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d28) (local.get $tmp))
+      (f32x4.sub (local.get $d28) (local.get $tmp))))
+    ;; Butterfly (58,59): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d29) (local.get $d29)))
+    (local.set $t29 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d29) (local.get $tmp))
+      (f32x4.sub (local.get $d29) (local.get $tmp))))
+    ;; Butterfly (60,61): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d30) (local.get $d30)))
+    (local.set $t30 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d30) (local.get $tmp))
+      (f32x4.sub (local.get $d30) (local.get $tmp))))
+    ;; Butterfly (62,63): within-reg, W_2^0=ONE
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $d31) (local.get $d31)))
+    (local.set $t31 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $d31) (local.get $tmp))
+      (f32x4.sub (local.get $d31) (local.get $tmp))))
+
+    ;; ============ Stage 2 (span 2): W_4 twiddles ============
+    ;; Butterflies (0,2) and (1,3)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t0) (local.get $t1))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t0) (local.get $t1))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u1 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,6) and (5,7)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t2) (local.get $t3))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t2) (local.get $t3))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,10) and (9,11)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t4) (local.get $t5))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t4) (local.get $t5))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (12,14) and (13,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t6) (local.get $t7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t6) (local.get $t7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,18) and (17,19)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t8) (local.get $t9))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t8) (local.get $t9))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u9 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (20,22) and (21,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t10) (local.get $t11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t10) (local.get $t11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (24,26) and (25,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t12) (local.get $t13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t12) (local.get $t13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (28,30) and (29,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t14) (local.get $t15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t14) (local.get $t15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u14 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (32,34) and (33,35)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t16) (local.get $t17))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t16) (local.get $t17))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u16 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u17 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (36,38) and (37,39)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t18) (local.get $t19))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t18) (local.get $t19))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u18 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u19 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (40,42) and (41,43)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t20) (local.get $t21))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t20) (local.get $t21))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u20 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u21 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (44,46) and (45,47)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t22) (local.get $t23))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t22) (local.get $t23))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u22 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u23 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (48,50) and (49,51)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t24) (local.get $t25))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t24) (local.get $t25))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u24 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u25 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (52,54) and (53,55)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t26) (local.get $t27))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t26) (local.get $t27))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u26 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u27 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (56,58) and (57,59)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t28) (local.get $t29))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t28) (local.get $t29))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u28 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u29 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (60,62) and (61,63)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t30) (local.get $t31))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t30) (local.get $t31))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $b) (local.get $b)))
+    (local.set $b (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u30 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u31 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 3 (span 4): W_8 twiddles ============
+    ;; Butterflies (0,4) and (1,5)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u0) (local.get $u2))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u0) (local.get $u2))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v2 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,6) and (3,7)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u1) (local.get $u3))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u1) (local.get $u3))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v3 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,12) and (9,13)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u4) (local.get $u6))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u4) (local.get $u6))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v6 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (10,14) and (11,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u5) (local.get $u7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u5) (local.get $u7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,20) and (17,21)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u8) (local.get $u10))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u8) (local.get $u10))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v10 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (18,22) and (19,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u9) (local.get $u11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u9) (local.get $u11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (24,28) and (25,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u12) (local.get $u14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u12) (local.get $u14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (26,30) and (27,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u13) (local.get $u15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u13) (local.get $u15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v13 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (32,36) and (33,37)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u16) (local.get $u18))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u16) (local.get $u18))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v16 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v18 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (34,38) and (35,39)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u17) (local.get $u19))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u17) (local.get $u19))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v17 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v19 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (40,44) and (41,45)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u20) (local.get $u22))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u20) (local.get $u22))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v20 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v22 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (42,46) and (43,47)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u21) (local.get $u23))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u21) (local.get $u23))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v21 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v23 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (48,52) and (49,53)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u24) (local.get $u26))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u24) (local.get $u26))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v24 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v26 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (50,54) and (51,55)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u25) (local.get $u27))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u25) (local.get $u27))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v25 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v27 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (56,60) and (57,61)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u28) (local.get $u30))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u28) (local.get $u30))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v28 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v30 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (58,62) and (59,63)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $u29) (local.get $u31))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $u29) (local.get $u31))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $v29 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $v31 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 4 (span 8): W_16 twiddles ============
+    ;; Butterflies (0,8) and (1,9)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v0) (local.get $v4))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v0) (local.get $v4))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d4 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,10) and (3,11)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v1) (local.get $v5))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v1) (local.get $v5))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d5 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,12) and (5,13)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v2) (local.get $v6))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v2) (local.get $v6))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d6 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (6,14) and (7,15)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v3) (local.get $v7))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v3) (local.get $v7))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d7 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,24) and (17,25)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v8) (local.get $v12))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v8) (local.get $v12))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d12 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (18,26) and (19,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v9) (local.get $v13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v9) (local.get $v13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (20,28) and (21,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v10) (local.get $v14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v10) (local.get $v14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (22,30) and (23,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v11) (local.get $v15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v11) (local.get $v15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d11 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (32,40) and (33,41)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v16) (local.get $v20))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v16) (local.get $v20))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d16 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d20 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (34,42) and (35,43)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v17) (local.get $v21))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v17) (local.get $v21))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d17 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d21 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (36,44) and (37,45)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v18) (local.get $v22))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v18) (local.get $v22))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d18 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d22 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (38,46) and (39,47)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v19) (local.get $v23))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v19) (local.get $v23))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d19 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d23 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (48,56) and (49,57)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v24) (local.get $v28))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v24) (local.get $v28))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d24 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d28 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (50,58) and (51,59)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v25) (local.get $v29))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v25) (local.get $v29))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d25 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d29 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (52,60) and (53,61)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v26) (local.get $v30))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v26) (local.get $v30))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d26 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d30 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (54,62) and (55,63)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $v27) (local.get $v31))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $v27) (local.get $v31))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $d27 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $d31 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 5 (span 16): W_32 twiddles ============
+    ;; Butterflies (0,16) and (1,17)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d0) (local.get $d8))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d0) (local.get $d8))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9807853 0.9807853 0.9807853 0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t8 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,18) and (3,19)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d1) (local.get $d9))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d1) (local.get $d9))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.8314696 0.8314696 0.8314696 0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t9 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,20) and (5,21)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d2) (local.get $d10))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d2) (local.get $d10))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.5555702 0.5555702 0.5555702 0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t10 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (6,22) and (7,23)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d3) (local.get $d11))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d3) (local.get $d11))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.1950903 0.1950903 0.1950903 0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t11 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,24) and (9,25)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d4) (local.get $d12))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d4) (local.get $d12))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.1950903 -0.1950903 -0.1950903 -0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t12 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (10,26) and (11,27)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d5) (local.get $d13))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d5) (local.get $d13))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.5555702 -0.5555702 -0.5555702 -0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t13 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (12,28) and (13,29)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d6) (local.get $d14))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d6) (local.get $d14))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.8314696 -0.8314696 -0.8314696 -0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t14 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (14,30) and (15,31)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d7) (local.get $d15))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d7) (local.get $d15))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9807853 -0.9807853 -0.9807853 -0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t15 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (32,48) and (33,49)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d16) (local.get $d24))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d16) (local.get $d24))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9807853 0.9807853 0.9807853 0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t16 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t24 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (34,50) and (35,51)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d17) (local.get $d25))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d17) (local.get $d25))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.8314696 0.8314696 0.8314696 0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t17 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t25 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (36,52) and (37,53)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d18) (local.get $d26))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d18) (local.get $d26))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.5555702 0.5555702 0.5555702 0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t18 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t26 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (38,54) and (39,55)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d19) (local.get $d27))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d19) (local.get $d27))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.1950903 0.1950903 0.1950903 0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t19 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t27 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (40,56) and (41,57)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d20) (local.get $d28))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d20) (local.get $d28))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.1950903 -0.1950903 -0.1950903 -0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t20 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t28 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (42,58) and (43,59)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d21) (local.get $d29))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d21) (local.get $d29))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.5555702 -0.5555702 -0.5555702 -0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t21 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t29 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (44,60) and (45,61)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d22) (local.get $d30))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d22) (local.get $d30))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.8314696 -0.8314696 -0.8314696 -0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t22 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t30 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (46,62) and (47,63)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $d23) (local.get $d31))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $d23) (local.get $d31))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9807853 -0.9807853 -0.9807853 -0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $t23 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $t31 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Stage 6 (span 32): W_64 twiddles ============
+    ;; Butterflies (0,32) and (1,33)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t0) (local.get $t16))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t0) (local.get $t16))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9951847 0.9951847 0.9951847 0.9951847))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.0980171 -0.0980171 0.0980171 -0.0980171))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u0 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u16 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (2,34) and (3,35)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t1) (local.get $t17))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t1) (local.get $t17))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9807853 0.9807853 0.9807853 0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9569403 0.9569403 0.9569403 0.9569403))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.2902847 -0.2902847 0.2902847 -0.2902847))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u17 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (4,36) and (5,37)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t2) (local.get $t18))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t2) (local.get $t18))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.8819213 0.8819213 0.8819213 0.8819213))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.4713967 -0.4713967 0.4713967 -0.4713967))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u18 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (6,38) and (7,39)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t3) (local.get $t19))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t3) (local.get $t19))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.8314696 0.8314696 0.8314696 0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7730105 0.7730105 0.7730105 0.7730105))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.6343933 -0.6343933 0.6343933 -0.6343933))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u3 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u19 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (8,40) and (9,41)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t4) (local.get $t20))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t4) (local.get $t20))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.6343933 0.6343933 0.6343933 0.6343933))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7730105 -0.7730105 0.7730105 -0.7730105))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u4 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u20 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (10,42) and (11,43)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t5) (local.get $t21))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t5) (local.get $t21))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.5555702 0.5555702 0.5555702 0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.4713967 0.4713967 0.4713967 0.4713967))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8819213 -0.8819213 0.8819213 -0.8819213))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u5 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u21 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (12,44) and (13,45)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t6) (local.get $t22))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t6) (local.get $t22))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.2902847 0.2902847 0.2902847 0.2902847))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9569403 -0.9569403 0.9569403 -0.9569403))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u6 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u22 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (14,46) and (15,47)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t7) (local.get $t23))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t7) (local.get $t23))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.1950903 0.1950903 0.1950903 0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.0980171 0.0980171 0.0980171 0.0980171))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9951847 -0.9951847 0.9951847 -0.9951847))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u7 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u23 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (16,48) and (17,49)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t8) (local.get $t24))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t8) (local.get $t24))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 0 1 2 3 4 5 6 7 12 13 14 15 8 9 10 11 (local.get $a) (local.get $a)))
+    (local.set $a (f32x4.mul (local.get $tmp) (v128.const f32x4 1.0 1.0 1.0 -1.0)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.0980171 -0.0980171 -0.0980171 -0.0980171))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9951847 -0.9951847 0.9951847 -0.9951847))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u8 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u24 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (18,50) and (19,51)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t9) (local.get $t25))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t9) (local.get $t25))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.1950903 -0.1950903 -0.1950903 -0.1950903))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9807853 -0.9807853 0.9807853 -0.9807853))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.2902847 -0.2902847 -0.2902847 -0.2902847))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9569403 -0.9569403 0.9569403 -0.9569403))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u9 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u25 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (20,52) and (21,53)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t10) (local.get $t26))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t10) (local.get $t26))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.9238795 -0.9238795 0.9238795 -0.9238795))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.4713967 -0.4713967 -0.4713967 -0.4713967))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8819213 -0.8819213 0.8819213 -0.8819213))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u10 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u26 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (22,54) and (23,55)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t11) (local.get $t27))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t11) (local.get $t27))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.5555702 -0.5555702 -0.5555702 -0.5555702))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.8314696 -0.8314696 0.8314696 -0.8314696))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.6343933 -0.6343933 -0.6343933 -0.6343933))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7730105 -0.7730105 0.7730105 -0.7730105))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u11 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u27 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (24,56) and (25,57)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t12) (local.get $t28))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t12) (local.get $t28))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7730105 -0.7730105 -0.7730105 -0.7730105))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.6343933 -0.6343933 0.6343933 -0.6343933))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u12 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u28 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (26,58) and (27,59)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t13) (local.get $t29))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t13) (local.get $t29))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.8314696 -0.8314696 -0.8314696 -0.8314696))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.5555702 -0.5555702 0.5555702 -0.5555702))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.8819213 -0.8819213 -0.8819213 -0.8819213))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.4713967 -0.4713967 0.4713967 -0.4713967))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u13 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u29 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (28,60) and (29,61)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t14) (local.get $t30))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t14) (local.get $t30))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.3826834 -0.3826834 0.3826834 -0.3826834))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9569403 -0.9569403 -0.9569403 -0.9569403))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.2902847 -0.2902847 0.2902847 -0.2902847))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u14 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u30 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+    ;; Butterflies (30,62) and (31,63)
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $t15) (local.get $t31))) ;; [a0, b0]
+    (local.set $b (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $t15) (local.get $t31))) ;; [a1, b1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $a) (local.get $a)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9807853 -0.9807853 -0.9807853 -0.9807853))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.1950903 -0.1950903 0.1950903 -0.1950903))))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $a) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $b) (local.get $b)))
+    (local.set $tmp (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9951847 -0.9951847 -0.9951847 -0.9951847))
+      (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp)) (v128.const f32x4 0.0980171 -0.0980171 0.0980171 -0.0980171))))
+    (local.set $b (i8x16.shuffle 0 1 2 3 4 5 6 7 24 25 26 27 28 29 30 31 (local.get $b) (local.get $tmp)))
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $a) (local.get $a)))
+    (local.set $tmp2 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $a) (local.get $tmp))
+      (f32x4.sub (local.get $a) (local.get $tmp)))) ;; [a0+b0*w1, a0-b0*w1]
+    (local.set $tmp (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $b) (local.get $b)))
+    (local.set $a (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+      (f32x4.add (local.get $b) (local.get $tmp))
+      (f32x4.sub (local.get $b) (local.get $tmp)))) ;; [a1+b1*w2, a1-b1*w2]
+    (local.set $u15 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23 (local.get $tmp2) (local.get $a)))
+    (local.set $u31 (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31 (local.get $tmp2) (local.get $a)))
+
+    ;; ============ Store in natural order ============
+    (v128.store (i32.const 0) (local.get $u0))
+    (v128.store (i32.const 16) (local.get $u1))
+    (v128.store (i32.const 32) (local.get $u2))
+    (v128.store (i32.const 48) (local.get $u3))
+    (v128.store (i32.const 64) (local.get $u4))
+    (v128.store (i32.const 80) (local.get $u5))
+    (v128.store (i32.const 96) (local.get $u6))
+    (v128.store (i32.const 112) (local.get $u7))
+    (v128.store (i32.const 128) (local.get $u8))
+    (v128.store (i32.const 144) (local.get $u9))
+    (v128.store (i32.const 160) (local.get $u10))
+    (v128.store (i32.const 176) (local.get $u11))
+    (v128.store (i32.const 192) (local.get $u12))
+    (v128.store (i32.const 208) (local.get $u13))
+    (v128.store (i32.const 224) (local.get $u14))
+    (v128.store (i32.const 240) (local.get $u15))
+    (v128.store (i32.const 256) (local.get $u16))
+    (v128.store (i32.const 272) (local.get $u17))
+    (v128.store (i32.const 288) (local.get $u18))
+    (v128.store (i32.const 304) (local.get $u19))
+    (v128.store (i32.const 320) (local.get $u20))
+    (v128.store (i32.const 336) (local.get $u21))
+    (v128.store (i32.const 352) (local.get $u22))
+    (v128.store (i32.const 368) (local.get $u23))
+    (v128.store (i32.const 384) (local.get $u24))
+    (v128.store (i32.const 400) (local.get $u25))
+    (v128.store (i32.const 416) (local.get $u26))
+    (v128.store (i32.const 432) (local.get $u27))
+    (v128.store (i32.const 448) (local.get $u28))
+    (v128.store (i32.const 464) (local.get $u29))
+    (v128.store (i32.const 480) (local.get $u30))
+    (v128.store (i32.const 496) (local.get $u31))
+  )
+
+
+  ;; ============================================================================
+  ;; N=16 DIF Dual-Complex Kernel (bit-reversed output - NOT USED)
   ;; ============================================================================
   ;; 16 complex numbers = 8 dual-packed v128 values
   ;; Fully unrolled with hardcoded twiddles
@@ -1491,17 +4748,30 @@
   ;; ============================================================================
 
   (func $fft (param $n i32)
-    ;; NOTE: The small-size codelets (fft_8 through fft_64) output in bit-reversed
-    ;; order, which is incompatible with the RFFT post-processing that expects
-    ;; natural order. We use fft_general for N >= 8 which outputs in natural order.
+    ;; Use DIT codelets for small sizes - they load bit-reversed and output natural order.
+    ;; This is compatible with RFFT post-processing.
     ;;
-    ;; IMPORTANT: fft_4 is an exception - it outputs in NATURAL order (not bit-reversed)
-    ;; because its particular DIF butterfly structure happens to produce natural order
-    ;; for N=4. Do NOT add a bit-reversal swap here!
+    ;; fft_4: outputs natural order (DIF happens to produce natural order for N=4)
+    ;; fft_8_dit: DIT codelet that loads bit-reversed, outputs natural order
+    ;; fft_16_dit: DIT codelet that loads bit-reversed, outputs natural order
+    ;; fft_32_dit: DIT codelet that loads bit-reversed, outputs natural order (GENERATED)
     (if (i32.eq (local.get $n) (i32.const 4))
       (then
         (call $fft_4)
         (return)))
+    (if (i32.eq (local.get $n) (i32.const 8))
+      (then
+        (call $fft_8_dit)
+        (return)))
+    (if (i32.eq (local.get $n) (i32.const 16))
+      (then
+        (call $fft_16_dit)
+        (return)))
+    (if (i32.eq (local.get $n) (i32.const 32))
+      (then
+        (call $fft_32_dit)
+        (return)))
+    ;; N>=64: Fall back to Stockham (fft_64_dit generated but slower than Stockham)
     (call $fft_general (local.get $n))
   )
 
@@ -1555,15 +4825,15 @@
     (call $fft (local.get $n2))
 
     ;; Step 2: Post-processing
-    ;; Use SIMD for N >= 128 (n2 >= 64, so we have enough pairs for efficient SIMD)
-    (if (i32.ge_u (local.get $n) (i32.const 128))
+    ;; Use SIMD for N >= 64 (n2 >= 32, need at least ~14 pairs for SIMD loop)
+    (if (i32.ge_u (local.get $n) (i32.const 64))
       (then
         (call $rfft_postprocess_simd (local.get $n2))
         (return)
       )
     )
 
-    ;; Scalar post-processing for small N (N < 128)
+    ;; Scalar post-processing for small N (N < 64)
     ;; DC and Nyquist
     (local.set $z0_re (f32.load (i32.const 0)))
     (local.set $z0_im (f32.load (i32.const 4)))
