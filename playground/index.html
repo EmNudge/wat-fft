@@ -252,14 +252,38 @@
         justify-content: center;
         overflow: hidden;
         min-height: 0;
+        position: relative;
+      }
+
+      .freq-labels {
+        position: absolute;
+        left: 8px;
+        top: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding: 10px 0;
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      .freq-label {
+        font-size: 11px;
+        font-family: monospace;
+        color: rgba(255, 255, 255, 0.8);
+        background: rgba(0, 0, 0, 0.5);
+        padding: 2px 6px;
+        border-radius: 3px;
       }
 
       canvas {
-        max-width: 100%;
-        max-height: 100%;
+        width: 100%;
+        height: 100%;
         display: block;
         border-radius: 4px;
-        image-rendering: pixelated;
+        image-rendering: auto;
+        object-fit: contain;
       }
 
       .current-impl {
@@ -628,17 +652,77 @@
           <div class="controls">
             <div class="slider-row">
               <label>FFT Size</label>
-              <input type="range" id="fft-size" min="8" max="12" value="10" step="1" />
+              <input type="range" id="fft-size" min="8" max="13" value="10" step="1" />
               <span class="slider-value" id="fft-size-value">1024</span>
             </div>
             <div class="slider-row">
               <label>Hop Size</label>
-              <input type="range" id="hop-size" min="6" max="10" value="8" step="1" />
-              <span class="slider-value" id="hop-size-value">256</span>
+              <input type="range" id="hop-size" min="5" max="10" value="7" step="1" />
+              <span class="slider-value" id="hop-size-value">128</span>
             </div>
+            <div class="slider-row">
+              <label>Zero Pad</label>
+              <input type="range" id="zero-padding" min="0" max="2" value="1" step="1" />
+              <span class="slider-value" id="zero-padding-value">2x</span>
+            </div>
+          </div>
+
+          <h2>Window</h2>
+          <div class="controls">
+            <select id="window-type">
+              <option value="hann" selected>Hann</option>
+              <option value="hamming">Hamming</option>
+              <option value="blackman">Blackman</option>
+              <option value="blackmanHarris">Blackman-Harris</option>
+              <option value="rectangular">Rectangular</option>
+            </select>
+          </div>
+
+          <h2>Display</h2>
+          <div class="controls">
+            <div class="slider-row">
+              <label>Gain (dB)</label>
+              <input type="range" id="gain" min="-60" max="0" value="-20" step="1" />
+              <span class="slider-value" id="gain-value">-20 dB</span>
+            </div>
+            <div class="slider-row">
+              <label>Range (dB)</label>
+              <input type="range" id="range" min="20" max="120" value="80" step="5" />
+              <span class="slider-value" id="range-value">80 dB</span>
+            </div>
+          </div>
+
+          <h2>Freq Scale</h2>
+          <div class="controls">
+            <div class="color-row" id="freq-scale-selector">
+              <div class="color-option" data-scale="linear">Linear</div>
+              <div class="color-option selected" data-scale="log">Log</div>
+              <div class="color-option" data-scale="mel">Mel</div>
+            </div>
+            <div class="slider-row" style="margin-top: 8px">
+              <label>Min Freq</label>
+              <input type="range" id="min-freq" min="20" max="500" value="50" step="10" />
+              <span class="slider-value" id="min-freq-value">50 Hz</span>
+            </div>
+            <div class="slider-row">
+              <label>Max Freq</label>
+              <input type="range" id="max-freq" min="1000" max="22050" value="8000" step="500" />
+              <span class="slider-value" id="max-freq-value">8 kHz</span>
+            </div>
+            <button id="auto-freq" class="secondary small" style="margin-top: 6px; width: 100%">
+              Auto-detect Range
+            </button>
+          </div>
+
+          <h2>Colors</h2>
+          <div class="controls">
             <div class="color-row" id="color-selector">
-              <div class="color-option selected" data-color="viridis">Viridis</div>
-              <div class="color-option" data-color="magma">Magma</div>
+              <div class="color-option selected" data-color="magma">Magma</div>
+              <div class="color-option" data-color="inferno">Inferno</div>
+              <div class="color-option" data-color="viridis">Viridis</div>
+            </div>
+            <div class="color-row" style="margin-top: 6px">
+              <div class="color-option" data-color="hot">Hot</div>
               <div class="color-option" data-color="grayscale">Gray</div>
             </div>
           </div>
@@ -676,7 +760,16 @@
           </div>
 
           <div id="file-controls" class="hidden">
-            <h2>File</h2>
+            <div id="sample-file-section">
+              <h2>Sample Files</h2>
+              <div class="controls">
+                <select id="sample-file">
+                  <option value="">-- Select a sample --</option>
+                </select>
+              </div>
+            </div>
+
+            <h2>Or Upload</h2>
             <div class="controls">
               <input type="file" id="audio-file" accept="audio/*" />
               <p class="file-hint">Supports WAV, MP3, OGG, FLAC</p>
@@ -689,6 +782,10 @@
 
       <main class="main">
         <div class="canvas-container">
+          <div class="freq-labels">
+            <span class="freq-label top" id="freq-label-top">8 kHz</span>
+            <span class="freq-label bottom" id="freq-label-bottom">50 Hz</span>
+          </div>
           <canvas id="spectrogram" width="1024" height="512"></canvas>
         </div>
 

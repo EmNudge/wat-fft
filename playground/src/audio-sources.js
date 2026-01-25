@@ -81,6 +81,33 @@ export function generateSyntheticAudioJS({ sampleRate, duration, components }) {
  */
 export async function loadAudioFile(file, targetSampleRate = 44100) {
   const arrayBuffer = await file.arrayBuffer();
+  return decodeAudioBuffer(arrayBuffer, targetSampleRate);
+}
+
+/**
+ * Load audio from a URL
+ *
+ * @param {string} url - Audio file URL
+ * @param {number} targetSampleRate - Target sample rate for resampling
+ * @returns {Promise<{samples: Float32Array, sampleRate: number, duration: number}>}
+ */
+export async function loadAudioFromUrl(url, targetSampleRate = 44100) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio: ${response.status}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return decodeAudioBuffer(arrayBuffer, targetSampleRate);
+}
+
+/**
+ * Decode an ArrayBuffer to audio samples
+ *
+ * @param {ArrayBuffer} arrayBuffer - Audio data
+ * @param {number} targetSampleRate - Target sample rate for resampling
+ * @returns {Promise<{samples: Float32Array, sampleRate: number, duration: number}>}
+ */
+async function decodeAudioBuffer(arrayBuffer, targetSampleRate) {
   const audioCtx = new AudioContext({ sampleRate: targetSampleRate });
 
   try {
