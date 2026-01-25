@@ -284,7 +284,21 @@
         display: block;
         border-radius: 4px;
         image-rendering: auto;
-        object-fit: contain;
+        object-fit: fill;
+      }
+
+      .stretch-indicator {
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        font-size: 10px;
+        font-family: monospace;
+        color: rgba(255, 255, 255, 0.7);
+        background: rgba(0, 0, 0, 0.5);
+        padding: 2px 6px;
+        border-radius: 3px;
+        pointer-events: none;
+        z-index: 1;
       }
 
       .current-impl {
@@ -783,10 +797,6 @@
                 <span class="name">fft-js</span>
                 <span class="desc">JS Cooley-Tukey</span>
               </div>
-              <div class="fft-option alt" data-fft="fftw">
-                <span class="name">FFTW</span>
-                <span class="desc">WASM port</span>
-              </div>
               <div class="fft-option alt" data-fft="fftw_real">
                 <span class="name">FFTW Real</span>
                 <span class="desc">WASM real</span>
@@ -1062,6 +1072,7 @@
         <div class="canvas-container">
           <div class="freq-labels" id="freq-labels"></div>
           <canvas id="spectrogram" width="1024" height="512"></canvas>
+          <div class="stretch-indicator" id="stretch-indicator"></div>
         </div>
 
         <div class="current-impl" id="current-impl">
