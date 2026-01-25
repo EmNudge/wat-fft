@@ -31,6 +31,7 @@ Detailed record of all optimization experiments.
 | 22  | Dispatch Order Optimization | INCONCLUSIVE     | Gap at N=64/128 within benchmark variance     |
 | 23  | Unrolled RFFT-64 Post-Proc  | SUCCESS +3pp     | Inline twiddles, no loops, N=64 gap → -1.5%   |
 | 24  | Derived Conjugate Twiddles  | INCONCLUSIVE     | XOR derivation vs v128.const, within variance |
+| 25  | Unrolled RFFT-128 Post-Proc | SUCCESS +2-5pp   | Inline twiddles, N=128 now consistently +2-6% |
 
 ---
 
@@ -387,5 +388,40 @@ The results show slight improvement at N=64 but high variance (ranging from -3.2
 3. Improves instruction cache utilization slightly
 
 **Lesson**: At this optimization level, benchmark variance (~5pp) exceeds the gains from micro-optimizations. The N=64 gap vs fftw-js represents fundamental algorithmic differences, not inefficient code.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`
+
+---
+
+## Experiment 25: Unrolled RFFT-128 Post-Processing (2026-01-25)
+
+**Hypothesis**: Following the success of Experiment 23 (unrolled RFFT-64 post-processing), create a fully unrolled `$rfft_postprocess_128` with inline twiddle constants to eliminate loop overhead and memory loads for N=128 RFFT.
+
+**Approach**:
+
+- Created `$rfft_postprocess_128` - a specialized function for n2=64 (N=128 RFFT)
+- Fully unrolled all 15 SIMD pair iterations (processing pairs k=1..30 against k=63..34)
+- Single pair handling for k=31 vs k=33
+- Middle element handling for k=32
+- Replaced all memory twiddle loads with `v128.const` inline constants
+- Derived conjugate twiddles using XOR with $CONJ_MASK_F32 (7 fewer constants per pair block)
+
+**Result**: SUCCESS - N=128 consistently beats fftw-js
+
+| Metric    | Before (avg) | After (avg of 3 runs) | Improvement |
+| --------- | ------------ | --------------------- | ----------- |
+| N=64 gap  | +0.6%        | +0.4% to +4.6%        | stable      |
+| N=128 gap | +0.4%        | +2.2% to +6.1%        | +2-5pp      |
+
+**Analysis**: The N=128 unrolled codelet provides consistent improvement by:
+
+1. Eliminating 30 loop iterations of overhead (counter updates, branch predictions)
+2. Eliminating 30 memory loads for twiddle factors
+3. Enabling better instruction scheduling without loop constraints
+4. The derived conjugate twiddle pattern (XOR) keeps code size manageable
+
+**Code size**: The new function adds ~500 lines of WAT but compiles to efficient SIMD code with inline constants.
+
+**Lesson**: For sizes where the loop body dominates execution time, unrolling with inline constants provides consistent measurable gains. The approach scales well up to ~15 iterations; beyond that, I-cache pressure may become a concern.
 
 **Files modified**: `modules/fft_real_f32_dual.wat`

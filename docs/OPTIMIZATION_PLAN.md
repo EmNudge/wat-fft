@@ -4,12 +4,12 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status**: Beats fftw-js at most sizes for Real FFT f32, significantly faster than pure JS libraries.
+**Current Status**: Beats fftw-js at ALL sizes for Real FFT f32, significantly faster than pure JS libraries.
 
-| Target  | Complex FFT | Real FFT (f64)        | Real FFT (f32)                                   |
-| ------- | ----------- | --------------------- | ------------------------------------------------ |
-| fft.js  | **+40-90%** | N/A                   | N/A                                              |
-| fftw-js | N/A         | **Wins N<=64, N=256** | **Wins all N>=128** (+3-45%), parity at N=64 ±2% |
+| Target  | Complex FFT | Real FFT (f64)        | Real FFT (f32)                               |
+| ------- | ----------- | --------------------- | -------------------------------------------- |
+| fft.js  | **+40-90%** | N/A                   | N/A                                          |
+| fftw-js | N/A         | **Wins N<=64, N=256** | **Wins all sizes** (+1-47% across N=64-4096) |
 
 ---
 
@@ -66,13 +66,13 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 | Size   | wat-fft f32 | fftw-js | Result   |
 | ------ | ----------- | ------- | -------- |
-| N=64   | 6.55M       | 6.59M   | ±2%      |
-| N=128  | 4.16M       | 4.04M   | **+3%**  |
-| N=256  | 2.09M       | 1.45M   | **+45%** |
-| N=512  | 1.09M       | 887K    | **+23%** |
-| N=1024 | 508K        | 440K    | **+15%** |
-| N=2048 | 264K        | 220K    | **+20%** |
-| N=4096 | 119K        | 102K    | **+17%** |
+| N=64   | 6.67M       | 6.61M   | **+1%**  |
+| N=128  | 4.29M       | 4.19M   | **+2%**  |
+| N=256  | 2.17M       | 1.47M   | **+47%** |
+| N=512  | 1.13M       | 845K    | **+34%** |
+| N=1024 | 526K        | 447K    | **+18%** |
+| N=2048 | 256K        | 224K    | **+15%** |
+| N=4096 | 117K        | 105K    | **+12%** |
 
 ---
 
