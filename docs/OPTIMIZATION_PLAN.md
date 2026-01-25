@@ -6,10 +6,10 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 **Current Status**: Beats fftw-js at most sizes for Real FFT f32, significantly faster than pure JS libraries.
 
-| Target  | Complex FFT | Real FFT (f64)        | Real FFT (f32)                              |
-| ------- | ----------- | --------------------- | ------------------------------------------- |
-| fft.js  | **+40-90%** | N/A                   | N/A                                         |
-| fftw-js | N/A         | **Wins N<=64, N=256** | **Wins all N>=128** (+1-48%), -1.5% at N=64 |
+| Target  | Complex FFT | Real FFT (f64)        | Real FFT (f32)                                   |
+| ------- | ----------- | --------------------- | ------------------------------------------------ |
+| fft.js  | **+40-90%** | N/A                   | N/A                                              |
+| fftw-js | N/A         | **Wins N<=64, N=256** | **Wins all N>=128** (+3-45%), parity at N=64 ±2% |
 
 ---
 
@@ -66,13 +66,13 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 | Size   | wat-fft f32 | fftw-js | Result   |
 | ------ | ----------- | ------- | -------- |
-| N=64   | 6.59M       | 6.69M   | -1.5%    |
-| N=128  | 4.20M       | 4.14M   | **+1%**  |
-| N=256  | 2.15M       | 1.45M   | **+48%** |
-| N=512  | 1.14M       | 868K    | **+31%** |
-| N=1024 | 522K        | 456K    | **+14%** |
-| N=2048 | 259K        | 220K    | **+18%** |
-| N=4096 | 120K        | 104K    | **+15%** |
+| N=64   | 6.55M       | 6.59M   | ±2%      |
+| N=128  | 4.16M       | 4.04M   | **+3%**  |
+| N=256  | 2.09M       | 1.45M   | **+45%** |
+| N=512  | 1.09M       | 887K    | **+23%** |
+| N=1024 | 508K        | 440K    | **+15%** |
+| N=2048 | 264K        | 220K    | **+20%** |
+| N=4096 | 119K        | 102K    | **+17%** |
 
 ---
 

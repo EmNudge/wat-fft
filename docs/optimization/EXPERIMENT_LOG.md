@@ -30,6 +30,7 @@ Detailed record of all optimization experiments.
 | 21  | Dual-Group r=1 Stage        | SUCCESS +11-20pp | Process 2 groups at once, massive improvement |
 | 22  | Dispatch Order Optimization | INCONCLUSIVE     | Gap at N=64/128 within benchmark variance     |
 | 23  | Unrolled RFFT-64 Post-Proc  | SUCCESS +3pp     | Inline twiddles, no loops, N=64 gap → -1.5%   |
+| 24  | Derived Conjugate Twiddles  | INCONCLUSIVE     | XOR derivation vs v128.const, within variance |
 
 ---
 
@@ -357,5 +358,34 @@ Multiple runs showed N=64 gap ranging from -0.8% to -7.5%, and N=128 gap from -3
 4. Compiler can better schedule instructions without loop constraints
 
 **Lesson**: Even for small loops (7 iterations), full unrolling with inline constants can provide measurable gains. The approach is limited by code size - for larger N, the code bloat would hurt I-cache performance.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`
+
+---
+
+## Experiment 24: Derived Conjugate Twiddles (2026-01-25)
+
+**Hypothesis**: In RFFT post-processing, `$wn2k_rot` twiddles differ from `$wk_rot` only by sign flip on the second f32 element of each pair. We can derive one from the other using XOR with `$CONJ_MASK_F32`, eliminating 7 `v128.const` instructions.
+
+**Approach**:
+
+- Replaced 7 occurrences of `(local.set $wn2k_rot (v128.const ...))`
+- With `(local.set $wn2k_rot (v128.xor (local.get $wk_rot) (global.get $CONJ_MASK_F32)))`
+- The mask `[0, 0x80000000, 0, 0x80000000]` flips the sign of indices 1 and 3
+
+**Result**: INCONCLUSIVE - Within benchmark variance
+
+| Metric    | Before | After (avg of 4 runs) |
+| --------- | ------ | --------------------- |
+| N=64 gap  | -2.7%  | -0.9% ± 3%            |
+| N=128 gap | +1.3%  | +2.8% ± 1%            |
+
+The results show slight improvement at N=64 but high variance (ranging from -3.2% to +6.2% across runs). The optimization:
+
+1. Reduces code size by ~112 bytes (7 × 16-byte constants)
+2. Replaces constant decode with XOR (1 cycle vs ~3 cycles for constant materialization)
+3. Improves instruction cache utilization slightly
+
+**Lesson**: At this optimization level, benchmark variance (~5pp) exceeds the gains from micro-optimizations. The N=64 gap vs fftw-js represents fundamental algorithmic differences, not inefficient code.
 
 **Files modified**: `modules/fft_real_f32_dual.wat`
