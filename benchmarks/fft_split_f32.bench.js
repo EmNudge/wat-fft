@@ -1,5 +1,5 @@
 /**
- * Benchmark: f32 Dual-Complex FFT vs fft.js and pffft-wasm
+ * Benchmark: Split-Format f32 FFT vs pffft-wasm and current implementation
  */
 
 import fs from "fs";
@@ -11,12 +11,23 @@ import PFFFT from "@echogarden/pffft-wasm";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load WASM modules
-async function loadWasm(name) {
+// Load standard WASM module (no imports)
+async function loadWasmSimple(name) {
   const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
   const instance = await WebAssembly.instantiate(wasmModule, {});
+  return instance.exports;
+}
+
+// Load WASM module with sin/cos imports
+async function loadWasmWithMath(name) {
+  const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
+  const wasmBuffer = fs.readFileSync(wasmPath);
+  const wasmModule = await WebAssembly.compile(wasmBuffer);
+  const instance = await WebAssembly.instantiate(wasmModule, {
+    env: { sin: Math.sin, cos: Math.cos },
+  });
   return instance.exports;
 }
 
@@ -62,46 +73,63 @@ function runBenchmark(name, setupFn, benchFn) {
 }
 
 async function runBenchmarks() {
-  console.log("=".repeat(70));
-  console.log("f32 Dual-Complex FFT Benchmark");
-  console.log("=".repeat(70));
+  console.log("=".repeat(75));
+  console.log("Split-Format f32 FFT Benchmark");
+  console.log("=".repeat(75));
   console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
 
-  const wasm = await loadWasm("fft_stockham_f32_dual");
+  const wasmSplit = await loadWasmWithMath("fft_split_f32");
+  const wasmDual = await loadWasmSimple("fft_stockham_f32_dual");
   const pffft = await PFFFT();
 
   const PFFFT_COMPLEX = 0;
   const PFFFT_FORWARD = 0;
 
   for (const n of SIZES) {
-    console.log("-".repeat(70));
+    console.log("-".repeat(75));
     console.log(`FFT Size: N=${n}`);
-    console.log("-".repeat(70));
+    console.log("-".repeat(75));
 
     const inputF32 = generateInputF32(n);
     const results = [];
 
-    // 1. f32 FFT
-    const wasmResult = runBenchmark(
-      "wat-fft (f32)",
+    // 1. Split-format FFT (new implementation)
+    const splitResult = runBenchmark(
+      "wat-fft split (new)",
       () => {
-        const memory = wasm.memory;
+        const memory = wasmSplit.memory;
         const data = new Float32Array(memory.buffer, 0, n * 2);
-        wasm.precompute_twiddles(n);
+        wasmSplit.precompute_twiddles(n);
         return { data, inputBuffer: inputF32 };
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        wasm.fft(n);
+        wasmSplit.fft(n);
       },
     );
-    results.push(wasmResult);
+    results.push(splitResult);
 
-    // 2. pffft-wasm (f32 WASM competitor)
+    // 2. Stockham dual FFT (current implementation)
+    const dualResult = runBenchmark(
+      "wat-fft dual (current)",
+      () => {
+        const memory = wasmDual.memory;
+        const data = new Float32Array(memory.buffer, 0, n * 2);
+        wasmDual.precompute_twiddles(n);
+        return { data, inputBuffer: inputF32 };
+      },
+      (ctx) => {
+        ctx.data.set(ctx.inputBuffer);
+        wasmDual.fft(n);
+      },
+    );
+    results.push(dualResult);
+
+    // 3. pffft-wasm (f32 WASM competitor)
     const pffftResult = runBenchmark(
-      "pffft-wasm (f32)",
+      "pffft-wasm",
       () => {
         const setup = pffft._pffft_new_setup(n, PFFFT_COMPLEX);
         const inputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
@@ -116,11 +144,11 @@ async function runBenchmarks() {
     );
     results.push(pffftResult);
 
-    // 3. fft.js (JS reference)
+    // 4. fft.js (JS reference)
     const inputF64 = Array.from(inputF32);
     const fftJs = new FFT(n);
     const fftJsResult = runBenchmark(
-      "fft.js (f64 JS)",
+      "fft.js (JS)",
       () => {
         const fftInput = inputF64.slice();
         const fftOutput = fftJs.createComplexArray();
@@ -137,24 +165,26 @@ async function runBenchmarks() {
 
     // Print results
     console.log("");
-    console.log("Implementation              ops/sec      vs fastest");
-    console.log("-".repeat(55));
+    console.log("Implementation              ops/sec      vs fastest    vs pffft-wasm");
+    console.log("-".repeat(65));
     const fastest = results[0].opsPerSec;
+    const pffftOps = pffftResult.opsPerSec;
     for (const result of results) {
       const vsFastest =
         result.opsPerSec / fastest === 1
           ? "(fastest)"
           : `${((result.opsPerSec / fastest) * 100).toFixed(1)}%`;
+      const vsPffft = `${((result.opsPerSec / pffftOps) * 100).toFixed(1)}%`;
       console.log(
-        `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${vsFastest.padStart(10)}`,
+        `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${vsFastest.padStart(10)}    ${vsPffft.padStart(10)}`,
       );
     }
     console.log("");
   }
 
-  console.log("=".repeat(70));
+  console.log("=".repeat(75));
   console.log("Benchmark complete!");
-  console.log("=".repeat(70));
+  console.log("=".repeat(75));
 }
 
 runBenchmarks().catch(console.error);
