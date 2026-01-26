@@ -1,6 +1,31 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
-import { readdirSync } from "fs";
+import { readdirSync, existsSync, readFileSync } from "fs";
+
+// Plugin to serve WASM files from parent dist directory
+function wasmServePlugin() {
+  const distDir = resolve(__dirname, "../dist");
+
+  return {
+    name: "wasm-serve",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url && req.url.startsWith("/wasm/")) {
+          const filename = req.url.replace("/wasm/", "");
+          const filepath = resolve(distDir, filename);
+
+          if (existsSync(filepath)) {
+            const content = readFileSync(filepath);
+            res.setHeader("Content-Type", "application/wasm");
+            res.end(content);
+            return;
+          }
+        }
+        next();
+      });
+    },
+  };
+}
 
 // Plugin to expose sample files from public/samples as a virtual module
 function sampleFilesPlugin() {
@@ -35,7 +60,7 @@ function sampleFilesPlugin() {
 }
 
 export default defineConfig({
-  plugins: [sampleFilesPlugin()],
+  plugins: [wasmServePlugin(), sampleFilesPlugin()],
   root: ".",
   publicDir: "public",
   server: {
