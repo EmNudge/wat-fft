@@ -36,6 +36,7 @@ Detailed record of all optimization experiments.
 | 27  | Dead Code Removal           | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64    |
 | 28  | Dead Parameterized Codelets | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at  |
 | 29  | IFFT Implementation         | SUCCESS          | Full inverse FFT for all modules, 27/27 tests |
+| 30  | r=2 Stage Dual-Group        | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage         |
 
 ---
 
@@ -590,3 +591,40 @@ This uses the mathematical identity that the inverse DFT is equivalent to conjug
 - `modules/fft_stockham_f32_dual.wat` - Added IFFT for f32 complex
 - `modules/fft_real_f32_dual.wat` - Added IRFFT for f32 real
 - `tests/ifft.test.js` - New comprehensive test suite
+
+---
+
+## Experiment 30: r=2 Stage Dual-Group Optimization (2026-01-26)
+
+**Goal**: Improve performance for N≥256 by optimizing the r=2 stage of the Stockham FFT.
+
+**Hypothesis**: Following the success of Experiment 21 (r=1 stage dual-group processing), the r=2 stage can also benefit from processing 2 groups simultaneously. In the r=2 stage, each group has 2 elements in the first half and 2 in the second half, so processing 2 groups means handling 4 v128 loads and 4 butterflies per iteration.
+
+**Approach**:
+
+- Added specialized r=2 path in `$fft_general` that processes 2 groups at once
+- For 2 groups: load 4 v128s (A, B for group j; C, D for group j+1)
+- Apply twiddles and butterflies for both groups with less loop overhead
+- Fall back to single-group processing if l (number of groups) is odd
+
+**Result**: SUCCESS - +3 to +6pp at N≥256
+
+| Size   | Before | After  | Improvement |
+| ------ | ------ | ------ | ----------- |
+| N=64   | -1.8%  | -1.8%  | stable      |
+| N=128  | +6.4%  | +8.5%  | +2.1pp      |
+| N=256  | +47.2% | +52.9% | **+5.7pp**  |
+| N=512  | +27.1% | +33.0% | **+5.9pp**  |
+| N=1024 | +15.8% | +18.6% | **+2.8pp**  |
+| N=2048 | +16.4% | +21.8% | **+5.4pp**  |
+| N=4096 | +14.7% | +17.8% | **+3.1pp**  |
+
+**Analysis**: The r=2 stage optimization provides consistent improvements at larger sizes where there are more groups to process. The gains come from:
+
+1. Reduced loop overhead (half the iterations)
+2. Better instruction-level parallelism (more independent operations per iteration)
+3. Amortized twiddle load cost over more butterflies
+
+The improvement is most significant at N=256-512 where the r=2 stage represents a larger fraction of total work.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`

@@ -64,17 +64,17 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 ### Real FFT f32 vs fftw-js
 
-| Size   | wat-fft f32 | fftw-js  | Result    |
-| ------ | ----------- | -------- | --------- |
-| N=64   | 6.5-6.7M    | 6.6-6.7M | **~tied** |
-| N=128  | 4.4M        | 4.1M     | **+9%**   |
-| N=256  | 2.0M        | 1.5M     | **+37%**  |
-| N=512  | 1.1M        | 888K     | **+28%**  |
-| N=1024 | 523K        | 461K     | **+14%**  |
-| N=2048 | 260K        | 224K     | **+16%**  |
-| N=4096 | 116K        | 104K     | **+11%**  |
+| Size   | wat-fft f32 | fftw-js | Result    |
+| ------ | ----------- | ------- | --------- |
+| N=64   | 6.9M        | 7.0M    | **~tied** |
+| N=128  | 4.8M        | 4.4M    | **+9%**   |
+| N=256  | 2.3M        | 1.5M    | **+53%**  |
+| N=512  | 1.2M        | 917K    | **+33%**  |
+| N=1024 | 559K        | 471K    | **+19%**  |
+| N=2048 | 282K        | 232K    | **+22%**  |
+| N=4096 | 127K        | 108K    | **+18%**  |
 
-_Note: N=64 performance varies ±3% between runs (within benchmark noise)._
+_Note: N=64 performance varies ±2% between runs (within benchmark noise)._
 
 ---
 
