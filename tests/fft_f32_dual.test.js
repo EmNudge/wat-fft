@@ -52,11 +52,8 @@ function maxError(a, b) {
 const SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 async function runTests() {
-  console.log("Loading WASM modules...");
-  const dual = await loadWasm("fft_stockham_f32_dual");
-
-  // Also load original f32 for comparison
-  const original = await loadWasm("combined_stockham_f32");
+  console.log("Loading WASM module...");
+  const wasm = await loadWasm("fft_stockham_f32_dual");
 
   console.log("\nTesting f32 Dual-Complex FFT against fft.js reference");
   console.log("=".repeat(70));
@@ -67,52 +64,34 @@ async function runTests() {
     // Generate input (f32)
     const input = generateInput(n);
 
-    // Copy to dual module memory
-    const dualMem = new Float32Array(dual.memory.buffer, 0, n * 2);
-    dualMem.set(input);
-    dual.precompute_twiddles(n);
-    dual.fft(n);
-
-    // Copy to original f32 module memory for comparison
-    const origMem = new Float32Array(original.memory.buffer, 0, n * 2);
-    origMem.set(input);
-    original.precompute_twiddles(n);
-    original.fft_stockham(n);
+    // Copy to module memory
+    const mem = new Float32Array(wasm.memory.buffer, 0, n * 2);
+    mem.set(input);
+    wasm.precompute_twiddles(n);
+    wasm.fft(n);
 
     // Get reference output from fft.js (using f64 internally)
     const inputF64 = Array.from(input);
     const refOutput = referenceFFT(inputF64, n);
 
-    // Read dual output
-    const dualOutput = new Float32Array(dual.memory.buffer, 0, n * 2);
+    // Read output
+    const output = new Float32Array(wasm.memory.buffer, 0, n * 2);
 
-    // Read original output
-    const origOutput = new Float32Array(original.memory.buffer, 0, n * 2);
-
-    // Compare dual vs reference (f32 has ~1e-5 precision)
-    const dualErr = maxError(dualOutput, refOutput);
-    const origErr = maxError(origOutput, refOutput);
-    const dualVsOrig = maxError(dualOutput, origOutput);
+    // Compare vs reference (f32 has ~1e-5 precision)
+    const err = maxError(output, refOutput);
 
     // f32 should be within 1e-4 of reference
     const threshold = 1e-4;
-    const dualPassed = dualErr < threshold;
-    const _origPassed = origErr < threshold;
+    const passed = err < threshold;
 
-    const status = dualPassed ? "PASS" : "FAIL";
-    console.log(
-      `N=${n.toString().padStart(4)}: ${status} (dual err: ${dualErr.toExponential(2)}, orig err: ${origErr.toExponential(2)}, dual vs orig: ${dualVsOrig.toExponential(2)})`,
-    );
+    const status = passed ? "PASS" : "FAIL";
+    console.log(`N=${n.toString().padStart(4)}: ${status} (error: ${err.toExponential(2)})`);
 
-    if (!dualPassed) {
+    if (!passed) {
       allPassed = false;
       console.log(
-        "  First 4 dual:    ",
-        Array.from(dualOutput.slice(0, 8)).map((x) => x.toFixed(6)),
-      );
-      console.log(
-        "  First 4 original:",
-        Array.from(origOutput.slice(0, 8)).map((x) => x.toFixed(6)),
+        "  First 4 output:   ",
+        Array.from(output.slice(0, 8)).map((x) => x.toFixed(6)),
       );
       console.log(
         "  First 4 reference:",

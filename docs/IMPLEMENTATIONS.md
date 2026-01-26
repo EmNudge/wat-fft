@@ -13,11 +13,7 @@ This document describes all FFT implementations provided by wat-fft.
 
 ## Numerical Accuracy
 
-The accuracy difference between implementations comes from trigonometric function computation:
-
-- **Stockham/Real (~10⁻⁹)**: Uses inline 8-term Taylor series for sin/cos to avoid JavaScript import overhead. The Taylor series achieves ~10⁻¹⁰ accuracy per twiddle factor after range reduction to [-π/2, π/2]. Errors accumulate through log₂(N) butterfly stages, resulting in ~10⁻⁹ overall accuracy for typical FFT sizes.
-
-- **Fast (~10⁻¹⁴)**: Uses JavaScript's `Math.sin`/`Math.cos` which provide full double-precision accuracy (~10⁻¹⁵), resulting in ~10⁻¹⁴ overall FFT accuracy.
+All implementations use inline 8-term Taylor series for sin/cos to avoid JavaScript import overhead. The Taylor series achieves ~10⁻¹⁰ accuracy per twiddle factor after range reduction to [-π/2, π/2]. Errors accumulate through log₂(N) butterfly stages, resulting in ~10⁻⁹ overall accuracy for typical FFT sizes.
 
 **Test tolerances** are derived from these characteristics:
 
@@ -25,7 +21,7 @@ The accuracy difference between implementations comes from trigonometric functio
 - Size scaling: `max(1e-9, N × 2e-11)` accounts for error accumulation in larger transforms
 - Absolute floor: `5e-4` for property tests handles near-zero values where relative error is meaningless
 
-For most signal processing applications, ~10⁻⁹ accuracy is more than sufficient. Use `combined_fast.wasm` if you need higher precision and can accept the ~30% performance penalty from JavaScript trig calls.
+For most signal processing applications, ~10⁻⁹ accuracy is more than sufficient.
 
 **Recommended:** Use `fft_combined.wasm` (complex) or `fft_real_combined.wasm` (real) for automatic algorithm selection. These modules use radix-4 for power-of-4 sizes and radix-2 for other sizes, similar to FFTW's approach.
 
@@ -164,7 +160,3 @@ const output = new Float64Array(fft.memory.buffer, 0, (N / 2 + 1) * 2);
 console.log("DC:", output[0], output[1]);
 console.log("Nyquist:", output[N], output[N + 1]);
 ```
-
-## Fast (Non-SIMD Fallback)
-
-Radix-2 with precomputed twiddle factors. Use this for environments without WebAssembly SIMD support (older browsers/runtimes).

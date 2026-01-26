@@ -1,9 +1,8 @@
 /**
  * Comprehensive FFT Test Suite
  *
- * Tests all FFT implementations against a reference DFT with various
- * input sizes and patterns. Designed to make debugging algorithm
- * modifications easier by providing detailed error output.
+ * Tests the main complex FFT implementation against a reference DFT with various
+ * input sizes and patterns.
  */
 
 import fs from "fs";
@@ -20,15 +19,13 @@ const __dirname = path.dirname(__filename);
 
 // Load WASM module
 async function loadWasm(name) {
-  const wasmPath = path.join(__dirname, "..", "dist", `combined_${name}.wasm`);
+  const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
   if (!fs.existsSync(wasmPath)) {
     return null;
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
@@ -37,36 +34,12 @@ const inputGenerators = sharedInputGenerators;
 
 // Standard test sizes (powers of 2)
 const STANDARD_SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
-// Large sizes supported by modules - max ~4096 with twiddles
+// Large sizes supported by modules
 const LARGE_SIZES = [2048, 4096];
-// All sizes for 3-page modules (fast)
-const SIZES_3PAGE = [...STANDARD_SIZES, ...LARGE_SIZES];
-// All sizes for 4-page modules (stockham) - needs secondary buffer
-const SIZES_4PAGE = [...STANDARD_SIZES, ...LARGE_SIZES];
-
-// FFT implementation definitions
-// Memory requirements per implementation:
-// - stockham: 4 pages (256KB) - needs secondary buffer for ping-pong
-// - fast: 3 pages (192KB) - non-SIMD fallback
-const implementations = [
-  {
-    name: "stockham",
-    wasmName: "stockham",
-    fftFunc: "fft_stockham",
-    precompute: true,
-    sizes: SIZES_4PAGE,
-  },
-  {
-    name: "fast",
-    wasmName: "fast",
-    fftFunc: "fft_fast",
-    precompute: true,
-    sizes: SIZES_3PAGE,
-  },
-];
+const ALL_SIZES = [...STANDARD_SIZES, ...LARGE_SIZES];
 
 // Run FFT and extract results
-function runFFT(wasm, fftFunc, input, n, precompute) {
+function runFFT(wasm, input, n) {
   const memory = wasm.memory;
   const data = new Float64Array(memory.buffer, 0, n * 2);
 
@@ -77,12 +50,12 @@ function runFFT(wasm, fftFunc, input, n, precompute) {
   }
 
   // Precompute twiddles if needed
-  if (precompute && wasm.precompute_twiddles) {
+  if (wasm.precompute_twiddles) {
     wasm.precompute_twiddles(n);
   }
 
   // Run FFT
-  wasm[fftFunc](n);
+  wasm.fft(n);
 
   // Extract results
   const resultData = new Float64Array(memory.buffer, 0, n * 2);
@@ -107,84 +80,64 @@ async function runTests() {
   let passedTests = 0;
   let failedTests = [];
 
-  // Load all WASM modules
-  const modules = {};
-  for (const impl of implementations) {
-    modules[impl.name] = await loadWasm(impl.wasmName);
-    if (!modules[impl.name]) {
-      console.log(`⚠ Skipping ${impl.name}: WASM not found`);
-    }
+  // Load WASM module
+  const wasm = await loadWasm("fft_combined");
+  if (!wasm) {
+    console.error("Could not load fft_combined.wasm");
+    process.exit(1);
   }
-  console.log("");
 
-  // Run tests for each implementation
-  for (const impl of implementations) {
-    const wasm = modules[impl.name];
-    if (!wasm) continue;
+  console.log("Testing: fft_combined (Complex FFT f64)");
+  console.log("-".repeat(40));
 
-    if (impl.skip) {
-      console.log(`Skipping: ${impl.name} (${impl.skipReason})`);
-      console.log("");
-      continue;
-    }
+  for (const size of ALL_SIZES) {
+    for (const [genName, generator] of Object.entries(inputGenerators)) {
+      const input = generator(size);
+      const expected = referenceDFT(input.real, input.imag);
 
-    console.log(`Testing: ${impl.name}`);
-    console.log("-".repeat(40));
+      let actual;
+      let testError = null;
 
-    for (const size of impl.sizes) {
-      for (const [genName, generator] of Object.entries(inputGenerators)) {
-        const input = generator(size);
-        const expected = referenceDFT(input.real, input.imag);
+      try {
+        actual = runFFT(wasm, input, size);
+      } catch (e) {
+        testError = e.message;
+      }
 
-        let actual;
-        let testError = null;
+      totalTests++;
 
-        try {
-          actual = runFFT(wasm, impl.fftFunc, input, size, impl.precompute);
-        } catch (e) {
-          testError = e.message;
-        }
+      // Tolerance derivation for Taylor series trig:
+      // - Taylor series sin/cos accuracy: ~1e-10 per operation
+      // - Error accumulation: O(log2(N)) butterfly stages
+      // - Formula: max(1e-9, N * 5e-11) matches combined.test.js
+      const tolerance = Math.max(1e-9, size * 5e-11);
 
-        totalTests++;
+      if (testError) {
+        failedTests.push({
+          size,
+          input: genName,
+          error: testError,
+        });
+        process.stdout.write("E");
+      } else {
+        const errors = compareResults(actual, expected, tolerance);
 
-        // Tolerance derivation for Taylor series trig (see fft_stockham.wat):
-        // - Taylor series sin/cos accuracy: ~1e-10 per operation
-        // - Error accumulation: O(log2(N)) butterfly stages, each using twiddles
-        // - Formula: max(1e-9, N * 2e-11) provides:
-        //   - Base 1e-9 for small N (accounts for ~10 twiddle operations)
-        //   - Linear scaling for large N (2e-11 per element handles accumulation)
-        //   - Example: N=4096 -> tolerance=8.2e-8, N=64 -> tolerance=1e-9
-        const tolerance = Math.max(1e-9, size * 2e-11);
-
-        if (testError) {
+        if (errors.length === 0) {
+          passedTests++;
+          process.stdout.write(".");
+        } else {
           failedTests.push({
-            impl: impl.name,
             size,
             input: genName,
-            error: testError,
+            errors: errors.slice(0, 5), // First 5 errors
           });
-          process.stdout.write("E");
-        } else {
-          const errors = compareResults(actual, expected, tolerance);
-
-          if (errors.length === 0) {
-            passedTests++;
-            process.stdout.write(".");
-          } else {
-            failedTests.push({
-              impl: impl.name,
-              size,
-              input: genName,
-              errors: errors.slice(0, 5), // First 5 errors
-            });
-            process.stdout.write("F");
-          }
+          process.stdout.write("F");
         }
       }
     }
-    console.log("");
-    console.log("");
   }
+  console.log("");
+  console.log("");
 
   // Summary
   console.log("=".repeat(70));
@@ -197,7 +150,7 @@ async function runTests() {
     console.log("");
 
     for (const failure of failedTests) {
-      console.log(`✗ ${failure.impl} N=${failure.size} input=${failure.input}`);
+      console.log(`N=${failure.size} input=${failure.input}`);
 
       if (failure.error) {
         console.log(`  Error: ${failure.error}`);
@@ -222,27 +175,21 @@ async function runTests() {
   }
 }
 
-// Single implementation test (for debugging)
-async function testSingleImpl(implName, size, inputType = "random") {
-  console.log(`Testing ${implName} with N=${size}, input=${inputType}`);
+// Single size test (for debugging)
+async function testSingleSize(size, inputType = "random") {
+  console.log(`Testing fft_combined with N=${size}, input=${inputType}`);
   console.log("");
 
-  const impl = implementations.find((i) => i.name === implName);
-  if (!impl) {
-    console.error(`Unknown implementation: ${implName}`);
-    process.exit(1);
-  }
-
-  const wasm = await loadWasm(impl.wasmName);
+  const wasm = await loadWasm("fft_combined");
 
   if (!wasm) {
-    console.error(`Could not load WASM for ${implName}`);
+    console.error("Could not load fft_combined.wasm");
     process.exit(1);
   }
 
   const input = inputGenerators[inputType](size);
   const expected = referenceDFT(input.real, input.imag);
-  const actual = runFFT(wasm, impl.fftFunc, input, size, impl.precompute);
+  const actual = runFFT(wasm, input, size);
 
   console.log("Input (first 8):");
   for (let i = 0; i < Math.min(8, size); i++) {
@@ -264,7 +211,7 @@ async function testSingleImpl(implName, size, inputType = "random") {
     const imagMatch = Math.abs(actual.imag[i] - expected.imag[i]) < tolerance;
     const match = realMatch && imagMatch;
     if (!match) allMatch = false;
-    console.log(`[${i}]`.padEnd(8) + expStr.padEnd(30) + actStr.padEnd(30) + (match ? "✓" : "✗"));
+    console.log(`[${i}]`.padEnd(8) + expStr.padEnd(30) + actStr.padEnd(30) + (match ? "+" : "x"));
   }
 
   console.log("");
@@ -282,22 +229,21 @@ const args = process.argv.slice(2);
 
 if (args.length === 0) {
   runTests();
-} else if (args[0] === "--impl" && args.length >= 3) {
-  testSingleImpl(args[1], parseInt(args[2]), args[3] || "random");
+} else if (args[0] === "--size" && args.length >= 2) {
+  testSingleSize(parseInt(args[1]), args[2] || "random");
 } else if (args[0] === "--help") {
   console.log("FFT Test Suite");
   console.log("");
   console.log("Usage:");
   console.log("  node fft.test.js                    Run all tests");
-  console.log("  node fft.test.js --impl NAME SIZE [INPUT]");
-  console.log("                                      Test single implementation");
+  console.log("  node fft.test.js --size SIZE [INPUT]");
+  console.log("                                      Test single size");
   console.log("");
-  console.log("Implementations: stockham, fast");
   console.log("Input types: impulse, constant, singleFreq, random");
   console.log("");
   console.log("Examples:");
-  console.log("  node fft.test.js --impl stockham 64 random");
-  console.log("  node fft.test.js --impl fast 256 impulse");
+  console.log("  node fft.test.js --size 64 random");
+  console.log("  node fft.test.js --size 256 impulse");
 } else {
   console.error("Unknown arguments. Use --help for usage.");
   process.exit(1);

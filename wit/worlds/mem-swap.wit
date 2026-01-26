@@ -1,5 +1,0 @@
-package wat-fft:mem-swap@0.1.0;
-
-world mem-swap-component {
-    export swap: func(a: u32, b: u32);
-}

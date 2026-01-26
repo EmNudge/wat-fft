@@ -9,9 +9,6 @@
  * bit-reversed output. If the implementation doesn't properly reorder the output,
  * or if different code paths (codelets vs general algorithms) have inconsistent
  * ordering, this can cause subtle bugs that symmetric test signals won't catch.
- *
- * These tests were added after discovering that fused codelets were outputting
- * in bit-reversed order while the RFFT post-processing expected natural order.
  */
 
 import fs from "fs";
@@ -31,9 +28,7 @@ async function loadModule(name) {
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
@@ -89,15 +84,6 @@ function referenceRealDFT(input) {
 
 /**
  * Generate a "distinct bin" signal - each frequency bin gets a unique magnitude.
- * This is achieved by using a sum of cosines at each frequency with distinct amplitudes.
- *
- * x[j] = sum_{k=0}^{N-1} A_k * cos(2*pi*k*j/N)
- *
- * where A_k = k + 1 (so DC has amplitude 1, bin 1 has amplitude 2, etc.)
- *
- * The FFT of this signal should have:
- * - X[0] = N * A_0 = N (DC)
- * - X[k] = N/2 * A_k = N/2 * (k+1) for k > 0
  */
 function generateDistinctBinSignal(n) {
   const real = new Float64Array(n);
@@ -128,16 +114,13 @@ function createRng(seed) {
 }
 
 describe("Output Order Verification", async () => {
-  // Test sizes that exercise different code paths:
-  // - Small sizes often use specialized codelets
-  // - Larger sizes use general algorithms
-  // - Powers of 4 may use radix-4, others use radix-2/mixed-radix
+  // Test sizes that exercise different code paths
   const sizes = [8, 16, 32, 64, 128, 256, 512, 1024];
 
   describe("Complex FFT output ordering (f64)", async () => {
-    const stockham = await loadModule("combined_stockham.wasm");
-    if (!stockham) {
-      test.skip("Stockham module not found");
+    const wasm = await loadModule("fft_combined.wasm");
+    if (!wasm) {
+      test.skip("fft_combined module not found");
       return;
     }
 
@@ -171,7 +154,7 @@ describe("Output Order Verification", async () => {
         const imag = Float64Array.from({ length: n }, () => rand());
 
         const expected = referenceDFT(real, imag);
-        const actual = runFFT(stockham, real, imag);
+        const actual = runFFT(wasm, real, imag);
 
         // Verify EACH bin individually - this catches permutation errors
         const tol = Math.max(1e-9, n * 1e-11);
@@ -195,9 +178,9 @@ describe("Output Order Verification", async () => {
   });
 
   describe("RFFT output ordering (f64)", async () => {
-    const realWasm = await loadModule("combined_real.wasm");
+    const realWasm = await loadModule("fft_real_combined.wasm");
     if (!realWasm) {
-      test.skip("Real FFT module not found");
+      test.skip("fft_real_combined module not found");
       return;
     }
 
@@ -283,7 +266,7 @@ describe("Output Order Verification", async () => {
   describe("RFFT f32 output ordering", async () => {
     const f32Wasm = await loadModule("fft_real_f32_dual.wasm");
     if (!f32Wasm) {
-      test.skip("f32 Real FFT module not found");
+      test.skip("fft_real_f32_dual module not found");
       return;
     }
 
@@ -310,7 +293,6 @@ describe("Output Order Verification", async () => {
     }
 
     // Test sizes that exercise different code paths in f32
-    // N=8 uses internal FFT-4, N=16+ uses fft_general
     const f32Sizes = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
     for (const n of f32Sizes) {
@@ -341,9 +323,8 @@ describe("Output Order Verification", async () => {
 
     // Specific regression test for the bit-reversal bug
     test("Regression: sine wave peak at correct bin (not bit-reversed)", () => {
-      // A sine wave at frequency f should have its peak at bin f, not at bitrev(f)
       const n = 64;
-      const freq = 7; // Frequency bin 7
+      const freq = 7;
 
       const input = new Float32Array(n);
       for (let i = 0; i < n; i++) {
@@ -370,7 +351,6 @@ describe("Output Order Verification", async () => {
           `This indicates bit-reversed or otherwise reordered output.`,
       );
 
-      // Also verify the magnitude is approximately correct
       const expectedMag = n / 2;
       assert.ok(
         Math.abs(maxMag - expectedMag) < 0.1,
@@ -381,7 +361,7 @@ describe("Output Order Verification", async () => {
     // Test multiple frequencies to catch subtler ordering issues
     test("Regression: multiple sine waves at correct bins", () => {
       const n = 128;
-      const frequencies = [3, 11, 17, 29]; // Chosen to have different bit-reversal patterns
+      const frequencies = [3, 11, 17, 29];
 
       const input = new Float32Array(n);
       for (let i = 0; i < n; i++) {
@@ -394,8 +374,7 @@ describe("Output Order Verification", async () => {
 
       const result = runRFFT32(f32Wasm, input);
 
-      // Each frequency should have a peak at its corresponding bin
-      const tol = 1.0; // Allow some tolerance for interference
+      const tol = 1.0;
       for (const freq of frequencies) {
         const mag = Math.sqrt(
           result.real[freq] * result.real[freq] + result.imag[freq] * result.imag[freq],
@@ -411,7 +390,7 @@ describe("Output Order Verification", async () => {
   });
 
   describe("Cross-implementation consistency", async () => {
-    const realWasm = await loadModule("combined_real.wasm");
+    const realWasm = await loadModule("fft_real_combined.wasm");
     const f32Wasm = await loadModule("fft_real_f32_dual.wasm");
 
     if (!realWasm || !f32Wasm) {
@@ -461,7 +440,7 @@ describe("Output Order Verification", async () => {
         const f64Result = runRFFT64(realWasm, input);
         const f32Result = runRFFT32(f32Wasm, input);
 
-        // f32 has lower precision, so use larger tolerance
+        // f32 has lower precision
         const tol = Math.max(1e-3, n * 1e-5);
 
         for (let k = 0; k <= n / 2; k++) {
