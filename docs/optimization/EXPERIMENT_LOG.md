@@ -38,6 +38,7 @@ Detailed record of all optimization experiments.
 | 29  | IFFT Implementation         | SUCCESS          | Full inverse FFT for all modules, 27/27 tests |
 | 30  | r=2 Stage Dual-Group        | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage         |
 | 31  | f32 Complex FFT Dual-Group  | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module |
+| 32  | f64 Complex FFT Dual-Group  | SUCCESS +7-10%   | Dual-group r=1/r=2 for f64 Stockham           |
 
 ---
 
@@ -673,3 +674,38 @@ The improvement is most significant at N=256-512 where the r=2 stage represents 
 **Lesson**: Optimizations proven in one module should be systematically applied to related modules. The r=1/r=2 dual-group pattern is now a standard technique for Stockham FFT SIMD implementations.
 
 **Files modified**: `modules/fft_stockham_f32_dual.wat`
+
+---
+
+## Experiment 32: f64 Complex FFT Dual-Group Optimization (2026-01-26)
+
+**Goal**: Port the r=1 and r=2 dual-group optimizations from f32 modules to `fft_combined.wat`.
+
+**Hypothesis**: The f64 Stockham FFT uses single-element processing for all stages, while f32 has optimized dual-group processing for r=1 and r=2 stages. Applying the same pattern to f64 should reduce loop overhead.
+
+**Approach**:
+
+- r=1 optimized path: Process 2 groups at once (4 v128 loads, 4 butterflies)
+- r=2 optimized path: Process 2 groups (8 v128 loads, 4 butterflies per group)
+- Fall back to single-group processing for odd group counts or r>=4
+
+**Key difference from f32**: For f64, each v128 holds exactly 1 complex number (vs 2 for f32), so the optimization is about reducing loop iterations and amortizing overhead rather than SIMD packing efficiency.
+
+**Result**: SUCCESS - +7-10% improvement at radix-2 sizes
+
+| Size   | Before | After | Improvement |
+| ------ | ------ | ----- | ----------- |
+| N=32   | 6.05M  | 6.42M | **+6.1%**   |
+| N=128  | 1.56M  | 1.70M | **+9.0%**   |
+| N=512  | 338K   | 362K  | **+7.1%**   |
+| N=2048 | 72.7K  | 77.4K | **+6.5%**   |
+
+Note: These improvements apply to radix-2 sizes (N=8,32,128,512,2048). Radix-4 sizes (N=4,16,64,256,1024,4096) use a different algorithm and are unaffected.
+
+**Analysis**: The gains are smaller than for f32 (7-10% vs 30-40%) because:
+
+1. f64 has 1 complex per v128 vs 2 for f32, so the base efficiency is lower
+2. The function call to `$simd_cmul` adds overhead that wasn't present in f32's inline multiply
+3. Still, reducing loop iterations provides measurable improvement
+
+**Files modified**: `modules/fft_combined.wat`
