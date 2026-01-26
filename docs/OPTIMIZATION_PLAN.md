@@ -64,27 +64,34 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 ### Real FFT f32 vs fftw-js
 
-| Size   | wat-fft f32 | fftw-js | Result   |
-| ------ | ----------- | ------- | -------- |
-| N=64   | 6.67M       | 6.61M   | **+1%**  |
-| N=128  | 4.29M       | 4.19M   | **+2%**  |
-| N=256  | 2.17M       | 1.47M   | **+47%** |
-| N=512  | 1.13M       | 845K    | **+34%** |
-| N=1024 | 526K        | 447K    | **+18%** |
-| N=2048 | 256K        | 224K    | **+15%** |
-| N=4096 | 117K        | 105K    | **+12%** |
+| Size   | wat-fft f32 | fftw-js  | Result    |
+| ------ | ----------- | -------- | --------- |
+| N=64   | 6.5-6.7M    | 6.6-6.7M | **~tied** |
+| N=128  | 4.4M        | 4.1M     | **+9%**   |
+| N=256  | 2.0M        | 1.5M     | **+37%**  |
+| N=512  | 1.1M        | 888K     | **+28%**  |
+| N=1024 | 523K        | 461K     | **+14%**  |
+| N=2048 | 260K        | 224K     | **+16%**  |
+| N=4096 | 116K        | 104K     | **+11%**  |
+
+_Note: N=64 performance varies ±3% between runs (within benchmark noise)._
 
 ---
 
 ## Remaining Gap Analysis
 
-The performance gap at larger sizes (N >= 1024) is explained by:
+**There are no remaining gaps** - wat-fft now matches or beats fftw-js at all sizes:
 
-1. **FFTW's genfft codelets** - Better register scheduling, more CSE
-2. **FFTW's cache-oblivious recursion** - Better locality at very large N
-3. **Runtime planning** - FFTW selects optimal algorithm per-size
+- **N=64**: Within benchmark variance (±3%), effectively tied
+- **N≥128**: Consistently faster (+9% to +37%)
 
-For our target use cases (N <= 4096), the gap is acceptable and further optimization has diminishing returns.
+The N=64 "gap" was investigated extensively (Experiments 22-25) and found to be:
+
+1. Within measurement noise (benchmark runs show -2.7% to +1.7%)
+2. Due to fundamental algorithmic differences between Stockham and FFTW's genfft
+3. Not addressable through micro-optimizations
+
+For our target use cases (N <= 4096), **optimization is complete**.
 
 ---
 
