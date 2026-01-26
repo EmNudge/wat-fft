@@ -30,8 +30,9 @@
     }
   },
   "scripts": {
-    "test": "npm run test:fft && npm run test:combined",
+    "test": "npm run test:fft && npm run test:combined && npm run test:ifft",
     "test:all": "npm run test && npm run test:rfft && npm run test:boundary && npm run test:correctness && npm run test:output-order && npm run test:f32 && npm run test:twiddles && npm run test:golden && npm run test:perbin",
+    "test:ifft": "node tests/ifft.test.js",
     "test:twiddles": "node tests/twiddle_validation.test.js",
     "test:property": "node --test tests/property_based.test.js",
     "test:golden": "node --test tests/golden_reference.test.js",
