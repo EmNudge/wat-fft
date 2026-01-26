@@ -48,13 +48,13 @@ Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten
 
 | Size   | wat-fft (f32)       | fftw-js (f32)   | vs fftw-js |
 | ------ | ------------------- | --------------- | ---------- |
-| N=64   | **6,800,000 ops/s** | 6,500,000 ops/s | **+5%**    |
-| N=128  | **4,400,000 ops/s** | 4,200,000 ops/s | **+5%**    |
-| N=256  | **2,200,000 ops/s** | 1,480,000 ops/s | **+48%**   |
-| N=512  | **1,150,000 ops/s** | 900,000 ops/s   | **+27%**   |
-| N=1024 | **520,000 ops/s**   | 465,000 ops/s   | **+12%**   |
-| N=2048 | **267,000 ops/s**   | 228,000 ops/s   | **+17%**   |
-| N=4096 | **121,000 ops/s**   | 106,000 ops/s   | **+14%**   |
+| N=64   | **6,890,000 ops/s** | 7,020,000 ops/s | **~tied**  |
+| N=128  | **4,770,000 ops/s** | 4,400,000 ops/s | **+9%**    |
+| N=256  | **2,330,000 ops/s** | 1,520,000 ops/s | **+53%**   |
+| N=512  | **1,220,000 ops/s** | 917,000 ops/s   | **+33%**   |
+| N=1024 | **559,000 ops/s**   | 471,000 ops/s   | **+19%**   |
+| N=2048 | **282,000 ops/s**   | 232,000 ops/s   | **+22%**   |
+| N=4096 | **127,000 ops/s**   | 108,000 ops/s   | **+18%**   |
 
 ```mermaid
 ---
@@ -71,14 +71,14 @@ xychart-beta
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
     line [4.80, 2.99, 1.28, 0.76, 0.27, 0.16, 0.062]
-    line [6.80, 4.40, 2.20, 1.15, 0.52, 0.267, 0.121]
-    line [6.50, 4.20, 1.48, 0.90, 0.465, 0.228, 0.106]
+    line [6.89, 4.77, 2.33, 1.22, 0.559, 0.282, 0.127]
+    line [7.02, 4.40, 1.52, 0.92, 0.471, 0.232, 0.108]
     line [2.93, 1.74, 0.75, 0.42, 0.17, 0.094, 0.039]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats fftw-js at all sizes** (+5% to +48%). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats fftw-js at all sizes N≥128** (+9% to +53%). N=64 is within benchmark variance. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 
