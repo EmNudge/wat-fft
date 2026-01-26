@@ -34,6 +34,7 @@ Detailed record of all optimization experiments.
 | 25  | Unrolled RFFT-128 Post-Proc | SUCCESS +2-5pp   | Inline twiddles, N=128 now consistently +2-6% |
 | 26  | Performance Analysis Final  | COMPLETE         | Beats fftw-js at all sizes, N=64 within noise |
 | 27  | Dead Code Removal           | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64    |
+| 28  | Dead Parameterized Codelets | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at  |
 
 ---
 
@@ -492,5 +493,47 @@ The results show slight improvement at N=64 but high variance (ranging from -3.2
 The N=64 performance improvement (+6-10pp) suggests the dead code was causing some I-cache pressure at small sizes where the working set fits entirely in cache.
 
 **Lesson**: Dead code removal is a legitimate optimization technique for WebAssembly. Large unused functions can impact performance even if never executed.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`
+
+---
+
+## Experiment 28: Dead Parameterized Codelet Removal (2026-01-25)
+
+**Goal**: Remove remaining dead code (`$fft_16_at`, `$fft_32_at`) discovered during performance analysis.
+
+**Dead functions identified**:
+
+1. `$fft_16_at`: Parameterized N=16 codelet (operates at offset), ~105 lines
+2. `$fft_32_at`: Parameterized N=32 codelet (calls $fft_16_at), ~110 lines
+
+These were intended for building a hierarchical N=64 codelet but were never integrated after the DIT codelets proved more effective.
+
+**Verification**: `grep "call \$fft_16_at"` and `grep "call \$fft_32_at"` confirmed neither function is called.
+
+**Result**: SUCCESS - Minor cleanup, maintained performance
+
+| Metric           | Before | After | Change       |
+| ---------------- | ------ | ----- | ------------ |
+| Source lines     | 3,299  | 3,081 | **-218**     |
+| N=64 vs fftw-js  | +2-3%  | +2-4% | Within noise |
+| N=128 vs fftw-js | +4-5%  | +5%   | Within noise |
+| All other sizes  | Win    | Win   | Stable       |
+
+**Benchmark Results** (2 runs after):
+
+| Size   | Run 1  | Run 2  |
+| ------ | ------ | ------ |
+| N=64   | +2.3%  | +3.6%  |
+| N=128  | +4.8%  | +5.1%  |
+| N=256  | +46.4% | +48.2% |
+| N=512  | +27.3% | +27.4% |
+| N=1024 | +13.8% | +16.0% |
+| N=2048 | +15.2% | +17.7% |
+| N=4096 | +14.4% | +14.6% |
+
+**Analysis**: This cleanup is more about code hygiene than performance. The 218 lines removed were truly dead code - never called and never executed. Unlike Experiment 27 which removed ~2,449 lines and showed measurable I-cache improvements, this smaller removal doesn't produce measurable performance changes but keeps the codebase clean.
+
+**Lesson**: Regular dead code audits are valuable for maintenance. Use `grep` to verify function references before removal.
 
 **Files modified**: `modules/fft_real_f32_dual.wat`
