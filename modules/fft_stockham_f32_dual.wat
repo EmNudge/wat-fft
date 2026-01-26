@@ -190,6 +190,115 @@
 
 
   ;; ============================================================================
+  ;; N=8 DIT Dual-Complex Kernel (natural order output)
+  ;; ============================================================================
+  ;; Loads in bit-reversed order, outputs in natural order.
+  ;; 3 stages with hardcoded twiddle factors.
+
+  (func $fft_8_dit
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $x4 v128) (local $x5 v128) (local $x6 v128) (local $x7 v128)
+    (local $t v128) (local $sum v128) (local $diff v128)
+
+    ;; Load in bit-reversed order: 0,4,2,6,1,5,3,7
+    (local.set $x0 (v128.load64_zero (i32.const 0)))   ;; index 0
+    (local.set $x1 (v128.load64_zero (i32.const 32)))  ;; index 4
+    (local.set $x2 (v128.load64_zero (i32.const 16)))  ;; index 2
+    (local.set $x3 (v128.load64_zero (i32.const 48)))  ;; index 6
+    (local.set $x4 (v128.load64_zero (i32.const 8)))   ;; index 1
+    (local.set $x5 (v128.load64_zero (i32.const 40)))  ;; index 5
+    (local.set $x6 (v128.load64_zero (i32.const 24)))  ;; index 3
+    (local.set $x7 (v128.load64_zero (i32.const 56)))  ;; index 7
+
+    ;; ============ Stage 1 (span 1): all twiddles W_2^0 = 1 ============
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x1)))
+    (local.set $x1 (f32x4.sub (local.get $x0) (local.get $x1)))
+    (local.set $x0 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x2) (local.get $x3)))
+    (local.set $x3 (f32x4.sub (local.get $x2) (local.get $x3)))
+    (local.set $x2 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x4) (local.get $x5)))
+    (local.set $x5 (f32x4.sub (local.get $x4) (local.get $x5)))
+    (local.set $x4 (local.get $sum))
+
+    (local.set $sum (f32x4.add (local.get $x6) (local.get $x7)))
+    (local.set $x7 (f32x4.sub (local.get $x6) (local.get $x7)))
+    (local.set $x6 (local.get $sum))
+
+    ;; ============ Stage 2 (span 2): W_4^0=1, W_4^1=-j ============
+    ;; (0,2) with W_4^0 = 1
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x2)))
+    (local.set $x2 (f32x4.sub (local.get $x0) (local.get $x2)))
+    (local.set $x0 (local.get $sum))
+
+    ;; (1,3) with W_4^1 = -j: b*(-j) = [b.im, -b.re]
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x3) (local.get $x3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x1) (local.get $t)))
+    (local.set $x3 (f32x4.sub (local.get $x1) (local.get $t)))
+    (local.set $x1 (local.get $sum))
+
+    ;; (4,6) with W_4^0 = 1
+    (local.set $sum (f32x4.add (local.get $x4) (local.get $x6)))
+    (local.set $x6 (f32x4.sub (local.get $x4) (local.get $x6)))
+    (local.set $x4 (local.get $sum))
+
+    ;; (5,7) with W_4^1 = -j
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x7) (local.get $x7))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x5) (local.get $t)))
+    (local.set $x7 (f32x4.sub (local.get $x5) (local.get $t)))
+    (local.set $x5 (local.get $sum))
+
+    ;; ============ Stage 3 (span 4): W_8^0=1, W_8^1, W_8^2=-j, W_8^3 ============
+    ;; (0,4) with W_8^0 = 1
+    (local.set $sum (f32x4.add (local.get $x0) (local.get $x4)))
+    (local.set $x4 (f32x4.sub (local.get $x0) (local.get $x4)))
+    (local.set $x0 (local.get $sum))
+
+    ;; (1,5) with W_8^1 = (0.7071068, -0.7071068)
+    (local.set $t (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x5) (local.get $x5)))
+    (local.set $t (f32x4.mul
+      (f32x4.add (local.get $x5) (f32x4.mul (local.get $t) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068)))
+    (local.set $sum (f32x4.add (local.get $x1) (local.get $t)))
+    (local.set $x5 (f32x4.sub (local.get $x1) (local.get $t)))
+    (local.set $x1 (local.get $sum))
+
+    ;; (2,6) with W_8^2 = -j: b*(-j) = [b.im, -b.re]
+    (local.set $t (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x6) (local.get $x6))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $sum (f32x4.add (local.get $x2) (local.get $t)))
+    (local.set $x6 (f32x4.sub (local.get $x2) (local.get $t)))
+    (local.set $x2 (local.get $sum))
+
+    ;; (3,7) with W_8^3 = (-0.7071068, -0.7071068)
+    (local.set $t (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x7) (local.get $x7)))
+    (local.set $t (f32x4.mul
+      (f32x4.sub (local.get $t) (f32x4.mul (local.get $x7) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+      (v128.const f32x4 0.7071068 -0.7071068 0.7071068 -0.7071068)))
+    (local.set $sum (f32x4.add (local.get $x3) (local.get $t)))
+    (local.set $x7 (f32x4.sub (local.get $x3) (local.get $t)))
+    (local.set $x3 (local.get $sum))
+
+    ;; ============ Output in natural order: 0,1,2,3,4,5,6,7 ============
+    (v128.store64_lane 0 (i32.const 0) (local.get $x0))
+    (v128.store64_lane 0 (i32.const 8) (local.get $x1))
+    (v128.store64_lane 0 (i32.const 16) (local.get $x2))
+    (v128.store64_lane 0 (i32.const 24) (local.get $x3))
+    (v128.store64_lane 0 (i32.const 32) (local.get $x4))
+    (v128.store64_lane 0 (i32.const 40) (local.get $x5))
+    (v128.store64_lane 0 (i32.const 48) (local.get $x6))
+    (v128.store64_lane 0 (i32.const 56) (local.get $x7))
+  )
+
+
+  ;; ============================================================================
   ;; General Dual-Complex Stockham FFT
   ;; ============================================================================
   ;; Processes 2 complex numbers per butterfly using full f32x4 SIMD
@@ -643,8 +752,8 @@
   (func (export "fft") (param $n i32)
     (if (i32.eq (local.get $n) (i32.const 4))
       (then (call $fft_4) (return)))
-    ;; For now, use general kernel for all sizes > 4
-    ;; Specialized codelets for N=8,16 can be added after verifying correctness
+    (if (i32.eq (local.get $n) (i32.const 8))
+      (then (call $fft_8_dit) (return)))
     (call $fft_general (local.get $n))
   )
 

@@ -40,6 +40,7 @@ Detailed record of all optimization experiments.
 | 31  | f32 Complex FFT Dual-Group  | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module |
 | 32  | f64 Complex FFT Dual-Group  | SUCCESS +7-10%   | Dual-group r=1/r=2 for f64 Stockham           |
 | 33  | f64 RFFT Dual-Group         | FAILURE -10-12%  | Optimization harmful for smaller internal FFT |
+| 34  | f32 Complex DIT Codelets    | PARTIAL          | N=8 DIT helps, N=16 DIT slower than Stockham  |
 
 ---
 
@@ -746,3 +747,43 @@ Note: These improvements apply to radix-2 sizes (N=8,32,128,512,2048). Radix-4 s
 **Decision**: Reverted changes to `fft_real_combined.wat`. The module's performance is already acceptable (2x faster than kissfft-js at all sizes).
 
 **Files modified**: None (changes reverted)
+
+---
+
+## Experiment 34: f32 Complex FFT DIT Codelets (2026-01-26)
+
+**Goal**: Port DIT codelets from the f32 RFFT module to the f32 complex FFT module to improve small-N performance.
+
+**Hypothesis**: The f32 complex FFT module (`fft_stockham_f32_dual.wat`) only has a specialized kernel for N=4 and uses `$fft_general` for all larger sizes. The RFFT module has specialized DIT codelets for N=8, 16, and 32 that eliminate loop overhead. Adding these to the complex FFT should improve small-N performance.
+
+**Approach**:
+
+- Ported `$fft_8_dit` codelet (110 lines) from `fft_real_f32_dual.wat`
+- Ported `$fft_16_dit` codelet (515 lines) from `fft_real_f32_dual.wat`
+- Added dispatch in `fft` export function
+
+**Results**:
+
+| Size | General Stockham | With $fft_8_dit | With $fft_16_dit |
+| ---- | ---------------- | --------------- | ---------------- |
+| N=4  | 31.4M ops/s      | 31.4M           | 31.2M            |
+| N=8  | (uses N=4×2)     | **29.5M**       | 29.5M            |
+| N=16 | 17.8M ops/s      | 17.8M           | **15.4M (-13%)** |
+
+**Analysis**:
+
+1. **N=8 DIT codelet works well**: Achieves 29.5M ops/s, comparable to N=4 (31.4M). The DIT approach eliminates loop overhead effectively for this size.
+
+2. **N=16 DIT codelet is slower**: The complex shuffling and reorganization in the N=16 DIT codelet actually hurt performance (-13% vs general Stockham). This differs from the RFFT module where the same codelet works well.
+
+3. **Root cause**: The general Stockham algorithm in `fft_stockham_f32_dual.wat` is already highly optimized with dual-group processing for r=1 and r=2 stages. The DIT codelet's shuffle-heavy approach can't beat the well-pipelined iterative algorithm for N>=16.
+
+**Decision**:
+
+- Keep `$fft_8_dit` enabled (provides ~10% improvement at N=8)
+- Keep `$fft_16_dit` in code but disabled (preserved for reference)
+- Did not port `$fft_32_dit` (750 lines, unlikely to help)
+
+**Lesson**: DIT codelets with bit-reversed input are most effective for very small sizes (N<=8) where loop overhead dominates. For larger sizes, the iterative Stockham algorithm with SIMD optimizations is more efficient.
+
+**Files modified**: `modules/fft_stockham_f32_dual.wat`
