@@ -109,11 +109,9 @@ For our target use cases (N <= 4096), **optimization is complete**.
 
 | File                                | Purpose                     |
 | ----------------------------------- | --------------------------- |
-| `modules/fft_radix4.wat`            | Radix-4 Stockham with SIMD  |
 | `modules/fft_combined.wat`          | Auto-dispatch radix-2/4     |
 | `modules/fft_stockham_f32_dual.wat` | f32 dual-complex FFT        |
 | `modules/fft_real_f32_dual.wat`     | f32 dual-complex rfft       |
 | `modules/fft_real_combined.wat`     | Combined rfft with codelets |
-| `modules/fft_real_combined_fma.wat` | FMA-optimized rfft          |
 | `tools/codelet_generator.js`        | DAG-based codelet generator |
 | `tools/generate-dit-codelet.js`     | DIT codelet generator       |

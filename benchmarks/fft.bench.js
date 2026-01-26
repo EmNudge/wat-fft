@@ -37,15 +37,6 @@ async function loadFastWasmFFT() {
   return instance.exports;
 }
 
-// Load Radix-4 WASM FFT
-async function loadRadix4WasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_radix4.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
-
 // Load Combined WASM FFT (auto-dispatch radix-2/4)
 async function loadCombinedWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "fft_combined.wasm");
@@ -111,7 +102,6 @@ async function runBenchmarks() {
 
   const stockhamExports = await loadStockhamWasmFFT();
   const fastExports = await loadFastWasmFFT();
-  const radix4Exports = await loadRadix4WasmFFT();
   const combinedExports = await loadCombinedWasmFFT();
 
   for (const size of SIZES) {
@@ -144,7 +134,6 @@ async function runBenchmarks() {
     results.push(stockhamResult);
 
     // wat-fft Combined (auto-dispatch radix-2/4) - recommended for all sizes
-    const isPowerOf4 = (size & (size - 1)) === 0 && (size & 0xaaaaaaaa) === 0;
     const combinedResult = runBenchmark(
       `wat-fft (Combined)`,
       () => {
@@ -164,30 +153,6 @@ async function runBenchmarks() {
       },
     );
     results.push(combinedResult);
-
-    // wat-fft Radix-4 SIMD (best for power-of-4 sizes)
-    // Only test for power-of-4 sizes
-    if (isPowerOf4) {
-      const radix4Result = runBenchmark(
-        "wat-fft (Radix-4)",
-        () => {
-          const memory = radix4Exports.memory;
-          const data = new Float64Array(memory.buffer, 0, size * 2);
-          radix4Exports.precompute_twiddles(size);
-          const inputBuffer = new Float64Array(size * 2);
-          for (let i = 0; i < size; i++) {
-            inputBuffer[i * 2] = input.real[i];
-            inputBuffer[i * 2 + 1] = input.imag[i];
-          }
-          return { data, inputBuffer, size };
-        },
-        (ctx) => {
-          ctx.data.set(ctx.inputBuffer);
-          radix4Exports.fft_radix4(ctx.size);
-        },
-      );
-      results.push(radix4Result);
-    }
 
     // wat-fft Fast (non-SIMD fallback)
     const fastResult = runBenchmark(
@@ -291,7 +256,6 @@ async function runBenchmarks() {
   console.log("");
   console.log("Notes:");
   console.log("- wat-fft (Combined): Auto-selects radix-4 or radix-2 (RECOMMENDED)");
-  console.log("- wat-fft (Radix-4): SIMD radix-4 for power-of-4 sizes only");
   console.log("- wat-fft (Radix-2): SIMD radix-2 Stockham for all power-of-2");
   console.log("- wat-fft (fast): Non-SIMD fallback for older environments");
   console.log("- fft.js: Highly optimized Radix-4 JS (Fedor Indutny)");

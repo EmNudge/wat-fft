@@ -41,15 +41,12 @@ Defined as globals in WAT modules:
 
 ## Memory Requirements by Module
 
-| Module         | Pages | Total Memory | Max FFT Size | Notes                        |
-| -------------- | ----- | ------------ | ------------ | ---------------------------- |
-| `fft_main`     | 1     | 64 KB        | ~2048        | Original, uses Taylor series |
-| `fft_fast`     | 3     | 192 KB       | ~4096        | With twiddle precomputation  |
-| `fft_simd`     | 3     | 192 KB       | ~4096        | SIMD-accelerated             |
-| `fft_radix4`   | 3     | 192 KB       | ~4096        | Radix-4 algorithm            |
-| `fft_stockham` | 4     | 256 KB       | ~4096        | Needs secondary buffer       |
-| `fft_unrolled` | 3     | 192 KB       | ~4096        | Unrolled small-N kernels     |
-| `fft_real`     | 4     | 256 KB       | ~4096        | Real FFT (r2c)               |
+| Module                  | Pages | Total Memory | Max FFT Size | Notes                    |
+| ----------------------- | ----- | ------------ | ------------ | ------------------------ |
+| `fft_combined`          | 4     | 256 KB       | ~4096        | Radix-2/4 auto-dispatch  |
+| `fft_real_combined`     | 5     | 320 KB       | ~4096        | Real FFT + auto-dispatch |
+| `fft_stockham_f32_dual` | 2     | 128 KB       | ~4096        | f32 dual-complex SIMD    |
+| `fft_real_f32_dual`     | 3     | 192 KB       | ~4096        | f32 real FFT             |
 
 **Note:** 1 WebAssembly page = 64 KB (65,536 bytes)
 
