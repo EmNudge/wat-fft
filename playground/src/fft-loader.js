@@ -6,13 +6,81 @@
  * - Competitor JS/WASM libraries (fft.js, kissfft-js, webfft, pffft-wasm)
  */
 
+/**
+ * Validate an FFT context produces correct output.
+ * Uses a cosine signal at bin 1 frequency - energy should be concentrated at bin 1.
+ * @param {object} ctx - FFT context with getInputBuffer, getOutputBuffer, run methods
+ * @param {number} size - FFT size
+ * @param {boolean} isReal - Whether this is a real FFT
+ * @returns {boolean} True if FFT output is valid
+ */
+function validateFFTContext(ctx, size, isReal) {
+  try {
+    const input = ctx.getInputBuffer();
+
+    // Generate cosine at bin 1 frequency: cos(2*pi*n/N) for n=0..N-1
+    if (isReal) {
+      for (let i = 0; i < size; i++) {
+        input[i] = Math.cos((2 * Math.PI * i) / size);
+      }
+    } else {
+      // Complex input: interleaved [re, im, re, im, ...]
+      for (let i = 0; i < size; i++) {
+        input[i * 2] = Math.cos((2 * Math.PI * i) / size);
+        input[i * 2 + 1] = 0;
+      }
+    }
+
+    ctx.run();
+    const output = ctx.getOutputBuffer();
+
+    // Compute magnitudes and find where energy is concentrated
+    const numBins = isReal ? size / 2 + 1 : size;
+    let bin1Mag = 0;
+    let otherMagSum = 0;
+
+    for (let i = 0; i < numBins; i++) {
+      const re = output[i * 2];
+      const im = output[i * 2 + 1];
+      const mag = Math.sqrt(re * re + im * im);
+
+      if (i === 1) {
+        bin1Mag = mag;
+      } else if (i > 0 && i < numBins - 1) {
+        // Skip DC and Nyquist, sum other bins
+        otherMagSum += mag;
+      }
+    }
+
+    // For a pure cosine at bin 1, bin 1 should have ~N/2 magnitude
+    // and other bins should be near zero
+    // Allow some tolerance for floating point
+    const expectedBin1Mag = size / 2;
+    const bin1Ratio = bin1Mag / expectedBin1Mag;
+    const otherRatio = otherMagSum / bin1Mag;
+
+    // Bin 1 should be within 50% of expected, others should be < 10% of bin 1
+    const isValid = bin1Ratio > 0.5 && bin1Ratio < 2.0 && otherRatio < 0.1;
+
+    if (!isValid) {
+      console.warn(
+        `FFT validation failed: bin1Mag=${bin1Mag.toFixed(2)}, ` +
+          `expected~${expectedBin1Mag}, otherMagSum=${otherMagSum.toFixed(2)}`,
+      );
+    }
+
+    return isValid;
+  } catch (e) {
+    console.warn("FFT validation error:", e);
+    return false;
+  }
+}
+
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-import PFFFT from "@echogarden/pffft-wasm";
-// Import the WASM file URL for pffft - use direct path to node_modules
-import pffftWasmUrl from "../node_modules/@echogarden/pffft-wasm/dist/non-simd/pffft.wasm?url";
+// Note: @echogarden/pffft-wasm removed - produces incorrect FFT output
 
 // fftw-js needs to be loaded dynamically due to WASM initialization
 let fftwModule = null;
@@ -26,22 +94,7 @@ async function getFFTW() {
   return fftwModule;
 }
 
-// pffft-wasm module (lazy loaded)
-let pffftModule = null;
-async function getPFFFT() {
-  if (!pffftModule) {
-    // Pass locateFile to tell Emscripten where to find the WASM file
-    pffftModule = await PFFFT({
-      locateFile: (path) => {
-        if (path.endsWith(".wasm")) {
-          return pffftWasmUrl;
-        }
-        return path;
-      },
-    });
-  }
-  return pffftModule;
-}
+// Note: pffft-wasm removed - @echogarden/pffft-wasm v0.4.2 produces incorrect output
 
 // wat-fft WASM modules
 const WASM_MODULES = {
@@ -131,32 +184,31 @@ const JS_MODULES = {
     isWatFft: false,
     library: "webfft",
   },
-  webfft_real: {
-    name: "WebFFT Real",
-    desc: "meta-lib f32",
-    isReal: true,
-    isWatFft: false,
-    library: "webfft",
-  },
-  pffft: {
-    name: "PFFFT",
-    desc: "WASM SIMD f32",
-    isReal: false,
-    isWatFft: false,
-    library: "pffft",
-  },
-  pffft_real: {
-    name: "PFFFT Real",
-    desc: "WASM SIMD f32",
-    isReal: true,
-    isWatFft: false,
-    library: "pffft",
-  },
+  // Note: WebFFT Real (fftr) is not available because it produces incorrect output.
+  // DC signal gives all zeros, cosine gives near-zero magnitudes.
+
+  // Note: PFFFT (@echogarden/pffft-wasm v0.4.2) is not available because both
+  // Complex and Real modes produce incorrect output (cosine energy spread across
+  // all bins instead of concentrated at bin 1).
 };
 
 const ALL_MODULES = { ...WASM_MODULES, ...JS_MODULES };
 
 const loadedModules = new Map();
+
+/**
+ * Get all available FFT modules for UI generation
+ * @returns {Array<{id: string, name: string, desc: string, isReal: boolean, isWatFft: boolean}>}
+ */
+export function getAvailableModules() {
+  return Object.entries(ALL_MODULES).map(([id, config]) => ({
+    id,
+    name: config.name,
+    desc: config.desc,
+    isReal: config.isReal || false,
+    isWatFft: config.isWatFft || false,
+  }));
+}
 
 export async function loadFFTModule(moduleId) {
   if (loadedModules.has(moduleId)) {
@@ -201,11 +253,6 @@ export async function loadFFTModule(moduleId) {
     if (config.library === "fftw") {
       module._fftw = await getFFTW();
     }
-
-    // PFFFT needs async initialization
-    if (config.library === "pffft") {
-      module._pffft = await getPFFFT();
-    }
   }
 
   loadedModules.set(moduleId, module);
@@ -225,12 +272,27 @@ export function getModuleList() {
 /**
  * Create an FFT context for a given size
  */
-export function createFFTContext(module, size) {
+export function createFFTContext(module, size, skipValidation = false) {
+  let ctx;
   if (module.type === "wasm") {
-    return createWasmFFTContext(module, size);
+    ctx = createWasmFFTContext(module, size);
   } else {
-    return createJSFFTContext(module, size);
+    ctx = createJSFFTContext(module, size);
   }
+
+  // Validate FFT produces correct output (skip for benchmarks where we run many sizes)
+  if (!skipValidation && size >= 64) {
+    const isValid = validateFFTContext(ctx, size, ctx.isReal);
+    if (!isValid) {
+      const name = module.config?.name || module.library || "Unknown";
+      throw new Error(
+        `FFT validation failed for ${name} (size=${size}, isReal=${ctx.isReal}). ` +
+          `This implementation produces incorrect output.`,
+      );
+    }
+  }
+
+  return ctx;
 }
 
 function createWasmFFTContext(module, size) {
@@ -444,175 +506,40 @@ function createJSFFTContext(module, size) {
       },
     };
   } else if (library === "webfft") {
+    // Note: WebFFT Real (fftr) is broken - produces zeros for DC signal
+    // Only Complex FFT is supported
     const fftInstance = new webfft(size);
     fftInstance.setSubLibrary("kissWasm");
 
-    if (config.isReal) {
-      // Real FFT
-      const realInput = new Float32Array(size);
+    const complexInput = new Float32Array(size * 2);
 
-      return {
-        module,
-        size,
-        inputSize: size,
-        outputSize: size, // webfft fftr returns size elements
-        ArrayType: Float32Array,
-        isReal: true,
-        _fft: fftInstance,
-        _realInput: realInput,
-        _output: null,
+    return {
+      module,
+      size,
+      inputSize: size * 2,
+      outputSize: size * 2,
+      ArrayType: Float32Array,
+      isReal: false,
+      _fft: fftInstance,
+      _complexInput: complexInput,
+      _output: null,
 
-        getInputBuffer() {
-          return this._realInput;
-        },
+      getInputBuffer() {
+        return this._complexInput;
+      },
 
-        getOutputBuffer() {
-          return this._output || new Float32Array(size);
-        },
+      getOutputBuffer() {
+        return this._output || new Float32Array(size * 2);
+      },
 
-        run() {
-          this._output = this._fft.fftr(this._realInput);
-        },
+      run() {
+        this._output = this._fft.fft(this._complexInput);
+      },
 
-        dispose() {
-          this._fft.dispose();
-        },
-      };
-    } else {
-      // Complex FFT
-      const complexInput = new Float32Array(size * 2);
-
-      return {
-        module,
-        size,
-        inputSize: size * 2,
-        outputSize: size * 2,
-        ArrayType: Float32Array,
-        isReal: false,
-        _fft: fftInstance,
-        _complexInput: complexInput,
-        _output: null,
-
-        getInputBuffer() {
-          return this._complexInput;
-        },
-
-        getOutputBuffer() {
-          return this._output || new Float32Array(size * 2);
-        },
-
-        run() {
-          this._output = this._fft.fft(this._complexInput);
-        },
-
-        dispose() {
-          this._fft.dispose();
-        },
-      };
-    }
-  } else if (library === "pffft") {
-    const pffft = module._pffft;
-    const PFFFT_COMPLEX = 0;
-    const PFFFT_REAL = 1;
-    const PFFFT_FORWARD = 0;
-
-    if (config.isReal) {
-      // Real FFT - requires size >= 32
-      if (size < 32) {
-        throw new Error("PFFFT Real FFT requires size >= 32");
-      }
-
-      const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
-      const inputPtr = pffft._pffft_aligned_malloc(size * 4);
-      const outputPtr = pffft._pffft_aligned_malloc(size * 4);
-      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
-      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size);
-
-      return {
-        module,
-        size,
-        inputSize: size,
-        outputSize: size,
-        ArrayType: Float32Array,
-        isReal: true,
-        _setup: setup,
-        _inputPtr: inputPtr,
-        _outputPtr: outputPtr,
-        _inputView: inputView,
-        _outputView: outputView,
-        _pffft: pffft,
-
-        getInputBuffer() {
-          return this._inputView;
-        },
-
-        getOutputBuffer() {
-          return this._outputView;
-        },
-
-        run() {
-          this._pffft._pffft_transform_ordered(
-            this._setup,
-            this._inputPtr,
-            this._outputPtr,
-            0,
-            PFFFT_FORWARD,
-          );
-        },
-
-        dispose() {
-          this._pffft._pffft_aligned_free(this._inputPtr);
-          this._pffft._pffft_aligned_free(this._outputPtr);
-          this._pffft._pffft_destroy_setup(this._setup);
-        },
-      };
-    } else {
-      // Complex FFT
-      const setup = pffft._pffft_new_setup(size, PFFFT_COMPLEX);
-      const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
-      const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
-      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
-      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size * 2);
-
-      return {
-        module,
-        size,
-        inputSize: size * 2,
-        outputSize: size * 2,
-        ArrayType: Float32Array,
-        isReal: false,
-        _setup: setup,
-        _inputPtr: inputPtr,
-        _outputPtr: outputPtr,
-        _inputView: inputView,
-        _outputView: outputView,
-        _pffft: pffft,
-
-        getInputBuffer() {
-          return this._inputView;
-        },
-
-        getOutputBuffer() {
-          return this._outputView;
-        },
-
-        run() {
-          this._pffft._pffft_transform_ordered(
-            this._setup,
-            this._inputPtr,
-            this._outputPtr,
-            0,
-            PFFFT_FORWARD,
-          );
-        },
-
-        dispose() {
-          this._pffft._pffft_aligned_free(this._inputPtr);
-          this._pffft._pffft_aligned_free(this._outputPtr);
-          this._pffft._pffft_destroy_setup(this._setup);
-        },
-      };
-    }
+      dispose() {
+        this._fft.dispose();
+      },
+    };
   }
 
   throw new Error(`Unknown library: ${library}`);

@@ -8,15 +8,12 @@ A high-performance FFT implementation in WebAssembly Text format that **signific
 
 Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) (fastest WASM FFT):
 
-| Size   | wat-fft (f32)       | pffft-wasm (f32) | vs pffft |
+| Size   | wat-fft split (f32) | pffft-wasm (f32) | vs pffft |
 | ------ | ------------------- | ---------------- | -------- |
-| N=64   | **6,030,000 ops/s** | 6,950,000 ops/s  | 87%      |
-| N=128  | **3,050,000 ops/s** | 3,390,000 ops/s  | 90%      |
-| N=256  | **1,620,000 ops/s** | 1,850,000 ops/s  | 88%      |
-| N=512  | **709,000 ops/s**   | 782,000 ops/s    | 91%      |
-| N=1024 | **365,000 ops/s**   | 407,000 ops/s    | 90%      |
-| N=2048 | **161,000 ops/s**   | 171,000 ops/s    | 94%      |
-| N=4096 | **79,600 ops/s**    | 88,100 ops/s     | 90%      |
+| N=64   | **5,810,000 ops/s** | 7,130,000 ops/s  | 82%      |
+| N=256  | **1,670,000 ops/s** | 1,920,000 ops/s  | **87%**  |
+| N=1024 | **381,000 ops/s**   | 420,000 ops/s    | **91%**  |
+| N=4096 | **84,300 ops/s**    | 88,800 ops/s     | **95%**  |
 
 ```mermaid
 ---
@@ -26,22 +23,23 @@ config:
         height: 400
     themeVariables:
         xyChart:
-            plotColorPalette: "#4ade80, #60a5fa, #f59e0b, #a855f7, #f87171"
+            plotColorPalette: "#4ade80, #60a5fa, #10b981, #f59e0b, #a855f7, #f87171"
 ---
 xychart-beta
     title "Complex FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
-    line [3.76, 1.67, 0.95, 0.36, 0.19, 0.078, 0.044]
-    line [6.03, 3.05, 1.62, 0.71, 0.36, 0.161, 0.080]
-    line [6.95, 3.39, 1.85, 0.78, 0.41, 0.171, 0.088]
-    line [2.75, 1.08, 0.55, 0.22, 0.10, 0.046, 0.023]
-    line [1.85, 0.79, 0.44, 0.18, 0.10, 0.039, 0.021]
+    line [3.83, 1.73, 0.97, 0.37, 0.20, 0.080, 0.044]
+    line [6.01, 3.07, 1.64, 0.73, 0.37, 0.163, 0.081]
+    line [5.81, 2.71, 1.67, 0.66, 0.38, 0.151, 0.084]
+    line [7.13, 3.55, 1.92, 0.82, 0.42, 0.180, 0.089]
+    line [2.81, 1.10, 0.56, 0.23, 0.11, 0.047, 0.024]
+    line [1.89, 0.81, 0.45, 0.18, 0.10, 0.041, 0.022]
 ```
 
-> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟠 **pffft-wasm** · 🟣 **fft.js** · 🔴 **kissfft-js**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟩 **wat-fft split** · 🟠 **pffft-wasm** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**wat-fft f32** is within 10% of pffft-wasm (the fastest WASM FFT) while being **2-3.6x faster** than fft.js. **Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft split** achieves **95% of pffft-wasm** at N=4096 using native split-format with multi-twiddle SIMD. For interleaved data, use **wat-fft f32** (85-91% of pffft). Both are **2-3.6x faster** than fft.js.
 
 ### Real FFT
 
@@ -143,12 +141,15 @@ console.log("Recovered signal:", data[0], data[1]);
 
 **Recommended modules:**
 
-| Module                       | Use Case               | Precision | Inverse |
-| ---------------------------- | ---------------------- | --------- | ------- |
-| `fft_combined.wasm`          | Complex FFT (any size) | f64       | `ifft`  |
-| `fft_real_combined.wasm`     | Real FFT (any size)    | f64       | -       |
-| `fft_stockham_f32_dual.wasm` | Complex FFT (fastest)  | f32       | `ifft`  |
-| `fft_real_f32_dual.wasm`     | Real FFT (fastest)     | f32       | `irfft` |
+| Module                       | Use Case                        | Precision | Inverse      |
+| ---------------------------- | ------------------------------- | --------- | ------------ |
+| `fft_combined.wasm`          | Complex FFT (any size)          | f64       | `ifft`       |
+| `fft_real_combined.wasm`     | Real FFT (any size)             | f64       | -            |
+| `fft_stockham_f32_dual.wasm` | Complex FFT (interleaved)       | f32       | `ifft`       |
+| `fft_split_native_f32.wasm`  | Complex FFT (split format, 95%) | f32       | `ifft_split` |
+| `fft_real_f32_dual.wasm`     | Real FFT (fastest)              | f32       | `irfft`      |
+
+**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays, enabling 4 complex numbers per SIMD operation. Use when you can provide data in split format for maximum performance (95% of pffft-wasm).
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 

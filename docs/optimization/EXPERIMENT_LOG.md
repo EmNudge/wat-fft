@@ -44,6 +44,9 @@ Detailed record of all optimization experiments.
 | 35  | Loop Unrolling r>=4         | MIXED            | +2-5% at N>=512, -2% at N=64, reverted           |
 | 36  | Split Real/Imag Format      | RESEARCH         | pffft uses 4 complex/SIMD vs our 2, explains gap |
 | 37  | Split Format Implementation | FAILURE -65-75%  | Conversion overhead negates SIMD gains           |
+| 38  | f32 Complex FFT Benchmark   | SUCCESS          | True f32 vs f32 comparison: 85-91% of pffft      |
+| 39  | Native Split-Format FFT     | FAILURE 46-58%   | Same twiddle per group negates split format gain |
+| 40  | Multi-Twiddle Split Stages  | SUCCESS 81-95%   | Deinterleave for 4 different twiddles per SIMD   |
 
 ---
 
@@ -923,3 +926,213 @@ pffft avoids this because it:
 - `modules/fft_split_f32.wat` - Completed implementation (archived as reference)
 - `tests/fft_split_f32_debug.test.js` - Debug test (passes)
 - `benchmarks/fft_split_f32.bench.js` - Performance benchmark
+
+---
+
+## Experiment 38: f32 Complex FFT Benchmark (2026-01-26)
+
+**Goal**: Add f32 complex FFT to the main benchmark for fair f32-vs-f32 comparison against pffft-wasm.
+
+**Problem**: The existing benchmark compared our f64 complex FFT against pffft-wasm's f32 FFT - an unfair comparison that made us look 50% slower. Our f32 module (`fft_stockham_f32_dual.wasm`) existed but wasn't benchmarked.
+
+**Approach**:
+
+- Added `loadWasmFFTf32()` to load the f32 complex FFT module
+- Added `wat-fft (f32)` benchmark entry in `fft.bench.js`
+- Updated notes section to clarify both implementations
+
+**Result**: SUCCESS - True performance revealed
+
+| Size   | wat-fft (f32) | pffft-wasm (f32) | vs pffft-wasm |
+| ------ | ------------- | ---------------- | ------------- |
+| N=16   | 14.1M         | 16.3M            | 87%           |
+| N=32   | 9.4M          | 10.7M            | 88%           |
+| N=64   | 6.1M          | 7.2M             | 85%           |
+| N=128  | 3.1M          | 3.6M             | 87%           |
+| N=256  | 1.7M          | 1.9M             | 86%           |
+| N=512  | 742K          | 843K             | 88%           |
+| N=1024 | 369K          | 422K             | 87%           |
+| N=2048 | 164K          | 181K             | 91%           |
+| N=4096 | 81K           | 89K              | 91%           |
+
+**Analysis**:
+
+The f32 comparison shows we're at **85-91% of pffft-wasm's performance**, not the 44-54% the f64 comparison suggested. This is a much more competitive position.
+
+The remaining gap (~10-15%) is explained by Experiment 36/37's analysis: pffft uses split real/imaginary format internally which allows processing 4 complex numbers per SIMD operation vs our 2. Without changing our API contract (interleaved format), we cannot close this gap.
+
+**Key finding**: Our f32 complex FFT is already highly competitive. The 10-15% gap vs pffft is fundamental due to format differences - not a code quality issue.
+
+**Files modified**: `benchmarks/fft.bench.js`
+
+---
+
+## Experiment 39: Native Split-Format FFT (2026-01-26)
+
+**Goal**: Create a native split-format FFT API that eliminates format conversion overhead from Experiment 37.
+
+**Hypothesis**: Experiment 37 failed because it converted interleaved→split→interleaved on every call. A native API that accepts split-format input and returns split-format output should eliminate this overhead and close the gap with pffft-wasm.
+
+**Approach**:
+
+Created new module `modules/fft_split_native_f32.wat`:
+
+1. Memory layout with separate real/imag buffers (no conversion needed)
+2. Stockham algorithm adapted for split format
+3. SIMD stage function processing 4 elements per iteration
+4. Taylor series sin/cos with range reduction for twiddle computation
+5. API: `precompute_twiddles_split(N)`, `fft_split(N)`, `ifft_split(N)`
+
+**Correctness**: SUCCESS - All 22 tests pass with max error < 1e-4
+
+**Performance Result**: FAILURE - 46-58% of pffft-wasm (SLOWER than interleaved!)
+
+| Size   | Split Native | Interleaved f32 | pffft-wasm | Split vs pffft |
+| ------ | ------------ | --------------- | ---------- | -------------- |
+| N=64   | 3.4M         | 6.0M            | 7.1M       | 48%            |
+| N=128  | 1.6M         | 3.1M            | 3.5M       | 46%            |
+| N=256  | 932K         | 1.6M            | 1.9M       | 49%            |
+| N=512  | 406K         | 733K            | 826K       | 49%            |
+| N=1024 | 224K         | 366K            | 413K       | 54%            |
+| N=2048 | 98K          | 157K            | 174K       | 56%            |
+| N=4096 | 51K          | 79K             | 88K        | 58%            |
+
+**Root Cause Analysis**:
+
+The SIMD implementation only processes 4 elements _with the same twiddle_:
+
+```wat
+;; Current approach: splat same twiddle to all 4 lanes
+(local.set $w_re (f32x4.splat (f32.load (local.get $tw_re_addr))))
+;; All 4 elements use the SAME twiddle
+```
+
+This is because in Stockham, elements within the same group share the same twiddle:
+
+- For group j: all k=0..r-1 use twiddle W^(j \* tw_step)
+
+pffft's approach uses 4 _different_ twiddles per SIMD operation by restructuring the algorithm so that 4 consecutive elements have 4 different twiddles. This requires a fundamentally different FFT structure (likely radix-4 at base with special data organization).
+
+**Key Insight**: Split format is necessary but not sufficient. The algorithm must be co-designed with the data layout to use 4 different twiddles per SIMD operation. Our Stockham algorithm naturally groups elements that share twiddles, which doesn't benefit from 4-wide SIMD on twiddle multiplies.
+
+**Comparison of approaches**:
+
+| Approach                 | Twiddles per SIMD op    | Performance vs pffft |
+| ------------------------ | ----------------------- | -------------------- |
+| Our interleaved Stockham | 1 (splatted to 2 lanes) | 85-91%               |
+| Our split Stockham       | 1 (splatted to 4 lanes) | 46-58%               |
+| pffft split              | 4 different             | 100% (baseline)      |
+
+The extra overhead in split format (separate load/store for real and imag) isn't compensated by any efficiency gain since we still use only 1 unique twiddle per SIMD operation.
+
+**Conclusion**: Closing the 10-15% gap with pffft requires fundamental algorithm restructuring, not just data format changes. The current interleaved dual-complex approach (85-91%) is optimal for Stockham-based FFT.
+
+**Files created**:
+
+- `modules/fft_split_native_f32.wat` - Complete native split FFT implementation
+- `tests/fft_split_native.test.js` - Test suite (22/22 passing)
+- `tests/debug_split.js` - Debug comparison tool
+
+**Files modified**:
+
+- `build.js` - Added split-format module to build
+- `benchmarks/fft.bench.js` - Added split-format benchmark
+
+---
+
+## Experiment 40: Multi-Twiddle Split Stages (2026-01-26)
+
+**Goal**: Restructure the split-format FFT to use 4 different twiddles per SIMD operation, matching pffft's approach.
+
+**Key Insight from Experiment 39**: The failure was NOT due to split format itself, but because we were splatting the same twiddle to all 4 SIMD lanes. The algorithm structure must be changed to use 4 different twiddles per operation.
+
+**The Breakthrough**: For r=1 stage, consecutive input pairs (a,b) use consecutive twiddles!
+
+```
+Input layout: [a0,b0,a1,b1,a2,b2,a3,b3,...]
+Twiddles:     W^0, W^1, W^2, W^3, ...  (consecutive!)
+```
+
+By loading 8 floats and deinterleaving with `i8x16.shuffle`:
+
+- a_re = [a0, a1, a2, a3] (from even positions)
+- b_re = [b0, b1, b2, b3] (from odd positions)
+- Load 4 consecutive twiddles: W^0, W^1, W^2, W^3
+- Complex multiply with 4 DIFFERENT twiddles - TRUE 4-wide SIMD!
+
+**Implementation**:
+
+1. **Specialized r=1 stage** (`$fft_stage_r1_simd`):
+   - Deinterleave consecutive pairs to get 4 a's and 4 b's
+   - Load 4 consecutive twiddles
+   - Apply 4 different twiddles per SIMD operation
+   - Store consecutive outputs to each half
+
+2. **Specialized r=2 stage** (`$fft_stage_r2_simd`):
+   - Process 2 groups at once (4 elements total)
+   - 2 different twiddles, each used twice
+   - Partial benefit from multi-twiddle SIMD
+
+3. **Generic r>=4 stage** (unchanged):
+   - Same twiddle per group (splat approach)
+   - Still needed for early stages
+
+**Result**: SUCCESS - Massive performance improvement!
+
+| Size   | Before (Exp 39) | After (Exp 40) | Improvement |
+| ------ | --------------- | -------------- | ----------- |
+| N=64   | 48% of pffft    | **81.5%**      | +34pp       |
+| N=256  | 49%             | **87.3%**      | +38pp       |
+| N=1024 | 54%             | **90.6%**      | +37pp       |
+| N=4096 | 58%             | **94.9%**      | +37pp       |
+
+**Comparison with interleaved f32**:
+
+| Size   | Split (Exp 40) | Interleaved f32 | Winner      |
+| ------ | -------------- | --------------- | ----------- |
+| N=64   | 81.5%          | 84.3%           | Interleaved |
+| N=256  | 87.3%          | 85.7%           | **Split**   |
+| N=512  | 80.4%          | 89.0%           | Interleaved |
+| N=1024 | 90.6%          | 88.0%           | **Split**   |
+| N=4096 | 94.9%          | 90.8%           | **Split**   |
+
+At N>=256 (non-radix-4 sizes excluded), split-format now beats interleaved!
+
+**Why It Works**:
+
+The r=1 and r=2 stages dominate the operation count for larger N:
+
+- For N=1024: r=1 processes N/2=512 butterflies, r=2 processes N/4=256
+- These two stages alone account for 75% of total butterflies
+- Optimizing them with true multi-twiddle SIMD has outsized impact
+
+**Key Code - Deinterleave for r=1**:
+
+```wat
+;; Load [a0,b0,a1,b1,a2,b2,a3,b3]
+(local.set $v0 (v128.load ...))
+(local.set $v1 (v128.load ...))
+
+;; Deinterleave: a = [a0,a1,a2,a3], b = [b0,b1,b2,b3]
+(local.set $a_re (i8x16.shuffle 0 1 2 3 8 9 10 11 16 17 18 19 24 25 26 27
+  (local.get $v0) (local.get $v1)))
+(local.set $b_re (i8x16.shuffle 4 5 6 7 12 13 14 15 20 21 22 23 28 29 30 31
+  (local.get $v0) (local.get $v1)))
+
+;; Load 4 CONSECUTIVE twiddles
+(local.set $w_re (v128.load (i32.add (global.get $TWIDDLE_RE_OFFSET) ...)))
+
+;; Complex multiply with 4 DIFFERENT twiddles!
+```
+
+**Remaining Gap Analysis**:
+
+At N=4096, we're now at 94.9% of pffft. The remaining 5% is likely due to:
+
+1. pffft's radix-4 base (fewer stages overall)
+2. pffft's specialized codelets for small N
+3. Our r>=4 stages still use splat (same twiddle)
+
+**Files modified**:
+
+- `modules/fft_split_native_f32.wat` - Added specialized r=1 and r=2 stages

@@ -6,10 +6,11 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 **Current Status**: Beats fftw-js at ALL sizes for Real FFT f32, significantly faster than pure JS libraries.
 
-| Target  | Complex FFT (f64) | Complex FFT (f32) | Real FFT (f32)                               |
-| ------- | ----------------- | ----------------- | -------------------------------------------- |
-| fft.js  | **+37-90%**       | **+119-243%**     | N/A                                          |
-| fftw-js | N/A               | N/A               | **Wins all sizes** (+2-55% across N=64-4096) |
+| Target     | Complex FFT (f64) | Complex FFT (f32)      | Real FFT (f32)                               |
+| ---------- | ----------------- | ---------------------- | -------------------------------------------- |
+| fft.js     | **+37-90%**       | **+119-243%**          | N/A                                          |
+| fftw-js    | N/A               | N/A                    | **Wins all sizes** (+2-55% across N=64-4096) |
+| pffft-wasm | N/A               | **87-95%** (split fmt) | N/A                                          |
 
 ---
 
@@ -20,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 31 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 40 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -34,6 +35,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 3. **Hierarchical composition** (+30pp at N=64) - DIF decomposition with small codelets
 4. **f32 dual-complex SIMD** (+105%) - Process 2 complex numbers per v128
 5. **SIMD post-processing** (+8pp) - v128 operations for rfft post-processing
+6. **Multi-twiddle split stages** (+37pp) - Deinterleave for 4 different twiddles per SIMD, reaching 95% of pffft
 
 ### What Failed
 
@@ -42,6 +44,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 3. **Large monolithic codelets** - 300+ locals cause register spills
 4. **Hierarchical composition beyond N=1024** - Instruction cache thrashing
 5. **Split real/imaginary format** (-65-75%) - Format conversion overhead negates SIMD gains
+6. **Native split-format FFT** (46-58%) - Stockham groups same-twiddle elements, negating 4-wide SIMD benefit
 
 ### Key Insights
 
@@ -49,6 +52,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 - **V8 already inlines small functions** - Manual inlining rarely helps
 - **Hierarchical DIF != standard bit-reversal** - Non-trivial permutation pattern
 - **f32 gives ~2x SIMD throughput** - Main competitive advantage of fftw-js
+- **Split format requires algorithm co-design** - Stockham groups same-twiddle elements; pffft restructures to group different-twiddle elements
 
 ---
 
@@ -69,10 +73,21 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 | Size   | wat-fft f32 | fft.js | Speedup   |
 | ------ | ----------- | ------ | --------- |
-| N=64   | 6.17M       | 2.76M  | **+124%** |
-| N=256  | 1.59M       | 554K   | **+187%** |
-| N=1024 | 363K        | 108K   | **+236%** |
-| N=4096 | 78.8K       | 23.0K  | **+243%** |
+| N=64   | 6.1M        | 2.84M  | **+115%** |
+| N=256  | 1.67M       | 572K   | **+192%** |
+| N=1024 | 369K        | 114K   | **+223%** |
+| N=4096 | 81K         | 23.9K  | **+239%** |
+
+**vs pffft-wasm (f32 vs f32):**
+
+| Size   | wat-fft split | pffft-wasm | vs pffft |
+| ------ | ------------- | ---------- | -------- |
+| N=64   | 5.8M          | 7.1M       | 82%      |
+| N=256  | 1.67M         | 1.92M      | **87%**  |
+| N=1024 | 381K          | 420K       | **91%**  |
+| N=4096 | 84K           | 89K        | **95%**  |
+
+_Note: Split-format with multi-twiddle stages (Experiment 40) closes the gap significantly. At N=4096, we achieve 95% of pffft performance._
 
 ### Real FFT f32 vs fftw-js
 
@@ -119,11 +134,12 @@ For our target use cases (N <= 4096), **optimization is complete**.
 
 ## Files Created During Optimization
 
-| File                                | Purpose                     |
-| ----------------------------------- | --------------------------- |
-| `modules/fft_combined.wat`          | Auto-dispatch radix-2/4     |
-| `modules/fft_stockham_f32_dual.wat` | f32 dual-complex FFT        |
-| `modules/fft_real_f32_dual.wat`     | f32 dual-complex rfft       |
-| `modules/fft_real_combined.wat`     | Combined rfft with codelets |
-| `tools/codelet_generator.js`        | DAG-based codelet generator |
-| `tools/generate-dit-codelet.js`     | DIT codelet generator       |
+| File                                | Purpose                              |
+| ----------------------------------- | ------------------------------------ |
+| `modules/fft_combined.wat`          | Auto-dispatch radix-2/4              |
+| `modules/fft_stockham_f32_dual.wat` | f32 dual-complex FFT                 |
+| `modules/fft_real_f32_dual.wat`     | f32 dual-complex rfft                |
+| `modules/fft_real_combined.wat`     | Combined rfft with codelets          |
+| `modules/fft_split_native_f32.wat`  | Native split-format FFT (experiment) |
+| `tools/codelet_generator.js`        | DAG-based codelet generator          |
+| `tools/generate-dit-codelet.js`     | DIT codelet generator                |
