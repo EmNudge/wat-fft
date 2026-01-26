@@ -5,6 +5,8 @@
  * - fft.js (indutny) - Fastest pure JS, Radix-4 implementation
  * - fft-js - Simple Cooley-Tukey implementation
  * - kissfft-js - Emscripten port of Kiss FFT
+ * - webfft - Meta-library with multiple FFT implementations
+ * - pffft-wasm - PFFFT compiled to WASM with SIMD support
  */
 
 import fs from "fs";
@@ -13,6 +15,8 @@ import { fileURLToPath } from "url";
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
+import webfft from "webfft";
+import PFFFT from "@echogarden/pffft-wasm";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -81,6 +85,7 @@ async function runBenchmarks() {
   console.log("");
 
   const wasmExports = await loadWasmFFT();
+  const pffft = await PFFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -168,6 +173,55 @@ async function runBenchmarks() {
     );
     results.push(kissfftResult);
 
+    // webfft (meta-library using kissWasm by default)
+    const webfftResult = runBenchmark(
+      "webfft (f32)",
+      () => {
+        const fft = new webfft(size);
+        fft.setSubLibrary("kissWasm");
+        const complexInput = new Float32Array(size * 2);
+        for (let i = 0; i < size; i++) {
+          complexInput[i * 2] = input.real[i];
+          complexInput[i * 2 + 1] = input.imag[i];
+        }
+        return { fft, complexInput };
+      },
+      (ctx) => {
+        ctx.fft.fft(ctx.complexInput);
+      },
+      (ctx) => {
+        ctx.fft.dispose();
+      },
+    );
+    results.push(webfftResult);
+
+    // pffft-wasm (PFFFT with SIMD support)
+    const PFFFT_COMPLEX = 0;
+    const PFFFT_FORWARD = 0;
+    const pffftResult = runBenchmark(
+      "pffft-wasm (f32)",
+      () => {
+        const setup = pffft._pffft_new_setup(size, PFFFT_COMPLEX);
+        const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+        const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+        const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
+        for (let i = 0; i < size; i++) {
+          inputView[i * 2] = input.real[i];
+          inputView[i * 2 + 1] = input.imag[i];
+        }
+        return { setup, inputPtr, outputPtr, inputView };
+      },
+      (ctx) => {
+        pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_FORWARD);
+      },
+      (ctx) => {
+        pffft._pffft_aligned_free(ctx.inputPtr);
+        pffft._pffft_aligned_free(ctx.outputPtr);
+        pffft._pffft_destroy_setup(ctx.setup);
+      },
+    );
+    results.push(pffftResult);
+
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
     const fastest = results[0].opsPerSec;
@@ -191,10 +245,12 @@ async function runBenchmarks() {
   console.log("Benchmark complete!");
   console.log("");
   console.log("Notes:");
-  console.log("- wat-fft: SIMD-optimized WASM with auto radix-2/4 dispatch");
+  console.log("- wat-fft: SIMD-optimized WASM with auto radix-2/4 dispatch (f64)");
   console.log("- fft.js: Highly optimized Radix-4 JS (Fedor Indutny)");
   console.log("- kissfft-js: Emscripten port of Kiss FFT");
   console.log("- fft-js: Simple Cooley-Tukey JS (educational)");
+  console.log("- webfft: Meta-library with kissWasm backend (f32)");
+  console.log("- pffft-wasm: PFFFT compiled to WASM with SIMD (f32)");
   console.log("=".repeat(70));
 }
 

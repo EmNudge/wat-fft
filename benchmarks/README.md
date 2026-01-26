@@ -4,12 +4,12 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 
 ## Quick Reference
 
-| Command                | Benchmark         | Competitors                |
-| ---------------------- | ----------------- | -------------------------- |
-| `npm run bench`        | Complex FFT (f64) | fft.js, fft-js, kissfft-js |
-| `npm run bench:rfft`   | Real FFT (f64)    | fftw-js, kissfft-js        |
-| `npm run bench:f32`    | Complex FFT (f32) | fft.js                     |
-| `npm run bench:rfft32` | Real FFT (f32)    | fftw-js                    |
+| Command                | Benchmark         | Competitors                                    |
+| ---------------------- | ----------------- | ---------------------------------------------- |
+| `npm run bench`        | Complex FFT (f64) | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| `npm run bench:rfft`   | Real FFT (f64)    | fftw-js, kissfft-js, webfft, pffft-wasm        |
+| `npm run bench:f32`    | Complex FFT (f32) | fft.js                                         |
+| `npm run bench:rfft32` | Real FFT (f32)    | fftw-js                                        |
 
 ## Benchmark Files
 
@@ -79,11 +79,13 @@ FFT Size: N=1024
 
 ### Complex FFT
 
-| Library        | Type       | Notes                                     |
-| -------------- | ---------- | ----------------------------------------- |
-| **fft.js**     | Pure JS    | Fastest pure JS, Radix-4 by Fedor Indutny |
-| **fft-js**     | Pure JS    | Simple Cooley-Tukey implementation        |
-| **kissfft-js** | Emscripten | Port of Kiss FFT C library                |
+| Library        | Type       | Precision | Notes                                     |
+| -------------- | ---------- | --------- | ----------------------------------------- |
+| **fft.js**     | Pure JS    | f64       | Fastest pure JS, Radix-4 by Fedor Indutny |
+| **fft-js**     | Pure JS    | f64       | Simple Cooley-Tukey implementation        |
+| **kissfft-js** | Emscripten | f64       | Port of Kiss FFT C library                |
+| **webfft**     | Meta-lib   | f32       | Meta-library with multiple backends       |
+| **pffft-wasm** | Emscripten | f32       | PFFFT with SIMD support                   |
 
 ### Real FFT
 
@@ -91,6 +93,8 @@ FFT Size: N=1024
 | -------------- | ---------- | --------- | ---------------------------------- |
 | **fftw-js**    | Emscripten | f32       | Port of FFTW - our main competitor |
 | **kissfft-js** | Emscripten | f32       | Port of Kiss FFT                   |
+| **webfft**     | Meta-lib   | f32       | Meta-library with kissWasm backend |
+| **pffft-wasm** | Emscripten | f32       | PFFFT (Pretty Fast FFT) with SIMD  |
 
 ## Interpreting Results
 

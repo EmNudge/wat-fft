@@ -67,6 +67,7 @@
     "format:check": "oxfmt --check ."
   },
   "devDependencies": {
+    "@echogarden/pffft-wasm": "^0.4.2",
     "fast-check": "^4.5.3",
     "fft-js": "^0.0.12",
     "fft.js": "^4.0.4",
@@ -74,7 +75,8 @@
     "kissfft-js": "^0.1.8",
     "kissfft-wasm": "^2.0.1",
     "oxfmt": "^0.26.0",
-    "oxlint": "^1.41.0"
+    "oxlint": "^1.41.0",
+    "webfft": "^1.0.3"
   },
   "engines": {
     "node": ">=18"

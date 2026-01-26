@@ -6,17 +6,17 @@ A high-performance FFT implementation in WebAssembly Text format that **signific
 
 ### Complex FFT
 
-Benchmarked against [fft.js](https://github.com/indutny/fft.js) (fastest pure-JS FFT):
+Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) (fastest WASM FFT):
 
-| Size   | wat-fft (f64)       | fft.js          | vs fft.js |
-| ------ | ------------------- | --------------- | --------- |
-| N=64   | **3,830,000 ops/s** | 2,794,000 ops/s | **+37%**  |
-| N=128  | **1,586,000 ops/s** | 1,105,000 ops/s | **+44%**  |
-| N=256  | **973,000 ops/s**   | 559,000 ops/s   | **+74%**  |
-| N=512  | **344,000 ops/s**   | 223,000 ops/s   | **+54%**  |
-| N=1024 | **191,000 ops/s**   | 113,000 ops/s   | **+69%**  |
-| N=2048 | **74,500 ops/s**    | 47,200 ops/s    | **+58%**  |
-| N=4096 | **44,400 ops/s**    | 23,400 ops/s    | **+90%**  |
+| Size   | wat-fft (f32)       | pffft-wasm (f32) | vs pffft |
+| ------ | ------------------- | ---------------- | -------- |
+| N=64   | **6,030,000 ops/s** | 6,950,000 ops/s  | 87%      |
+| N=128  | **3,050,000 ops/s** | 3,390,000 ops/s  | 90%      |
+| N=256  | **1,620,000 ops/s** | 1,850,000 ops/s  | 88%      |
+| N=512  | **709,000 ops/s**   | 782,000 ops/s    | 91%      |
+| N=1024 | **365,000 ops/s**   | 407,000 ops/s    | 90%      |
+| N=2048 | **161,000 ops/s**   | 171,000 ops/s    | 94%      |
+| N=4096 | **79,600 ops/s**    | 88,100 ops/s     | 90%      |
 
 ```mermaid
 ---
@@ -26,21 +26,22 @@ config:
         height: 400
     themeVariables:
         xyChart:
-            plotColorPalette: "#4ade80, #60a5fa, #a855f7, #f87171"
+            plotColorPalette: "#4ade80, #60a5fa, #f59e0b, #a855f7, #f87171"
 ---
 xychart-beta
     title "Complex FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 7
-    line [3.76, 1.52, 0.93, 0.34, 0.19, 0.074, 0.044]
-    line [6.17, 3.01, 1.59, 0.72, 0.36, 0.160, 0.079]
-    line [2.76, 1.08, 0.55, 0.22, 0.11, 0.046, 0.023]
-    line [1.87, 0.78, 0.43, 0.18, 0.10, 0.041, 0.021]
+    y-axis "Million ops/s" 0 --> 8
+    line [3.76, 1.67, 0.95, 0.36, 0.19, 0.078, 0.044]
+    line [6.03, 3.05, 1.62, 0.71, 0.36, 0.161, 0.080]
+    line [6.95, 3.39, 1.85, 0.78, 0.41, 0.171, 0.088]
+    line [2.75, 1.08, 0.55, 0.22, 0.10, 0.046, 0.023]
+    line [1.85, 0.79, 0.44, 0.18, 0.10, 0.039, 0.021]
 ```
 
-> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟣 **fft.js** · 🔴 **kissfft-js**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟠 **pffft-wasm** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**Choose f64** (`fft_combined.wasm`) for double precision - **+37% to +90% faster** than fft.js at all sizes. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **3.4x faster** than fft.js.
+**wat-fft f32** is within 10% of pffft-wasm (the fastest WASM FFT) while being **2-3.6x faster** than fft.js. **Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum single-precision speed.
 
 ### Real FFT
 
@@ -48,13 +49,13 @@ Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten
 
 | Size   | wat-fft (f32)       | fftw-js (f32)   | vs fftw-js |
 | ------ | ------------------- | --------------- | ---------- |
-| N=64   | **6,890,000 ops/s** | 7,020,000 ops/s | **~tied**  |
-| N=128  | **4,770,000 ops/s** | 4,400,000 ops/s | **+9%**    |
-| N=256  | **2,330,000 ops/s** | 1,520,000 ops/s | **+53%**   |
-| N=512  | **1,220,000 ops/s** | 917,000 ops/s   | **+33%**   |
-| N=1024 | **559,000 ops/s**   | 471,000 ops/s   | **+19%**   |
-| N=2048 | **282,000 ops/s**   | 232,000 ops/s   | **+22%**   |
-| N=4096 | **127,000 ops/s**   | 108,000 ops/s   | **+18%**   |
+| N=64   | **6,690,000 ops/s** | 6,730,000 ops/s | **~tied**  |
+| N=128  | **4,610,000 ops/s** | 4,250,000 ops/s | **+9%**    |
+| N=256  | **2,130,000 ops/s** | 1,460,000 ops/s | **+46%**   |
+| N=512  | **1,180,000 ops/s** | 887,000 ops/s   | **+33%**   |
+| N=1024 | **527,000 ops/s**   | 454,000 ops/s   | **+16%**   |
+| N=2048 | **274,000 ops/s**   | 224,000 ops/s   | **+23%**   |
+| N=4096 | **125,000 ops/s**   | 104,000 ops/s   | **+20%**   |
 
 ```mermaid
 ---
@@ -64,21 +65,22 @@ config:
         height: 400
     themeVariables:
         xyChart:
-            plotColorPalette: "#4ade80, #60a5fa, #f87171, #a855f7"
+            plotColorPalette: "#4ade80, #60a5fa, #f87171, #f59e0b, #a855f7"
 ---
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
-    line [4.80, 2.99, 1.28, 0.76, 0.27, 0.16, 0.062]
-    line [6.89, 4.77, 2.33, 1.22, 0.559, 0.282, 0.127]
-    line [7.02, 4.40, 1.52, 0.92, 0.471, 0.232, 0.108]
-    line [2.93, 1.74, 0.75, 0.42, 0.17, 0.094, 0.039]
+    line [4.74, 2.93, 1.27, 0.75, 0.28, 0.16, 0.063]
+    line [6.69, 4.61, 2.13, 1.18, 0.527, 0.274, 0.125]
+    line [6.73, 4.25, 1.46, 0.89, 0.454, 0.224, 0.104]
+    line [4.51, 1.94, 0.99, 0.40, 0.20, 0.085, 0.041]
+    line [2.85, 1.75, 0.75, 0.41, 0.17, 0.092, 0.039]
 ```
 
-> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats fftw-js at all sizes N≥128** (+9% to +53%). N=64 is within benchmark variance. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats fftw-js at N≥128** (+9% to +46%). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 

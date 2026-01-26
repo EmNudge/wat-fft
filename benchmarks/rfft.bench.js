@@ -4,8 +4,10 @@
  * Compares our WAT/WASM Real FFT implementation against:
  * - fftw-js - Emscripten port of FFTW
  * - kissfft-js - Emscripten port of Kiss FFT
+ * - webfft - Meta-library with multiple FFT implementations
+ * - pffft-wasm - PFFFT compiled to WASM with SIMD support
  *
- * Note: fftw-js and kissfft-js use Float32 (single precision),
+ * Note: fftw-js, kissfft-js, webfft, and pffft use Float32 (single precision),
  * while our implementation uses Float64 (double precision).
  */
 
@@ -14,6 +16,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
 import kissfft from "kissfft-js";
+import webfft from "webfft";
+import PFFFT from "@echogarden/pffft-wasm";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -84,11 +88,12 @@ async function runBenchmarks() {
   console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
-  console.log("Note: fftw-js uses Float32 (single precision)");
+  console.log("Note: fftw-js/webfft/pffft use Float32 (single precision)");
   console.log("      wat-fft uses Float64 (double precision)");
   console.log("");
 
   const combinedRealWasmExports = await loadCombinedRealWasmFFT();
+  const pffft = await PFFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -145,6 +150,51 @@ async function runBenchmarks() {
       },
     );
     results.push(kissfftResult);
+
+    // 4. webfft (meta-library using kissWasm)
+    const webfftResult = runBenchmark(
+      "webfft (f32)",
+      () => {
+        const fft = new webfft(size);
+        fft.setSubLibrary("kissWasm");
+        return { fft, inputData: input.real32 };
+      },
+      (ctx) => {
+        ctx.fft.fftr(ctx.inputData);
+      },
+      (ctx) => {
+        ctx.fft.dispose();
+      },
+    );
+    results.push(webfftResult);
+
+    // 5. pffft-wasm (PFFFT with SIMD support) - requires size >= 32
+    if (size >= 32) {
+      const PFFFT_REAL = 1;
+      const PFFFT_FORWARD = 0;
+      const pffftResult = runBenchmark(
+        "pffft-wasm (f32)",
+        () => {
+          const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
+          const inputPtr = pffft._pffft_aligned_malloc(size * 4);
+          const outputPtr = pffft._pffft_aligned_malloc(size * 4);
+          const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
+          for (let i = 0; i < size; i++) {
+            inputView[i] = input.real32[i];
+          }
+          return { setup, inputPtr, outputPtr, inputView };
+        },
+        (ctx) => {
+          pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_FORWARD);
+        },
+        (ctx) => {
+          pffft._pffft_aligned_free(ctx.inputPtr);
+          pffft._pffft_aligned_free(ctx.outputPtr);
+          pffft._pffft_destroy_setup(ctx.setup);
+        },
+      );
+      results.push(pffftResult);
+    }
 
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
