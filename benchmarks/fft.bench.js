@@ -1,7 +1,7 @@
 /**
  * FFT Performance Benchmarks
  *
- * Compares our WAT/WASM FFT implementations against popular JS libraries:
+ * Compares our WAT/WASM FFT implementation against popular JS libraries:
  * - fft.js (indutny) - Fastest pure JS, Radix-4 implementation
  * - fft-js - Simple Cooley-Tukey implementation
  * - kissfft-js - Emscripten port of Kiss FFT
@@ -17,28 +17,8 @@ import kissfft from "kissfft-js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load Stockham WASM FFT (self-contained, no imports needed)
-async function loadStockhamWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_stockham.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
-
-// Load Fast WASM FFT (non-SIMD fallback)
-async function loadFastWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_fast.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
-  return instance.exports;
-}
-
 // Load Combined WASM FFT (auto-dispatch radix-2/4)
-async function loadCombinedWasmFFT() {
+async function loadWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "fft_combined.wasm");
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
@@ -100,9 +80,7 @@ async function runBenchmarks() {
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
 
-  const stockhamExports = await loadStockhamWasmFFT();
-  const fastExports = await loadFastWasmFFT();
-  const combinedExports = await loadCombinedWasmFFT();
+  const wasmExports = await loadWasmFFT();
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -112,13 +90,13 @@ async function runBenchmarks() {
     const input = generateComplexInput(size);
     const results = [];
 
-    // wat-fft Stockham (radix-2)
-    const stockhamResult = runBenchmark(
-      "wat-fft (Radix-2)",
+    // wat-fft (auto-dispatch radix-2/4) - our main implementation
+    const wasmResult = runBenchmark(
+      "wat-fft (f64)",
       () => {
-        const memory = stockhamExports.memory;
+        const memory = wasmExports.memory;
         const data = new Float64Array(memory.buffer, 0, size * 2);
-        stockhamExports.precompute_twiddles(size);
+        wasmExports.precompute_twiddles(size);
         const inputBuffer = new Float64Array(size * 2);
         for (let i = 0; i < size; i++) {
           inputBuffer[i * 2] = input.real[i];
@@ -128,52 +106,10 @@ async function runBenchmarks() {
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        stockhamExports.fft_stockham(ctx.size);
+        wasmExports.fft(ctx.size);
       },
     );
-    results.push(stockhamResult);
-
-    // wat-fft Combined (auto-dispatch radix-2/4) - recommended for all sizes
-    const combinedResult = runBenchmark(
-      `wat-fft (Combined)`,
-      () => {
-        const memory = combinedExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        combinedExports.precompute_twiddles(size);
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        combinedExports.fft(ctx.size);
-      },
-    );
-    results.push(combinedResult);
-
-    // wat-fft Fast (non-SIMD fallback)
-    const fastResult = runBenchmark(
-      "wat-fft (fast)",
-      () => {
-        const memory = fastExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        fastExports.precompute_twiddles(size);
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        fastExports.fft_fast(ctx.size);
-      },
-    );
-    results.push(fastResult);
+    results.push(wasmResult);
 
     // fft.js (indutny)
     const fftJsResult = runBenchmark(
@@ -238,12 +174,12 @@ async function runBenchmarks() {
 
     console.log("");
     console.log("Library                   ops/sec        relative");
-    console.log("─".repeat(50));
+    console.log("-".repeat(50));
 
     for (const result of results) {
       const relative = result.opsPerSec / fastest;
       const relativeStr = relative === 1 ? "(fastest)" : `${(relative * 100).toFixed(1)}%`;
-      const bar = "█".repeat(Math.round(relative * 20));
+      const bar = "#".repeat(Math.round(relative * 20));
       console.log(
         `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${relativeStr.padStart(10)}  ${bar}`,
       );
@@ -255,9 +191,7 @@ async function runBenchmarks() {
   console.log("Benchmark complete!");
   console.log("");
   console.log("Notes:");
-  console.log("- wat-fft (Combined): Auto-selects radix-4 or radix-2 (RECOMMENDED)");
-  console.log("- wat-fft (Radix-2): SIMD radix-2 Stockham for all power-of-2");
-  console.log("- wat-fft (fast): Non-SIMD fallback for older environments");
+  console.log("- wat-fft: SIMD-optimized WASM with auto radix-2/4 dispatch");
   console.log("- fft.js: Highly optimized Radix-4 JS (Fedor Indutny)");
   console.log("- kissfft-js: Emscripten port of Kiss FFT");
   console.log("- fft-js: Simple Cooley-Tukey JS (educational)");

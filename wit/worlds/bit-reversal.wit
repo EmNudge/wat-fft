@@ -1,5 +1,0 @@
-package wat-fft:bit-reversal@0.1.0;
-
-world bit-reversal-component {
-    export reverse-bits: func(x: u32, log2n: u32) -> u32;
-}

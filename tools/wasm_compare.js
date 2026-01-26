@@ -21,16 +21,14 @@ const __dirname = path.dirname(__filename);
 /**
  * Load WASM module
  */
-async function loadWasm(name) {
-  const wasmPath = path.join(__dirname, "..", "dist", `combined_${name}.wasm`);
+async function loadWasm(name = "fft_combined") {
+  const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
   if (!fs.existsSync(wasmPath)) {
     throw new Error(`WASM not found: ${wasmPath}`);
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 

@@ -1,9 +1,7 @@
 /**
  * f32 Dual-Complex Real FFT Benchmark
  *
- * Compares the new dual-complex f32 rfft against:
- * - Existing f32 rfft (non-dual)
- * - fftw-js (f32)
+ * Compares the f32 rfft against fftw-js (f32)
  */
 
 import fs from "fs";
@@ -65,16 +63,13 @@ function formatNumber(num) {
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
-  console.log("f32 Dual-Complex Real FFT Benchmark");
+  console.log("f32 Real FFT Benchmark");
   console.log("=".repeat(70));
   console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
-  console.log("Comparing: f32 dual-complex rfft vs existing f32 rfft vs fftw-js");
-  console.log("");
 
-  const dualExports = await loadWasm("fft_real_f32_dual");
-  const existingExports = await loadWasm("combined_real_f32");
+  const wasmExports = await loadWasm("fft_real_f32_dual");
 
   const summary = [];
 
@@ -86,39 +81,23 @@ async function runBenchmarks() {
     const input = generateRealInput(size);
     const results = [];
 
-    // 1. f32 Dual-Complex RFFT
-    const dualResult = runBenchmark(
-      "f32 dual-complex",
+    // 1. f32 RFFT
+    const wasmResult = runBenchmark(
+      "wat-fft (f32)",
       () => {
-        const memory = dualExports.memory;
+        const memory = wasmExports.memory;
         const data = new Float32Array(memory.buffer, 0, size);
-        dualExports.precompute_rfft_twiddles(size);
+        wasmExports.precompute_rfft_twiddles(size);
         return { data, inputBuffer: input };
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        dualExports.rfft(size);
+        wasmExports.rfft(size);
       },
     );
-    results.push(dualResult);
+    results.push(wasmResult);
 
-    // 2. Existing f32 RFFT (non-dual)
-    const existingResult = runBenchmark(
-      "f32 existing",
-      () => {
-        const memory = existingExports.memory;
-        const data = new Float32Array(memory.buffer, 0, size);
-        existingExports.precompute_rfft_twiddles(size);
-        return { data, inputBuffer: input };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        existingExports.rfft(size);
-      },
-    );
-    results.push(existingResult);
-
-    // 3. fftw-js (f32)
+    // 2. fftw-js (f32)
     const fftwResult = runBenchmark(
       "fftw-js (f32)",
       () => {
@@ -137,14 +116,13 @@ async function runBenchmarks() {
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
 
-    // Calculate speedups
-    const dualVsExisting = dualResult.opsPerSec / existingResult.opsPerSec;
-    const dualVsFftw = dualResult.opsPerSec / fftwResult.opsPerSec;
+    // Calculate speedup
+    const vsFftw = wasmResult.opsPerSec / fftwResult.opsPerSec;
 
     // Print results
     console.log("");
     console.log("Implementation                 ops/sec      relative");
-    console.log("─".repeat(55));
+    console.log("-".repeat(55));
     const fastest = results[0].opsPerSec;
     for (const result of results) {
       const relative = result.opsPerSec / fastest;
@@ -154,21 +132,14 @@ async function runBenchmarks() {
       );
     }
     console.log("");
-    console.log(
-      `Dual vs existing f32: ${dualVsExisting >= 1 ? "+" : ""}${((dualVsExisting - 1) * 100).toFixed(1)}%`,
-    );
-    console.log(
-      `Dual vs fftw-js:      ${dualVsFftw >= 1 ? "+" : ""}${((dualVsFftw - 1) * 100).toFixed(1)}%`,
-    );
+    console.log(`wat-fft vs fftw-js: ${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`);
     console.log("");
 
     summary.push({
       size,
-      dual: dualResult.opsPerSec,
-      existing: existingResult.opsPerSec,
+      wasm: wasmResult.opsPerSec,
       fftw: fftwResult.opsPerSec,
-      vsExisting: `${dualVsExisting >= 1 ? "+" : ""}${((dualVsExisting - 1) * 100).toFixed(1)}%`,
-      vsFftw: `${dualVsFftw >= 1 ? "+" : ""}${((dualVsFftw - 1) * 100).toFixed(1)}%`,
+      vsFftw: `${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`,
     });
   }
 
@@ -177,11 +148,11 @@ async function runBenchmarks() {
   console.log("Summary");
   console.log("=".repeat(70));
   console.log("");
-  console.log("Size     Dual         Existing     fftw-js      vs Existing  vs fftw-js");
-  console.log("─".repeat(75));
-  for (const { size, dual, existing, fftw, vsExisting, vsFftw } of summary) {
+  console.log("Size     wat-fft      fftw-js      vs fftw-js");
+  console.log("-".repeat(50));
+  for (const { size, wasm, fftw, vsFftw } of summary) {
     console.log(
-      `N=${String(size).padEnd(5)} ${formatNumber(dual).padStart(10)}  ${formatNumber(existing).padStart(10)}  ${formatNumber(fftw).padStart(10)}     ${vsExisting.padStart(8)}    ${vsFftw.padStart(8)}`,
+      `N=${String(size).padEnd(5)} ${formatNumber(wasm).padStart(10)}  ${formatNumber(fftw).padStart(10)}     ${vsFftw.padStart(8)}`,
     );
   }
   console.log("");

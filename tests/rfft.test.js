@@ -19,29 +19,25 @@ const __dirname = path.dirname(__filename);
 
 // Load Real FFT WASM module
 async function loadRealWasm() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_real.wasm");
+  const wasmPath = path.join(__dirname, "..", "dist", "fft_real_combined.wasm");
   if (!fs.existsSync(wasmPath)) {
     throw new Error(`WASM file not found: ${wasmPath}`);
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
-// Load Stockham WASM for comparison
-async function loadStockhamWasm() {
-  const wasmPath = path.join(__dirname, "..", "dist", "combined_stockham.wasm");
+// Load Complex FFT WASM for comparison
+async function loadComplexWasm() {
+  const wasmPath = path.join(__dirname, "..", "dist", "fft_combined.wasm");
   if (!fs.existsSync(wasmPath)) {
     throw new Error(`WASM file not found: ${wasmPath}`);
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
@@ -87,7 +83,7 @@ function runComplexFFT(wasm, realInput) {
 
   // Precompute twiddles and run FFT
   wasm.precompute_twiddles(n);
-  wasm.fft_stockham(n);
+  wasm.fft(n);
 
   // Extract all N complex values
   const resultData = new Float64Array(memory.buffer, 0, n * 2);
@@ -109,7 +105,7 @@ function getTolerance(n) {
 
 describe("Real FFT", async () => {
   const realWasm = await loadRealWasm();
-  const stockhamWasm = await loadStockhamWasm();
+  const complexWasm = await loadComplexWasm();
   const sizes = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
   describe("Impulse response", () => {
@@ -222,7 +218,7 @@ describe("Real FFT", async () => {
         const rfftResult = runRFFT(realWasm, input);
 
         // Run complex FFT on same input with im=0
-        const cfftResult = runComplexFFT(stockhamWasm, input);
+        const cfftResult = runComplexFFT(complexWasm, input);
 
         // Compare first N/2+1 bins (the unique frequencies for real input)
         const tol = getTolerance(n);

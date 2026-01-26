@@ -110,9 +110,9 @@ cargo install wasm-tools
 ```javascript
 import fs from "fs";
 
-// Load the WASM module (Stockham is recommended for best performance)
+// Load the WASM module
 // No JavaScript imports needed - trig functions are computed inline
-const wasmBuffer = fs.readFileSync("dist/combined_stockham.wasm");
+const wasmBuffer = fs.readFileSync("dist/fft_combined.wasm");
 const wasmModule = await WebAssembly.compile(wasmBuffer);
 const instance = await WebAssembly.instantiate(wasmModule);
 const fft = instance.exports;
@@ -127,7 +127,7 @@ for (let i = 0; i < N; i++) {
 
 // Compute FFT
 fft.precompute_twiddles(N);
-fft.fft_stockham(N);
+fft.fft(N);
 
 // Results are in-place in data[]
 console.log("DC component:", data[0], data[1]);
@@ -166,7 +166,6 @@ npm run bench:rfft    # Run real FFT benchmarks
 npm run bench:rfft32  # Run f32 real FFT benchmarks
 npm run test:fft      # Run comprehensive FFT tests
 npm run test:rfft     # Run real FFT tests
-npm run test:permutation  # Test permutation algorithms
 ```
 
 ## Development Tools
@@ -207,11 +206,11 @@ The comprehensive FFT test suite (`tests/fft.test.js`) tests all implementations
 npm run test:fft
 ```
 
-### Test a single implementation (useful for debugging)
+### Test a specific size and pattern
 
 ```bash
-node tests/fft.test.js --impl stockham 64 random
-node tests/fft.test.js --impl fast 256 impulse
+node tests/fft.test.js 64 random
+node tests/fft.test.js 256 impulse
 ```
 
 ### Input patterns

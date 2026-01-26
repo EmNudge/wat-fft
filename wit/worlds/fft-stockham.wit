@@ -1,8 +1,0 @@
-package wat-fft:fft-stockham@0.1.0;
-
-world fft-stockham {
-    import sin: func(x: f64) -> f64;
-    import cos: func(x: f64) -> f64;
-    export precompute-twiddles: func(n: u32);
-    export fft-stockham: func(n: u32);
-}

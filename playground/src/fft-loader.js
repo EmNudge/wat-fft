@@ -26,21 +26,11 @@ async function getFFTW() {
 const WASM_MODULES = {
   combined: {
     path: "/wasm/fft_combined.wasm",
-    name: "wat-fft Combined",
-    desc: "f64 auto",
+    name: "wat-fft f64",
+    desc: "auto dispatch",
     isReal: false,
     isF32: false,
     fftFn: "fft",
-    precomputeFn: "precompute_twiddles",
-    isWatFft: true,
-  },
-  combined_stockham: {
-    path: "/wasm/combined_stockham.wasm",
-    name: "wat-fft Stockham",
-    desc: "f64 SIMD",
-    isReal: false,
-    isF32: false,
-    fftFn: "fft_stockham",
     precomputeFn: "precompute_twiddles",
     isWatFft: true,
   },

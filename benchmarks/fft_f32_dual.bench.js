@@ -1,5 +1,5 @@
 /**
- * Benchmark: f32 Dual-Complex FFT vs original f32 and fftw-js
+ * Benchmark: f32 Dual-Complex FFT vs fft.js
  */
 
 import fs from "fs";
@@ -61,61 +61,44 @@ function runBenchmark(name, setupFn, benchFn) {
 }
 
 async function runBenchmarks() {
-  console.log("=".repeat(80));
+  console.log("=".repeat(70));
   console.log("f32 Dual-Complex FFT Benchmark");
-  console.log("=".repeat(80));
+  console.log("=".repeat(70));
   console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
 
-  const dual = await loadWasm("fft_stockham_f32_dual");
-  const original = await loadWasm("combined_stockham_f32");
+  const wasm = await loadWasm("fft_stockham_f32_dual");
 
   for (const n of SIZES) {
-    console.log("-".repeat(80));
+    console.log("-".repeat(70));
     console.log(`FFT Size: N=${n}`);
-    console.log("-".repeat(80));
+    console.log("-".repeat(70));
 
     const inputF32 = generateInputF32(n);
     const results = [];
 
-    // 1. Dual-complex f32 FFT
-    const dualResult = runBenchmark(
-      "f32 Dual-Complex",
+    // 1. f32 FFT
+    const wasmResult = runBenchmark(
+      "wat-fft (f32)",
       () => {
-        const memory = dual.memory;
+        const memory = wasm.memory;
         const data = new Float32Array(memory.buffer, 0, n * 2);
-        dual.precompute_twiddles(n);
+        wasm.precompute_twiddles(n);
         return { data, inputBuffer: inputF32 };
       },
       (ctx) => {
         ctx.data.set(ctx.inputBuffer);
-        dual.fft(n);
+        wasm.fft(n);
       },
     );
-    results.push(dualResult);
+    results.push(wasmResult);
 
-    // 2. Original f32 FFT
-    const origResult = runBenchmark(
-      "f32 Original",
-      () => {
-        const memory = original.memory;
-        const data = new Float32Array(memory.buffer, 0, n * 2);
-        original.precompute_twiddles(n);
-        return { data, inputBuffer: inputF32 };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        original.fft_stockham(n);
-      },
-    );
-    results.push(origResult);
-
-    // 3. fft.js (JS reference)
+    // 2. fft.js (JS reference)
     const inputF64 = Array.from(inputF32);
     const fftJs = new FFT(n);
     const fftJsResult = runBenchmark(
-      "fft.js (JS)",
+      "fft.js (f64 JS)",
       () => {
         const fftInput = inputF64.slice();
         const fftOutput = fftJs.createComplexArray();
@@ -132,32 +115,24 @@ async function runBenchmarks() {
 
     // Print results
     console.log("");
-    console.log("Implementation              ops/sec      vs fastest    vs Original   vs fft.js");
-    console.log("─".repeat(80));
+    console.log("Implementation              ops/sec      vs fastest");
+    console.log("-".repeat(55));
     const fastest = results[0].opsPerSec;
     for (const result of results) {
       const vsFastest =
         result.opsPerSec / fastest === 1
           ? "(fastest)"
           : `${((result.opsPerSec / fastest) * 100).toFixed(1)}%`;
-      const vsOrig =
-        result.name === "f32 Original"
-          ? "-"
-          : `${result.opsPerSec >= origResult.opsPerSec ? "+" : ""}${(((result.opsPerSec - origResult.opsPerSec) / origResult.opsPerSec) * 100).toFixed(1)}%`;
-      const vsFftJs =
-        result.name === "fft.js (JS)"
-          ? "-"
-          : `${result.opsPerSec >= fftJsResult.opsPerSec ? "+" : ""}${(((result.opsPerSec - fftJsResult.opsPerSec) / fftJsResult.opsPerSec) * 100).toFixed(1)}%`;
       console.log(
-        `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${vsFastest.padStart(10)}    ${vsOrig.padStart(10)}    ${vsFftJs.padStart(10)}`,
+        `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${vsFastest.padStart(10)}`,
       );
     }
     console.log("");
   }
 
-  console.log("=".repeat(80));
+  console.log("=".repeat(70));
   console.log("Benchmark complete!");
-  console.log("=".repeat(80));
+  console.log("=".repeat(70));
 }
 
 runBenchmarks().catch(console.error);

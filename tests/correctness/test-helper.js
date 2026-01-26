@@ -14,28 +14,22 @@ const __dirname = path.dirname(__filename);
 const DIST_DIR = path.join(__dirname, "..", "..", "dist");
 
 // All valid FFT sizes to test (powers of 2)
-// Note: stockham fails at N=8192 (twiddle table overflow), so we cap at 4096
 export const FFT_SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 // Quick tests use smaller subset
 export const QUICK_SIZES = [4, 8, 16, 64, 256, 1024];
 
-// Extended sizes for implementations that support them (fast supports 8192)
-export const EXTENDED_SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
-
 /**
  * Load a WASM FFT module
  */
 export async function loadWasmModule(name) {
-  const wasmPath = path.join(DIST_DIR, `combined_${name}.wasm`);
+  const wasmPath = path.join(DIST_DIR, `${name}.wasm`);
   if (!fs.existsSync(wasmPath)) {
     return null;
   }
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    math: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
@@ -43,21 +37,9 @@ export async function loadWasmModule(name) {
  * FFT implementations to test
  */
 export const IMPLEMENTATIONS = {
-  stockham: {
-    wasmName: "stockham",
+  fft_combined: {
+    wasmName: "fft_combined",
     fftFunc: "fft_stockham",
-    precompute: "precompute_twiddles",
-    precision: "f64",
-  },
-  stockham_f32: {
-    wasmName: "stockham_f32",
-    fftFunc: "fft_stockham",
-    precompute: "precompute_twiddles",
-    precision: "f32",
-  },
-  fast: {
-    wasmName: "fast",
-    fftFunc: "fft_fast",
     precompute: "precompute_twiddles",
     precision: "f64",
   },
@@ -155,13 +137,6 @@ export function computeEnergy(real, imag) {
 
 /**
  * Check approximate equality with relative and absolute tolerance
- *
- * Default tolerances are tuned for FFT testing:
- * - relTol=1e-9: catches algorithmic errors while allowing floating-point noise
- * - absTol=1e-8: handles near-zero values where relative comparison fails
- *
- * The stockham implementation has ~1e-10 accumulated error, so we use
- * slightly larger tolerances to avoid false positives.
  */
 export function approxEqual(a, b, relTol = 1e-9, absTol = 1e-8) {
   const diff = Math.abs(a - b);
@@ -273,13 +248,13 @@ export class TestReporter {
 
   pass(message) {
     this.passed++;
-    console.log(`  ✓ ${message}`);
+    console.log(`  + ${message}`);
   }
 
   fail(message, error = null) {
     this.failed++;
     this.errors.push({ message, error });
-    console.log(`  ✗ ${message}`);
+    console.log(`  x ${message}`);
     if (error) {
       console.log(`    ${error}`);
     }
@@ -301,7 +276,7 @@ export async function runForAllImplementations(testFn, sizes = QUICK_SIZES) {
   for (const [name, impl] of Object.entries(IMPLEMENTATIONS)) {
     const wasm = await loadWasmModule(impl.wasmName);
     if (!wasm) {
-      console.log(`⚠ Skipping ${name}: WASM not found`);
+      console.log(`Warning: Skipping ${name}: WASM not found`);
       continue;
     }
 
