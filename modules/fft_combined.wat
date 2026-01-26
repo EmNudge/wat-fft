@@ -484,7 +484,8 @@
   (func $fft_stockham_general (param $n i32)
     (local $n2 i32) (local $r i32) (local $l i32) (local $j i32) (local $k i32)
     (local $src i32) (local $dst i32) (local $tw_step i32)
-    (local $x0 v128) (local $x1 v128) (local $w v128)
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $w v128) (local $w2 v128)
     (local $i0 i32) (local $i1 i32) (local $o0 i32) (local $o1 i32)
     (local $r_bytes i32) (local $n2_bytes i32) (local $tw_addr i32)
 
@@ -500,39 +501,188 @@
         (br_if $done_stages (i32.lt_u (local.get $r) (i32.const 1)))
         (local.set $r_bytes (i32.shl (local.get $r) (i32.const 4)))
         (local.set $tw_step (i32.div_u (local.get $n) (i32.shl (local.get $l) (i32.const 1))))
-        (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
         (local.set $j (i32.const 0))
-        (local.set $o0 (local.get $dst))
-        (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
-        (local.set $i0 (local.get $src))
 
-        (block $done_groups
-          (loop $group_loop
-            (br_if $done_groups (i32.ge_u (local.get $j) (local.get $l)))
-            (local.set $w (v128.load (local.get $tw_addr)))
-            (local.set $i1 (i32.add (local.get $i0) (local.get $r_bytes)))
-            (local.set $k (i32.const 0))
+        ;; r=1 optimized path: process 2 groups at once
+        (if (i32.eq (local.get $r) (i32.const 1))
+          (then
+            (local.set $o0 (local.get $dst))
+            (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
+            (local.set $i0 (local.get $src))
+            (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
 
-            (block $done_butterflies
-              (loop $butterfly_loop
-                (br_if $done_butterflies (i32.ge_u (local.get $k) (local.get $r)))
+            ;; Process pairs of groups while we have at least 2 left
+            (block $done_dual_groups
+              (loop $dual_group_loop
+                (br_if $done_dual_groups (i32.ge_u (i32.add (local.get $j) (i32.const 1)) (local.get $l)))
+
+                ;; Load 4 complex numbers: A, B from group j; C, D from group j+1
+                ;; Memory layout: A at i0, B at i0+16, C at i0+32, D at i0+48
+                (local.set $x0 (v128.load (local.get $i0)))                       ;; A
+                (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16)))) ;; B
+                (local.set $x2 (v128.load (i32.add (local.get $i0) (i32.const 32)))) ;; C
+                (local.set $x3 (v128.load (i32.add (local.get $i0) (i32.const 48)))) ;; D
+
+                ;; Load twiddles for both groups
+                (local.set $w (v128.load (local.get $tw_addr)))
+                (local.set $w2 (v128.load (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4)))))
+
+                ;; Multiply B by W_j and D by W_j+1
+                (local.set $x1 (call $simd_cmul (local.get $x1) (local.get $w)))
+                (local.set $x3 (call $simd_cmul (local.get $x3) (local.get $w2)))
+
+                ;; Butterflies and store
+                ;; Group j: o0 = A + W*B, o1 = A - W*B
+                ;; Group j+1: o0+16 = C + W2*D, o1+16 = C - W2*D
+                (v128.store (local.get $o0) (f64x2.add (local.get $x0) (local.get $x1)))
+                (v128.store (local.get $o1) (f64x2.sub (local.get $x0) (local.get $x1)))
+                (v128.store (i32.add (local.get $o0) (i32.const 16)) (f64x2.add (local.get $x2) (local.get $x3)))
+                (v128.store (i32.add (local.get $o1) (i32.const 16)) (f64x2.sub (local.get $x2) (local.get $x3)))
+
+                ;; Advance: 2 groups processed
+                (local.set $i0 (i32.add (local.get $i0) (i32.const 64)))    ;; 4 v128s = 64 bytes
+                (local.set $o0 (i32.add (local.get $o0) (i32.const 32)))    ;; 2 outputs to first half
+                (local.set $o1 (i32.add (local.get $o1) (i32.const 32)))    ;; 2 outputs to second half
+                (local.set $tw_addr (i32.add (local.get $tw_addr)
+                                             (i32.shl (local.get $tw_step) (i32.const 5)))) ;; 2 * tw_step * 16
+                (local.set $j (i32.add (local.get $j) (i32.const 2)))
+                (br $dual_group_loop)
+              )
+            )
+
+            ;; Handle remaining single group if l was odd
+            (if (i32.lt_u (local.get $j) (local.get $l))
+              (then
                 (local.set $x0 (v128.load (local.get $i0)))
-                (local.set $x1 (v128.load (local.get $i1)))
+                (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16))))
+                (local.set $w (v128.load (local.get $tw_addr)))
                 (local.set $x1 (call $simd_cmul (local.get $x1) (local.get $w)))
                 (v128.store (local.get $o0) (f64x2.add (local.get $x0) (local.get $x1)))
                 (v128.store (local.get $o1) (f64x2.sub (local.get $x0) (local.get $x1)))
-                (local.set $i0 (i32.add (local.get $i0) (i32.const 16)))
-                (local.set $i1 (i32.add (local.get $i1) (i32.const 16)))
-                (local.set $o0 (i32.add (local.get $o0) (i32.const 16)))
-                (local.set $o1 (i32.add (local.get $o1) (i32.const 16)))
-                (local.set $k (i32.add (local.get $k) (i32.const 1)))
-                (br $butterfly_loop)
               )
             )
-            (local.set $i0 (i32.add (local.get $i0) (local.get $r_bytes)))
-            (local.set $tw_addr (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4))))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br $group_loop)
+          )
+          (else
+            (if (i32.eq (local.get $r) (i32.const 2))
+              (then
+                ;; r=2 optimized path: process 2 groups at once
+                ;; Each group has 2 elements in first half, 2 in second half
+                ;; For 2 groups: A0,A1 at i0, B0,B1 at i0+32, C0,C1 at i0+64, D0,D1 at i0+96
+                (local.set $o0 (local.get $dst))
+                (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
+                (local.set $i0 (local.get $src))
+                (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
+
+                ;; Process pairs of groups while we have at least 2 left
+                (block $done_dual_groups_r2
+                  (loop $dual_group_loop_r2
+                    (br_if $done_dual_groups_r2 (i32.ge_u (i32.add (local.get $j) (i32.const 1)) (local.get $l)))
+
+                    ;; Load twiddle for group j
+                    (local.set $w (v128.load (local.get $tw_addr)))
+
+                    ;; Group j: 2 butterflies with same twiddle
+                    ;; Load A0, A1 (first half) and B0, B1 (second half)
+                    (local.set $x0 (v128.load (local.get $i0)))                        ;; A0
+                    (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16)))) ;; A1
+                    (local.set $x2 (v128.load (i32.add (local.get $i0) (i32.const 32)))) ;; B0
+                    (local.set $x3 (v128.load (i32.add (local.get $i0) (i32.const 48)))) ;; B1
+
+                    ;; Multiply B0, B1 by twiddle
+                    (local.set $x2 (call $simd_cmul (local.get $x2) (local.get $w)))
+                    (local.set $x3 (call $simd_cmul (local.get $x3) (local.get $w)))
+
+                    ;; Butterflies for group j
+                    (v128.store (local.get $o0) (f64x2.add (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o0) (i32.const 16)) (f64x2.add (local.get $x1) (local.get $x3)))
+                    (v128.store (local.get $o1) (f64x2.sub (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o1) (i32.const 16)) (f64x2.sub (local.get $x1) (local.get $x3)))
+
+                    ;; Load twiddle for group j+1
+                    (local.set $w (v128.load (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4)))))
+
+                    ;; Group j+1: next 2 butterflies
+                    (local.set $x0 (v128.load (i32.add (local.get $i0) (i32.const 64))))  ;; C0
+                    (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 80))))  ;; C1
+                    (local.set $x2 (v128.load (i32.add (local.get $i0) (i32.const 96))))  ;; D0
+                    (local.set $x3 (v128.load (i32.add (local.get $i0) (i32.const 112)))) ;; D1
+
+                    ;; Multiply D0, D1 by twiddle
+                    (local.set $x2 (call $simd_cmul (local.get $x2) (local.get $w)))
+                    (local.set $x3 (call $simd_cmul (local.get $x3) (local.get $w)))
+
+                    ;; Butterflies for group j+1
+                    (v128.store (i32.add (local.get $o0) (i32.const 32)) (f64x2.add (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o0) (i32.const 48)) (f64x2.add (local.get $x1) (local.get $x3)))
+                    (v128.store (i32.add (local.get $o1) (i32.const 32)) (f64x2.sub (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o1) (i32.const 48)) (f64x2.sub (local.get $x1) (local.get $x3)))
+
+                    ;; Advance: 2 groups processed (8 v128s input, 8 v128s output)
+                    (local.set $i0 (i32.add (local.get $i0) (i32.const 128)))   ;; 8 v128s = 128 bytes
+                    (local.set $o0 (i32.add (local.get $o0) (i32.const 64)))    ;; 4 outputs to first half
+                    (local.set $o1 (i32.add (local.get $o1) (i32.const 64)))    ;; 4 outputs to second half
+                    (local.set $tw_addr (i32.add (local.get $tw_addr)
+                                                 (i32.shl (local.get $tw_step) (i32.const 5)))) ;; 2 * tw_step * 16
+                    (local.set $j (i32.add (local.get $j) (i32.const 2)))
+                    (br $dual_group_loop_r2)
+                  )
+                )
+
+                ;; Handle remaining single group if l was odd
+                (if (i32.lt_u (local.get $j) (local.get $l))
+                  (then
+                    (local.set $w (v128.load (local.get $tw_addr)))
+                    (local.set $x0 (v128.load (local.get $i0)))
+                    (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16))))
+                    (local.set $x2 (v128.load (i32.add (local.get $i0) (i32.const 32))))
+                    (local.set $x3 (v128.load (i32.add (local.get $i0) (i32.const 48))))
+                    (local.set $x2 (call $simd_cmul (local.get $x2) (local.get $w)))
+                    (local.set $x3 (call $simd_cmul (local.get $x3) (local.get $w)))
+                    (v128.store (local.get $o0) (f64x2.add (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o0) (i32.const 16)) (f64x2.add (local.get $x1) (local.get $x3)))
+                    (v128.store (local.get $o1) (f64x2.sub (local.get $x0) (local.get $x2)))
+                    (v128.store (i32.add (local.get $o1) (i32.const 16)) (f64x2.sub (local.get $x1) (local.get $x3)))
+                  )
+                )
+              )
+              (else
+                ;; Standard path for r>=4
+                (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
+                (local.set $o0 (local.get $dst))
+                (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
+                (local.set $i0 (local.get $src))
+
+                (block $done_groups
+                  (loop $group_loop
+                    (br_if $done_groups (i32.ge_u (local.get $j) (local.get $l)))
+                    (local.set $w (v128.load (local.get $tw_addr)))
+                    (local.set $i1 (i32.add (local.get $i0) (local.get $r_bytes)))
+                    (local.set $k (i32.const 0))
+
+                    (block $done_butterflies
+                      (loop $butterfly_loop
+                        (br_if $done_butterflies (i32.ge_u (local.get $k) (local.get $r)))
+                        (local.set $x0 (v128.load (local.get $i0)))
+                        (local.set $x1 (v128.load (local.get $i1)))
+                        (local.set $x1 (call $simd_cmul (local.get $x1) (local.get $w)))
+                        (v128.store (local.get $o0) (f64x2.add (local.get $x0) (local.get $x1)))
+                        (v128.store (local.get $o1) (f64x2.sub (local.get $x0) (local.get $x1)))
+                        (local.set $i0 (i32.add (local.get $i0) (i32.const 16)))
+                        (local.set $i1 (i32.add (local.get $i1) (i32.const 16)))
+                        (local.set $o0 (i32.add (local.get $o0) (i32.const 16)))
+                        (local.set $o1 (i32.add (local.get $o1) (i32.const 16)))
+                        (local.set $k (i32.add (local.get $k) (i32.const 1)))
+                        (br $butterfly_loop)
+                      )
+                    )
+                    (local.set $i0 (i32.add (local.get $i0) (local.get $r_bytes)))
+                    (local.set $tw_addr (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4))))
+                    (local.set $j (i32.add (local.get $j) (i32.const 1)))
+                    (br $group_loop)
+                  )
+                )
+              )
+            )
           )
         )
         (if (i32.eq (local.get $src) (i32.const 0))
