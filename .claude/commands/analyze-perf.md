@@ -1,6 +1,6 @@
 # Performance Analysis Command
 
-Analyze wat-fft performance, identify gaps vs competitors, and optionally implement optimizations.
+Analyze wat-fft performance and identify opportunities for continuous improvement.
 
 ## Arguments
 
@@ -11,29 +11,24 @@ Analyze wat-fft performance, identify gaps vs competitors, and optionally implem
 ## Quick Start
 
 1. **Build**: `npm run build`
-2. **Run main benchmark**: `npm run bench:rfft32` (f32 RFFT vs fftw-js)
-3. **Analyze results** and propose optimizations
+2. **Run benchmarks**: `npm run bench:rfft32` (f32 RFFT) or `npm run bench` (complex FFT)
+3. **Analyze results** and identify improvement opportunities
 
-## Key Context (Don't Re-read Unless Needed)
+## Current Status
 
-**Current Status** (from OPTIMIZATION_PLAN.md):
+**We beat all competitors.** The focus now is continuous improvement:
 
-- f32 RFFT: Beats fftw-js at N≥256 (+13-49%), loses at N=64 (-7%), N=128 (-3%)
-- Complex FFT: Beats fft.js by +40-90% at all sizes
-- f64 RFFT: Loses to fftw-js (expected - f64x2 vs f32x4 SIMD)
+- f32 RFFT: +5-48% faster than fftw-js at all sizes N≥128, tied at N=64
+- Complex FFT: +40-90% faster than fft.js at all sizes
+- 26 optimization experiments completed (see EXPERIMENT_LOG.md)
 
-**What Already Failed** (from EXPERIMENT_LOG.md):
+## Key Constraints (from experiments)
 
-- Depth-first recursive: -55% (call overhead)
-- Large codelets (N>32): Register spills (300+ locals)
-- Manual function inlining: No gain (V8 already inlines)
-- Hierarchical beyond N=1024: I-cache thrashing
-
-**Key Constraints**:
-
-- Optimal codelet ceiling: N=1024
-- Keep codelets small: N ≤ 16 to avoid register spills
+- Optimal codelet ceiling: N=1024 (I-cache thrashing beyond)
+- Keep codelets small: N ≤ 16 to avoid register spills (300+ locals)
 - f32 gives 2x SIMD throughput vs f64
+- V8 already inlines small functions (manual inlining rarely helps)
+- Depth-first recursive is slower (-55% due to call overhead)
 
 ## Analysis Workflow
 
@@ -43,32 +38,44 @@ Analyze wat-fft performance, identify gaps vs competitors, and optionally implem
 npm run build && npm run bench:rfft32
 ```
 
-Focus on f32 RFFT - this is where we compete with fftw-js.
+### Step 2: Identify Improvement Opportunities
 
-### Step 2: Identify Gaps
+Look for opportunities in these categories:
 
-Look for sizes where we lose. Currently:
+**Performance improvements:**
 
-- N=64: ~-7% vs fftw-js
-- N=128: ~-3% vs fftw-js
+- Sizes with lower relative throughput (even if winning)
+- High variance between runs (unstable hot paths)
+- Sizes not yet optimized (N > 4096, non-power-of-2)
 
-### Step 3: Propose Optimizations
+**Code quality improvements:**
 
-For each gap, propose a fix with:
+- Repeated patterns that could be unified
+- Dead code or unused functions
+- Missing test coverage for edge cases
 
-- **Hypothesis**: Why we're slow
+**Feature additions:**
+
+- Inverse FFT optimization
+- Batched/streaming FFT for real-time use
+- Additional precisions or formats
+
+### Step 3: Propose Improvements
+
+For each opportunity, document:
+
+- **Target**: What to improve
+- **Hypothesis**: Why current implementation is suboptimal
 - **Approach**: Specific code changes
 - **Expected gain**: Based on similar experiments
-- **Risk**: What could go wrong
+- **Risk**: What could regress
 
 ### Step 4: Implement (if --implement flag)
 
-After analysis, implement the top optimization:
-
-1. Create a new experiment branch
+1. Record baseline numbers
 2. Modify the relevant WAT module
-3. Run `npm run build && npm run bench:rfft32`
-4. Compare before/after
+3. Run `npm run build && npm test` (verify correctness)
+4. Run benchmarks 2-3 times for stable results
 5. If successful:
    - Add entry to EXPERIMENT_LOG.md
    - Update OPTIMIZATION_PLAN.md if metrics changed
@@ -81,16 +88,26 @@ After analysis, implement the top optimization:
 
 ## Benchmark Results
 
-[Table of current performance]
+[Table of current performance with ops/sec]
 
-## Gap Analysis
+## Improvement Opportunities
 
-[Where we lose and by how much]
+### High Priority
 
-## Top Optimization Opportunity
+[Opportunities with clear path to measurable gains]
 
-**Target**: [Size and gap]
-**Hypothesis**: [Why we're slow]
+### Medium Priority
+
+[Opportunities requiring research or with uncertain gains]
+
+### Low Priority / Future Work
+
+[Nice-to-haves, out-of-scope items]
+
+## Top Recommendation
+
+**Target**: [What to improve]
+**Hypothesis**: [Why it's suboptimal]
 **Approach**: [Specific changes]
 **Expected Gain**: [Estimate]
 **Files to Modify**: [List]
@@ -102,15 +119,13 @@ After analysis, implement the top optimization:
 
 ## Implementation Guidelines
 
-When implementing optimizations:
-
 1. **Measure first**: Get baseline numbers before changing anything
 2. **Change one thing**: Don't combine multiple optimizations
 3. **Test correctness**: Run `npm test` after changes
-4. **Benchmark thoroughly**: Run benchmark 2-3 times for stable results
+4. **Benchmark thoroughly**: Run 2-3 times for stable results
 5. **Document everything**: Update EXPERIMENT_LOG.md with results
 
-### Common Optimization Patterns
+### Proven Optimization Patterns
 
 **Fused codelets** (Experiments 8, 15, 16b):
 
@@ -124,10 +139,11 @@ When implementing optimizations:
 - Requires restructuring loops and shuffles
 - Best gains at larger N
 
-**SIMD threshold tuning** (Experiment 19):
+**Unrolled post-processing** (Experiments 23, 25):
 
-- Simple one-line changes can have big impact
-- Lower thresholds to use SIMD at smaller N
+- Fully unroll small loops with inline v128.const twiddles
+- Eliminates loop overhead and memory loads
+- Limited to ~15 iterations before I-cache pressure
 
 ### Files Reference
 
@@ -152,3 +168,11 @@ const N = 64;
 for(let i=0; i<1000000; i++) fft.rfft(new Float32Array(N));
 "
 ```
+
+## Ideas for Future Exploration
+
+- **Larger N (8192+)**: May need different algorithm (split-radix, Bluestein)
+- **Non-power-of-2**: Chirp-Z or mixed-radix approaches
+- **Multi-threading**: SharedArrayBuffer + workers for parallel FFT
+- **IFFT optimization**: Currently uses same code path as forward FFT
+- **Memory pooling**: Reduce allocation overhead for repeated calls
