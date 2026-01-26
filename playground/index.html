@@ -737,6 +737,216 @@
           opacity: 0.3;
         }
       }
+
+      /* Benchmark mode styles */
+      #benchmark-mode {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+      }
+
+      .bench-impl-selector {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .bench-checkbox {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border: 1px solid #333;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.15s;
+        font-size: 12px;
+      }
+
+      .bench-checkbox:hover {
+        border-color: #4ade80;
+        background: rgba(74, 222, 128, 0.05);
+      }
+
+      .bench-checkbox.alt:hover {
+        border-color: #f97316;
+        background: rgba(249, 115, 22, 0.05);
+      }
+
+      .bench-checkbox input[type="checkbox"] {
+        width: 16px;
+        height: 16px;
+        accent-color: #4ade80;
+      }
+
+      .bench-checkbox.alt input[type="checkbox"] {
+        accent-color: #f97316;
+      }
+
+      .bench-sizes {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      .bench-checkbox.size {
+        padding: 4px 10px;
+        flex: 0 0 auto;
+      }
+
+      .bench-progress {
+        margin-top: 10px;
+        background: #0f0f23;
+        border-radius: 4px;
+        height: 24px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .bench-progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #4ade80, #22c55e);
+        width: 0%;
+        transition: width 0.2s ease-out;
+      }
+
+      .bench-progress-text {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 11px;
+        font-weight: bold;
+        color: #fff;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      }
+
+      /* Benchmark results container */
+      .bench-results-container {
+        flex: 1;
+        background: #0f0f23;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        min-height: 0;
+      }
+
+      .bench-results-container.hidden {
+        display: none;
+      }
+
+      .bench-results-scroll {
+        flex: 1;
+        overflow: auto;
+        min-height: 0;
+      }
+
+      .bench-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        font-family: monospace;
+      }
+
+      .bench-table th,
+      .bench-table td {
+        padding: 10px 16px;
+        text-align: right;
+        border-bottom: 1px solid #333;
+        white-space: nowrap;
+      }
+
+      .bench-table th {
+        background: #16213e;
+        color: #60a5fa;
+        text-transform: uppercase;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.15s;
+      }
+
+      .bench-table th:hover {
+        background: #1e3a5f;
+      }
+
+      .bench-table th.sorted {
+        color: #4ade80;
+      }
+
+      .bench-table th .sort-indicator {
+        margin-left: 4px;
+        opacity: 0.3;
+      }
+
+      .bench-table th.sorted .sort-indicator {
+        opacity: 1;
+      }
+
+      .bench-table th:first-child,
+      .bench-table td:first-child {
+        text-align: left;
+      }
+
+      .bench-table tbody tr:hover {
+        background: rgba(74, 222, 128, 0.08);
+      }
+
+      .bench-table tbody tr:nth-child(even) {
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .bench-table tbody tr:nth-child(even):hover {
+        background: rgba(74, 222, 128, 0.08);
+      }
+
+      .bench-table .impl-name {
+        font-weight: bold;
+      }
+
+      .bench-table .impl-name.wat-fft {
+        color: #4ade80;
+      }
+
+      .bench-table .impl-name.alt {
+        color: #f97316;
+      }
+
+      .bench-table .fastest {
+        color: #4ade80;
+        font-weight: bold;
+      }
+
+      .bench-empty {
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        text-align: center;
+        padding: 40px 20px;
+        color: #666;
+        font-size: 14px;
+      }
+
+      .bench-empty.visible {
+        display: flex;
+      }
+
+      .bench-empty-icon {
+        font-size: 48px;
+        margin-bottom: 10px;
+        opacity: 0.5;
+      }
+
+      .bench-results-scroll:has(tr) + .bench-empty {
+        display: none;
+      }
     </style>
   </head>
   <body>
@@ -750,6 +960,7 @@
         <div class="mode-toggle" id="mode-toggle">
           <div class="mode-option selected" data-mode="spectrogram">Spectrogram</div>
           <div class="mode-option" data-mode="analyzer">Live Analyzer</div>
+          <div class="mode-option" data-mode="benchmark">Benchmark</div>
         </div>
 
         <div id="spectrogram-mode">
@@ -955,6 +1166,110 @@
           </div>
         </div>
 
+        <!-- Benchmark Mode -->
+        <div id="benchmark-mode" class="hidden">
+          <h2>Implementations</h2>
+          <div class="bench-impl-selector" id="bench-impl-selector">
+            <div class="fft-group-label">wat-fft (this project)</div>
+            <label class="bench-checkbox">
+              <input type="checkbox" data-impl="combined" checked />
+              <span>Combined (f64)</span>
+            </label>
+            <label class="bench-checkbox">
+              <input type="checkbox" data-impl="f32_dual" checked />
+              <span>f32 Dual (fastest)</span>
+            </label>
+            <label class="bench-checkbox">
+              <input type="checkbox" data-impl="real_combined" />
+              <span>Real FFT (f64)</span>
+            </label>
+            <label class="bench-checkbox">
+              <input type="checkbox" data-impl="real_f32_dual" checked />
+              <span>Real f32 (fast real)</span>
+            </label>
+
+            <div class="fft-group-label alt">Alternatives</div>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="fftjs" checked />
+              <span>fft.js (JS radix-4)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="fftjs_real" />
+              <span>fft.js Real</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="fft_js" />
+              <span>fft-js (Cooley-Tukey)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="fftw_real" />
+              <span>FFTW Real (WASM)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="kissfft" />
+              <span>KissFFT (WASM)</span>
+            </label>
+          </div>
+
+          <h2>FFT Sizes</h2>
+          <div class="bench-sizes" id="bench-sizes">
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="256" />
+              <span>256</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="512" />
+              <span>512</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="1024" checked />
+              <span>1024</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="2048" checked />
+              <span>2048</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="4096" checked />
+              <span>4096</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="8192" />
+              <span>8192</span>
+            </label>
+            <label class="bench-checkbox size">
+              <input type="checkbox" data-size="16384" />
+              <span>16384</span>
+            </label>
+          </div>
+
+          <h2>Settings</h2>
+          <div class="controls">
+            <div class="slider-row">
+              <label>Iterations</label>
+              <input type="range" id="bench-iterations" min="10" max="1000" value="100" step="10" />
+              <span class="slider-value" id="bench-iterations-value">100</span>
+            </div>
+            <div class="slider-row">
+              <label>Warmup</label>
+              <input type="range" id="bench-warmup" min="0" max="50" value="10" step="5" />
+              <span class="slider-value" id="bench-warmup-value">10</span>
+            </div>
+          </div>
+
+          <h2>Actions</h2>
+          <div class="controls">
+            <button id="bench-run" style="width: 100%">Run Benchmark</button>
+            <div class="bench-progress hidden" id="bench-progress">
+              <div class="bench-progress-bar" id="bench-progress-bar"></div>
+              <span class="bench-progress-text" id="bench-progress-text">0%</span>
+            </div>
+            <button id="bench-copy" class="secondary" style="width: 100%; margin-top: 8px" disabled>
+              Copy Results
+            </button>
+          </div>
+        </div>
+
         <!-- Live Analyzer Mode -->
         <div id="analyzer-mode" class="hidden">
           <h2>Microphone</h2>
@@ -1073,6 +1388,31 @@
           <div class="freq-labels" id="freq-labels"></div>
           <canvas id="spectrogram" width="1024" height="512"></canvas>
           <div class="stretch-indicator" id="stretch-indicator"></div>
+        </div>
+
+        <!-- Benchmark Results Container -->
+        <div class="bench-results-container hidden" id="bench-results-container">
+          <div class="bench-results-scroll">
+            <table class="bench-table" id="bench-results-table">
+              <thead>
+                <tr>
+                  <th data-sort="impl">Implementation<span class="sort-indicator"></span></th>
+                  <th data-sort="size">Size<span class="sort-indicator"></span></th>
+                  <th data-sort="avg" class="sorted">
+                    Avg (ms)<span class="sort-indicator">▲</span>
+                  </th>
+                  <th data-sort="min">Min (ms)<span class="sort-indicator"></span></th>
+                  <th data-sort="median">Median (ms)<span class="sort-indicator"></span></th>
+                  <th data-sort="ops">Ops/sec<span class="sort-indicator"></span></th>
+                </tr>
+              </thead>
+              <tbody id="bench-results-body"></tbody>
+            </table>
+          </div>
+          <div class="bench-empty" id="bench-empty">
+            <div class="bench-empty-icon">⏱</div>
+            <div>Run a benchmark to see results</div>
+          </div>
         </div>
 
         <div class="current-impl" id="current-impl">

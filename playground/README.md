@@ -19,6 +19,8 @@ Interactive playground for testing and visualizing FFT performance using the wat
 
 - **Performance Metrics**: Track FFT execution time, frames per second, and total processing time
 
+- **Benchmark Mode**: Compare FFT implementations head-to-head with configurable settings
+
 ## Quick Start
 
 ```bash
@@ -60,6 +62,45 @@ The playground uses the Web Audio API's `OfflineAudioContext` to generate precis
 - **Major Chord**: 261.63 Hz (C4) + 329.63 Hz (E4) + 392.0 Hz (G4)
 - **Harmonics**: 220 Hz + 440 Hz + 660 Hz + 880 Hz with decreasing amplitudes
 - **Beating**: 440 Hz + 442 Hz (creates 2 Hz beat frequency)
+
+## Modes
+
+The playground offers three modes, accessible via the toggle at the top of the sidebar:
+
+### Spectrogram Mode
+
+Generate and visualize spectrograms from audio. Supports synthetic audio generation, file uploads, and live microphone recording.
+
+### Live Analyzer Mode
+
+Real-time spectrum analysis using your microphone. Displays frequency bars, curves, or mirrored visualizations with customizable color schemes.
+
+### Benchmark Mode
+
+Compare FFT implementation performance with detailed metrics.
+
+**Features:**
+
+- **Multi-select implementations**: Choose which FFT libraries to benchmark
+  - wat-fft variants: Combined (f64), Stockham (f64 SIMD), f32 Dual, Real FFT (f64), Real f32
+  - Alternatives: fft.js, fft.js Real, fft-js, FFTW Real, KissFFT
+- **Multi-select FFT sizes**: 256, 512, 1024, 2048, 4096, 8192, 16384
+- **Configurable iterations**: 10-1000 iterations per test
+- **Warmup runs**: 0-50 warmup runs to ensure JIT optimization
+- **Progress indicator**: Real-time progress bar during benchmarking
+- **Results table**: Displays Implementation, Size, Avg/Min/Median time (ms), and Ops/sec
+- **Fastest highlighting**: Results highlighted in green for the fastest implementation per size
+- **Export to markdown**: Copy button exports results as a markdown table with browser info
+
+**Running a Benchmark:**
+
+1. Select the "Benchmark" mode from the top toggle
+2. Check the implementations you want to compare
+3. Check the FFT sizes to test
+4. Adjust iterations and warmup runs as needed
+5. Click "Run Benchmark"
+6. View results on the canvas
+7. Click "Copy Results" to export as markdown
 
 ## Spectrogram Settings
 

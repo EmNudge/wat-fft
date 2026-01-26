@@ -32,7 +32,13 @@ let analyzerModule = null;
 let analyzerModuleId = "real_f32_dual";
 let analyzer = null;
 let analyzerStatsInterval = null;
-let currentMode = "spectrogram"; // "spectrogram" or "analyzer"
+let currentMode = "spectrogram"; // "spectrogram", "analyzer", or "benchmark"
+
+// Benchmark state
+let benchmarkResults = [];
+let isBenchmarking = false;
+let benchSortColumn = "avg";
+let benchSortAsc = true;
 
 // Live recorder state
 let liveRecorder = null;
@@ -118,6 +124,22 @@ const elements = {
   recordTime: document.getElementById("record-time"),
   recordIndicator: document.getElementById("record-indicator"),
   recordHint: document.getElementById("record-hint"),
+  // Benchmark controls
+  benchImplSelector: document.getElementById("bench-impl-selector"),
+  benchSizes: document.getElementById("bench-sizes"),
+  benchIterations: document.getElementById("bench-iterations"),
+  benchIterationsValue: document.getElementById("bench-iterations-value"),
+  benchWarmup: document.getElementById("bench-warmup"),
+  benchWarmupValue: document.getElementById("bench-warmup-value"),
+  benchRun: document.getElementById("bench-run"),
+  benchProgress: document.getElementById("bench-progress"),
+  benchProgressBar: document.getElementById("bench-progress-bar"),
+  benchProgressText: document.getElementById("bench-progress-text"),
+  benchCopy: document.getElementById("bench-copy"),
+  // Benchmark results
+  benchResultsContainer: document.getElementById("bench-results-container"),
+  benchResultsBody: document.getElementById("bench-results-body"),
+  benchEmpty: document.getElementById("bench-empty"),
 };
 
 // Debounce helper
@@ -949,11 +971,355 @@ function updateAnalyzerImplName() {
   elements.implName.classList.toggle("alt", isAlt);
 }
 
-// Mode toggle handling (Spectrogram vs Live Analyzer)
+// Benchmark setup
+function setupBenchmark() {
+  // Iterations slider
+  elements.benchIterations.addEventListener("input", () => {
+    elements.benchIterationsValue.textContent = elements.benchIterations.value;
+  });
+
+  // Warmup slider
+  elements.benchWarmup.addEventListener("input", () => {
+    elements.benchWarmupValue.textContent = elements.benchWarmup.value;
+  });
+
+  // Run button
+  elements.benchRun.addEventListener("click", runBenchmark);
+
+  // Copy button
+  elements.benchCopy.addEventListener("click", copyBenchmarkResults);
+
+  // Table header sorting
+  const headers = document.querySelectorAll("#bench-results-table th[data-sort]");
+  headers.forEach((th) => {
+    th.addEventListener("click", () => {
+      const column = th.dataset.sort;
+      if (benchSortColumn === column) {
+        benchSortAsc = !benchSortAsc;
+      } else {
+        benchSortColumn = column;
+        benchSortAsc = column === "impl" ? true : true; // Ascending for all by default
+      }
+      updateSortIndicators();
+      renderBenchmarkResults();
+    });
+  });
+}
+
+// Update sort indicators in table headers
+function updateSortIndicators() {
+  const headers = document.querySelectorAll("#bench-results-table th[data-sort]");
+  headers.forEach((th) => {
+    const indicator = th.querySelector(".sort-indicator");
+    if (th.dataset.sort === benchSortColumn) {
+      th.classList.add("sorted");
+      indicator.textContent = benchSortAsc ? "▲" : "▼";
+    } else {
+      th.classList.remove("sorted");
+      indicator.textContent = "";
+    }
+  });
+}
+
+// Get selected implementations
+function getSelectedImplementations() {
+  const checkboxes = elements.benchImplSelector.querySelectorAll('input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map((cb) => cb.dataset.impl);
+}
+
+// Get selected sizes
+function getSelectedSizes() {
+  const checkboxes = elements.benchSizes.querySelectorAll('input[type="checkbox"]:checked');
+  return Array.from(checkboxes).map((cb) => parseInt(cb.dataset.size));
+}
+
+// Run benchmark
+async function runBenchmark() {
+  if (isBenchmarking) return;
+
+  const implementations = getSelectedImplementations();
+  const sizes = getSelectedSizes();
+  const iterations = parseInt(elements.benchIterations.value);
+  const warmupRuns = parseInt(elements.benchWarmup.value);
+
+  if (implementations.length === 0) {
+    alert("Please select at least one implementation");
+    return;
+  }
+  if (sizes.length === 0) {
+    alert("Please select at least one FFT size");
+    return;
+  }
+
+  isBenchmarking = true;
+  benchmarkResults = [];
+  elements.benchRun.textContent = "Running...";
+  elements.benchRun.disabled = true;
+  elements.benchCopy.disabled = true;
+  elements.benchProgress.classList.remove("hidden");
+
+  const totalTests = implementations.length * sizes.length;
+  let completedTests = 0;
+
+  // Update progress
+  const updateProgress = (current, total, label) => {
+    const pct = Math.round((current / total) * 100);
+    elements.benchProgressBar.style.width = pct + "%";
+    elements.benchProgressText.textContent = label || `${pct}%`;
+  };
+
+  try {
+    for (const implId of implementations) {
+      // Load module
+      const module = await loadFFTModule(implId);
+
+      for (const size of sizes) {
+        updateProgress(completedTests, totalTests, `${module.config.name} @ ${size}`);
+
+        // Create FFT context
+        const fftContext = createFFTContext(module, size);
+
+        // Generate test data
+        const inputBuffer = fftContext.getInputBuffer();
+        for (let i = 0; i < inputBuffer.length; i++) {
+          inputBuffer[i] = Math.random() * 2 - 1;
+        }
+
+        // Warmup runs
+        for (let i = 0; i < warmupRuns; i++) {
+          fftContext.run();
+        }
+
+        // Benchmark runs
+        const times = [];
+        for (let i = 0; i < iterations; i++) {
+          const start = performance.now();
+          fftContext.run();
+          const end = performance.now();
+          times.push(end - start);
+        }
+
+        // Calculate statistics
+        times.sort((a, b) => a - b);
+        const sum = times.reduce((a, b) => a + b, 0);
+        const avg = sum / times.length;
+        const min = times[0];
+        const max = times[times.length - 1];
+        const median = times[Math.floor(times.length / 2)];
+        const p95 = times[Math.floor(times.length * 0.95)];
+
+        benchmarkResults.push({
+          impl: implId,
+          implName: module.config.name,
+          isWatFft: module.config.isWatFft,
+          size,
+          iterations,
+          avg,
+          min,
+          max,
+          median,
+          p95,
+          opsPerSec: 1000 / avg,
+        });
+
+        completedTests++;
+
+        // Allow UI to update
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    }
+
+    updateProgress(totalTests, totalTests, "Complete!");
+
+    // Render results
+    renderBenchmarkResults();
+  } catch (err) {
+    console.error("Benchmark error:", err);
+    alert("Benchmark failed: " + err.message);
+  } finally {
+    isBenchmarking = false;
+    elements.benchRun.textContent = "Run Benchmark";
+    elements.benchRun.disabled = false;
+    elements.benchCopy.disabled = benchmarkResults.length === 0;
+
+    setTimeout(() => {
+      elements.benchProgress.classList.add("hidden");
+    }, 1500);
+  }
+}
+
+// Render benchmark results
+function renderBenchmarkResults() {
+  const tbody = elements.benchResultsBody;
+  const emptyState = elements.benchEmpty;
+
+  // Clear existing rows
+  tbody.innerHTML = "";
+
+  if (benchmarkResults.length === 0) {
+    // Show empty state
+    emptyState.classList.add("visible");
+    elements.stats.fftTime.textContent = "-";
+    elements.stats.totalTime.textContent = "-";
+    elements.stats.fftsPerSec.textContent = "-";
+    elements.stats.frames.textContent = "-";
+    elements.implName.textContent = "Ready";
+    elements.implName.classList.remove("alt");
+    return;
+  }
+
+  // Hide empty state
+  emptyState.classList.remove("visible");
+
+  // Group by size to find fastest per size
+  const bySize = {};
+  for (const result of benchmarkResults) {
+    if (!bySize[result.size]) bySize[result.size] = [];
+    bySize[result.size].push(result);
+  }
+
+  // Find fastest for each size
+  const fastest = {};
+  for (const size in bySize) {
+    const sorted = bySize[size].sort((a, b) => a.avg - b.avg);
+    fastest[size] = sorted[0].impl;
+  }
+
+  // Sort results by current sort column
+  const sortedResults = [...benchmarkResults].sort((a, b) => {
+    let cmp = 0;
+    switch (benchSortColumn) {
+      case "impl":
+        cmp = a.implName.localeCompare(b.implName);
+        break;
+      case "size":
+        cmp = a.size - b.size;
+        break;
+      case "avg":
+        cmp = a.avg - b.avg;
+        break;
+      case "min":
+        cmp = a.min - b.min;
+        break;
+      case "median":
+        cmp = a.median - b.median;
+        break;
+      case "ops":
+        cmp = a.opsPerSec - b.opsPerSec;
+        break;
+      default:
+        cmp = a.avg - b.avg;
+    }
+    return benchSortAsc ? cmp : -cmp;
+  });
+
+  // Create table rows
+  for (const result of sortedResults) {
+    const isFastest = fastest[result.size] === result.impl;
+    const tr = document.createElement("tr");
+
+    // Implementation name
+    const tdImpl = document.createElement("td");
+    tdImpl.className = `impl-name ${result.isWatFft ? "wat-fft" : "alt"}`;
+    tdImpl.textContent = result.implName;
+    tr.appendChild(tdImpl);
+
+    // Size
+    const tdSize = document.createElement("td");
+    tdSize.textContent = result.size.toLocaleString();
+    tr.appendChild(tdSize);
+
+    // Avg time
+    const tdAvg = document.createElement("td");
+    tdAvg.textContent = result.avg.toFixed(3);
+    if (isFastest) tdAvg.className = "fastest";
+    tr.appendChild(tdAvg);
+
+    // Min time
+    const tdMin = document.createElement("td");
+    tdMin.textContent = result.min.toFixed(3);
+    tr.appendChild(tdMin);
+
+    // Median time
+    const tdMedian = document.createElement("td");
+    tdMedian.textContent = result.median.toFixed(3);
+    tr.appendChild(tdMedian);
+
+    // Ops/sec
+    const tdOps = document.createElement("td");
+    tdOps.textContent = Math.round(result.opsPerSec).toLocaleString();
+    if (isFastest) tdOps.className = "fastest";
+    tr.appendChild(tdOps);
+
+    tbody.appendChild(tr);
+  }
+
+  // Update stats panel
+  const watFftResults = sortedResults.filter((r) => r.isWatFft);
+  const altResults = sortedResults.filter((r) => !r.isWatFft);
+
+  if (watFftResults.length > 0) {
+    const bestWatFft = watFftResults.reduce((best, r) => (r.avg < best.avg ? r : best));
+    elements.stats.fftTime.textContent = bestWatFft.avg.toFixed(3);
+    elements.stats.fftsPerSec.textContent = Math.round(bestWatFft.opsPerSec).toLocaleString();
+  }
+
+  if (altResults.length > 0) {
+    const bestAlt = altResults.reduce((best, r) => (r.avg < best.avg ? r : best));
+    elements.stats.totalTime.textContent = bestAlt.avg.toFixed(3);
+  } else {
+    elements.stats.totalTime.textContent = "-";
+  }
+
+  elements.stats.frames.textContent = sortedResults.length + " tests";
+
+  // Update implementation display
+  elements.implName.textContent = "Benchmark Complete";
+  elements.implName.classList.remove("alt");
+}
+
+// Copy benchmark results to clipboard
+function copyBenchmarkResults() {
+  if (benchmarkResults.length === 0) return;
+
+  // Create markdown table
+  let md = "# FFT Benchmark Results\n\n";
+  md += `Browser: ${navigator.userAgent}\n`;
+  md += `Date: ${new Date().toISOString()}\n\n`;
+  md += "| Implementation | Size | Avg (ms) | Min (ms) | Median (ms) | Ops/sec |\n";
+  md += "|----------------|------|----------|----------|-------------|--------|\n";
+
+  // Sort by size, then by avg
+  const sorted = [...benchmarkResults].sort((a, b) => {
+    if (a.size !== b.size) return a.size - b.size;
+    return a.avg - b.avg;
+  });
+
+  for (const r of sorted) {
+    md += `| ${r.implName} | ${r.size} | ${r.avg.toFixed(3)} | ${r.min.toFixed(3)} | ${r.median.toFixed(3)} | ${Math.round(r.opsPerSec).toLocaleString()} |\n`;
+  }
+
+  navigator.clipboard.writeText(md).then(
+    () => {
+      const btn = elements.benchCopy;
+      const originalText = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => {
+        btn.textContent = originalText;
+      }, 1500);
+    },
+    (err) => {
+      console.error("Failed to copy:", err);
+    },
+  );
+}
+
+// Mode toggle handling (Spectrogram vs Live Analyzer vs Benchmark)
 function setupModeToggle() {
   const modeToggle = document.getElementById("mode-toggle");
   const spectrogramMode = document.getElementById("spectrogram-mode");
   const analyzerModeEl = document.getElementById("analyzer-mode");
+  const benchmarkModeEl = document.getElementById("benchmark-mode");
   const modeOptions = modeToggle.querySelectorAll(".mode-option");
 
   modeOptions.forEach((option) => {
@@ -974,9 +1340,18 @@ function setupModeToggle() {
         stopAnalyzer();
       }
 
+      // Hide all mode panels
+      spectrogramMode.classList.add("hidden");
+      analyzerModeEl.classList.add("hidden");
+      benchmarkModeEl.classList.add("hidden");
+
+      // Show/hide canvas vs benchmark results
+      const showCanvas = newMode !== "benchmark";
+      elements.canvasContainer.style.display = showCanvas ? "" : "none";
+      elements.benchResultsContainer.classList.toggle("hidden", showCanvas);
+
       if (newMode === "analyzer") {
         // Switch to analyzer mode
-        spectrogramMode.classList.add("hidden");
         analyzerModeEl.classList.remove("hidden");
 
         // Clear canvas and show ready state
@@ -994,13 +1369,39 @@ function setupModeToggle() {
         elements.stats.frames.textContent = "-";
         elements.implName.textContent = "Stopped";
         elements.implName.classList.remove("alt");
+      } else if (newMode === "benchmark") {
+        // Switch to benchmark mode
+        benchmarkModeEl.classList.remove("hidden");
+
+        // Hide vertical frequency labels
+        elements.freqLabels.style.display = "none";
+
+        // Show benchmark results or empty state
+        renderBenchmarkResults();
+
+        // Update stats labels for benchmark context
+        document.querySelector("#stats .stat-card:nth-child(1) .stat-label").textContent =
+          "wat-fft (ms)";
+        document.querySelector("#stats .stat-card:nth-child(2) .stat-label").textContent =
+          "Alt (ms)";
+        document.querySelector("#stats .stat-card:nth-child(3) .stat-label").textContent =
+          "Ops/sec";
+        document.querySelector("#stats .stat-card:nth-child(4) .stat-label").textContent = "Tests";
       } else {
         // Switch to spectrogram mode
         spectrogramMode.classList.remove("hidden");
-        analyzerModeEl.classList.add("hidden");
 
         // Show vertical frequency labels
         elements.freqLabels.style.display = "";
+
+        // Restore stats labels
+        document.querySelector("#stats .stat-card:nth-child(1) .stat-label").textContent =
+          "FFT (ms)";
+        document.querySelector("#stats .stat-card:nth-child(2) .stat-label").textContent =
+          "Total (ms)";
+        document.querySelector("#stats .stat-card:nth-child(3) .stat-label").textContent =
+          "FFTs/sec";
+        document.querySelector("#stats .stat-card:nth-child(4) .stat-label").textContent = "Frames";
 
         // Regenerate spectrogram
         updateImplName();
@@ -1120,6 +1521,7 @@ async function init() {
   setupFileInput();
   setupRecordingControls();
   setupModeToggle();
+  setupBenchmark();
   await setupAnalyzer();
   renderSineComponents();
 

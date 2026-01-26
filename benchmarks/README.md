@@ -171,6 +171,30 @@ node --expose-gc benchmarks/fft.bench.js
 # Add gc() calls in benchmark to measure memory
 ```
 
+## Browser-Based Benchmarking
+
+For interactive browser-based benchmarking, use the **Benchmark Mode** in the [playground](../playground/):
+
+```bash
+cd playground
+npm install
+npm run dev
+# Open http://localhost:5173 and select "Benchmark" mode
+```
+
+The playground benchmark offers:
+
+- Multi-select implementation comparison with visual results
+- Configurable iterations (10-1000) and warmup runs (0-50)
+- Results table rendered on canvas with fastest-per-size highlighting
+- One-click markdown export with browser info
+
+This is useful for:
+
+- Testing in different browsers (Chrome, Firefox, Safari)
+- Sharing results with browser fingerprint
+- Quick visual comparison without CLI
+
 ## Historical Results
 
 See [docs/optimization/EXPERIMENT_LOG.md](../docs/optimization/EXPERIMENT_LOG.md) for historical benchmark results from all optimization experiments.
