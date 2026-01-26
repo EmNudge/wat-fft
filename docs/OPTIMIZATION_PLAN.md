@@ -6,10 +6,10 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 **Current Status**: Beats fftw-js at ALL sizes for Real FFT f32, significantly faster than pure JS libraries.
 
-| Target  | Complex FFT | Real FFT (f64)        | Real FFT (f32)                               |
-| ------- | ----------- | --------------------- | -------------------------------------------- |
-| fft.js  | **+40-90%** | N/A                   | N/A                                          |
-| fftw-js | N/A         | **Wins N<=64, N=256** | **Wins all sizes** (+1-47% across N=64-4096) |
+| Target  | Complex FFT (f64) | Complex FFT (f32) | Real FFT (f32)                               |
+| ------- | ----------------- | ----------------- | -------------------------------------------- |
+| fft.js  | **+37-90%**       | **+119-243%**     | N/A                                          |
+| fftw-js | N/A               | N/A               | **Wins all sizes** (+2-55% across N=64-4096) |
 
 ---
 
@@ -20,7 +20,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 19 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 31 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -55,12 +55,23 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 ### Complex FFT vs fft.js (pure JS)
 
+**f64 (double precision):**
+
 | Size   | wat-fft | fft.js | Speedup  |
 | ------ | ------- | ------ | -------- |
-| N=64   | 3.83M   | 2.79M  | **+37%** |
-| N=256  | 973K    | 559K   | **+74%** |
-| N=1024 | 191K    | 113K   | **+69%** |
+| N=64   | 3.76M   | 2.76M  | **+36%** |
+| N=256  | 934K    | 550K   | **+70%** |
+| N=1024 | 193K    | 113K   | **+71%** |
 | N=4096 | 44.4K   | 23.4K  | **+90%** |
+
+**f32 (single precision, fastest):**
+
+| Size   | wat-fft f32 | fft.js | Speedup   |
+| ------ | ----------- | ------ | --------- |
+| N=64   | 6.17M       | 2.76M  | **+124%** |
+| N=256  | 1.59M       | 554K   | **+187%** |
+| N=1024 | 363K        | 108K   | **+236%** |
+| N=4096 | 78.8K       | 23.0K  | **+243%** |
 
 ### Real FFT f32 vs fftw-js
 

@@ -22,7 +22,7 @@ async function loadWasm(name) {
 // Benchmark configuration
 const WARMUP_ITERATIONS = 100;
 const BENCHMARK_DURATION_MS = 2000;
-const SIZES = [64, 256, 1024, 2048, 4096];
+const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
 
 // Generate random f32 complex input
 function generateInputF32(n) {

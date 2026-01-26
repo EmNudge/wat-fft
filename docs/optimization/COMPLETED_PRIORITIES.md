@@ -74,27 +74,32 @@ Created `$rfft_postprocess_simd` using v128 SIMD operations for all post-process
 
 ---
 
-## Priority I: f32 SIMD Dual-Complex - UP TO +105%
+## Priority I: f32 SIMD Dual-Complex - UP TO +243%
 
 **Status**: Implemented for both complex FFT and real FFT
 
 Process 2 f32 complex numbers per v128 register, doubling SIMD throughput.
+Further optimized with dual-group processing for r=1 and r=2 stages (Experiment 31).
 
-**Complex FFT results:**
-| Size | vs Original f32 | vs fft.js |
-|--------|-----------------|-----------|
-| N=64 | +50.6% | +64.1% |
-| N=256 | +74.7% | +110.0% |
-| N=1024 | +92.1% | +142.5% |
-| N=4096 | +104.8% | +164.1% |
+**Complex FFT results vs fft.js:**
+
+| Size   | wat-fft f32 | fft.js | vs fft.js |
+| ------ | ----------- | ------ | --------- |
+| N=64   | 6.17M       | 2.76M  | **+124%** |
+| N=256  | 1.59M       | 554K   | **+187%** |
+| N=1024 | 363K        | 108K   | **+236%** |
+| N=4096 | 78.8K       | 23.0K  | **+243%** |
 
 **Real FFT results vs fftw-js:**
-| Size | vs fftw-js |
-|--------|------------|
-| N=256 | **+21.1%** |
-| N=512 | **+1.2%** |
-| N=1024 | -4.3% |
-| N=4096 | -3.8% |
+
+| Size   | vs fftw-js |
+| ------ | ---------- |
+| N=64   | **+2%**    |
+| N=128  | **+9%**    |
+| N=256  | **+55%**   |
+| N=512  | **+32%**   |
+| N=1024 | **+20%**   |
+| N=4096 | **+19%**   |
 
 ---
 
