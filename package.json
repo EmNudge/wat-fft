@@ -1,14 +1,34 @@
 {
-  "name": "wat-fft",
-  "version": "1.0.0",
-  "description": "FFT implementation in WAT",
+  "name": "@emnudge/wat-fft",
+  "version": "0.0.0",
+  "description": "High-performance FFT in WebAssembly",
+  "keywords": [
+    "audio",
+    "dsp",
+    "fft",
+    "fourier",
+    "rfft",
+    "signal-processing",
+    "transform",
+    "wasm",
+    "webassembly"
+  ],
   "license": "ISC",
-  "author": "",
-  "directories": {
-    "test": "tests"
+  "author": "EmNudge",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/emnudge/wat-fft.git"
   },
+  "files": [
+    "index.js",
+    "dist/*.wasm"
+  ],
   "type": "module",
-  "main": "index.js",
+  "exports": {
+    ".": {
+      "import": "./index.js"
+    }
+  },
   "scripts": {
     "test": "npm run test:swap && npm run test:reverse_bits && npm run test:fft",
     "test:all": "npm run test && npm run test:rfft && npm run test:property && npm run test:boundary && npm run test:correctness && npm run test:output-order",
@@ -51,5 +71,8 @@
     "kissfft-wasm": "^2.0.1",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.41.0"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
