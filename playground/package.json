@@ -10,10 +10,12 @@
     "setup": "mkdir -p public/wasm && cp ../dist/*.wasm public/wasm/"
   },
   "dependencies": {
+    "@echogarden/pffft-wasm": "^0.4.2",
     "fft-js": "^0.0.12",
     "fft.js": "^4.0.4",
     "fftw-js": "^0.1.4",
-    "kissfft-js": "^0.1.8"
+    "kissfft-js": "^0.1.8",
+    "webfft": "^1.0.3"
   },
   "devDependencies": {
     "vite": "^6.0.0"

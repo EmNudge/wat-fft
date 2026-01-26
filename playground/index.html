@@ -1016,6 +1016,22 @@
                 <span class="name">KissFFT</span>
                 <span class="desc">WASM port</span>
               </div>
+              <div class="fft-option alt" data-fft="webfft">
+                <span class="name">WebFFT</span>
+                <span class="desc">meta-lib f32</span>
+              </div>
+              <div class="fft-option alt" data-fft="webfft_real">
+                <span class="name">WebFFT Real</span>
+                <span class="desc">meta-lib f32</span>
+              </div>
+              <div class="fft-option alt" data-fft="pffft">
+                <span class="name">PFFFT</span>
+                <span class="desc">WASM SIMD f32</span>
+              </div>
+              <div class="fft-option alt" data-fft="pffft_real">
+                <span class="name">PFFFT Real</span>
+                <span class="desc">WASM SIMD f32</span>
+              </div>
             </div>
 
             <h2>Spectrogram</h2>
@@ -1209,6 +1225,22 @@
               <input type="checkbox" data-impl="kissfft" />
               <span>KissFFT (WASM)</span>
             </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="webfft" />
+              <span>WebFFT (meta-lib f32)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="webfft_real" />
+              <span>WebFFT Real (f32)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="pffft" checked />
+              <span>PFFFT (WASM SIMD f32)</span>
+            </label>
+            <label class="bench-checkbox alt">
+              <input type="checkbox" data-impl="pffft_real" />
+              <span>PFFFT Real (f32)</span>
+            </label>
           </div>
 
           <h2>FFT Sizes</h2>
@@ -1306,6 +1338,14 @@
             <div class="fft-option alt" data-fft="fftw_real">
               <span class="name">FFTW Real</span>
               <span class="desc">WASM real</span>
+            </div>
+            <div class="fft-option alt" data-fft="webfft_real">
+              <span class="name">WebFFT Real</span>
+              <span class="desc">meta-lib f32</span>
+            </div>
+            <div class="fft-option alt" data-fft="pffft_real">
+              <span class="name">PFFFT Real</span>
+              <span class="desc">WASM SIMD f32</span>
             </div>
           </div>
 

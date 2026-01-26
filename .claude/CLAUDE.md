@@ -50,6 +50,15 @@ For optimization work, read docs in this order:
 
 If changes affect the README (new features, APIs, build steps), update it accordingly.
 
+## README Performance Tables and Graphs
+
+When updating performance comparisons in the README:
+
+- **Tables**: Only include the best competitor (the one closest to or beating us)
+- **Graphs**: Include all competitors for full context
+- **Remove from tables**: If we beat a competitor, remove them from the table (but keep in graph)
+- Focus tables on the most meaningful comparison; graphs tell the full story
+
 ## WebAssembly Tooling
 
 Prefer `wasm-tools` over WABT:

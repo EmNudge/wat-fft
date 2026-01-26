@@ -3,12 +3,16 @@
  *
  * Loads and manages different FFT implementations:
  * - wat-fft WASM modules
- * - Competitor JS/WASM libraries (fft.js, kissfft-js)
+ * - Competitor JS/WASM libraries (fft.js, kissfft-js, webfft, pffft-wasm)
  */
 
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
+import webfft from "webfft";
+import PFFFT from "@echogarden/pffft-wasm";
+// Import the WASM file URL for pffft - use direct path to node_modules
+import pffftWasmUrl from "../node_modules/@echogarden/pffft-wasm/dist/non-simd/pffft.wasm?url";
 
 // fftw-js needs to be loaded dynamically due to WASM initialization
 let fftwModule = null;
@@ -20,6 +24,23 @@ async function getFFTW() {
     fftwModule = fftw.default || fftw;
   }
   return fftwModule;
+}
+
+// pffft-wasm module (lazy loaded)
+let pffftModule = null;
+async function getPFFFT() {
+  if (!pffftModule) {
+    // Pass locateFile to tell Emscripten where to find the WASM file
+    pffftModule = await PFFFT({
+      locateFile: (path) => {
+        if (path.endsWith(".wasm")) {
+          return pffftWasmUrl;
+        }
+        return path;
+      },
+    });
+  }
+  return pffftModule;
 }
 
 // wat-fft WASM modules
@@ -103,6 +124,34 @@ const JS_MODULES = {
     isWatFft: false,
     library: "kissfft",
   },
+  webfft: {
+    name: "WebFFT",
+    desc: "meta-lib f32",
+    isReal: false,
+    isWatFft: false,
+    library: "webfft",
+  },
+  webfft_real: {
+    name: "WebFFT Real",
+    desc: "meta-lib f32",
+    isReal: true,
+    isWatFft: false,
+    library: "webfft",
+  },
+  pffft: {
+    name: "PFFFT",
+    desc: "WASM SIMD f32",
+    isReal: false,
+    isWatFft: false,
+    library: "pffft",
+  },
+  pffft_real: {
+    name: "PFFFT Real",
+    desc: "WASM SIMD f32",
+    isReal: true,
+    isWatFft: false,
+    library: "pffft",
+  },
 };
 
 const ALL_MODULES = { ...WASM_MODULES, ...JS_MODULES };
@@ -151,6 +200,11 @@ export async function loadFFTModule(moduleId) {
     // FFTW needs async initialization
     if (config.library === "fftw") {
       module._fftw = await getFFTW();
+    }
+
+    // PFFFT needs async initialization
+    if (config.library === "pffft") {
+      module._pffft = await getPFFFT();
     }
   }
 
@@ -389,6 +443,176 @@ function createJSFFTContext(module, size) {
         this._fft.dispose();
       },
     };
+  } else if (library === "webfft") {
+    const fftInstance = new webfft(size);
+    fftInstance.setSubLibrary("kissWasm");
+
+    if (config.isReal) {
+      // Real FFT
+      const realInput = new Float32Array(size);
+
+      return {
+        module,
+        size,
+        inputSize: size,
+        outputSize: size, // webfft fftr returns size elements
+        ArrayType: Float32Array,
+        isReal: true,
+        _fft: fftInstance,
+        _realInput: realInput,
+        _output: null,
+
+        getInputBuffer() {
+          return this._realInput;
+        },
+
+        getOutputBuffer() {
+          return this._output || new Float32Array(size);
+        },
+
+        run() {
+          this._output = this._fft.fftr(this._realInput);
+        },
+
+        dispose() {
+          this._fft.dispose();
+        },
+      };
+    } else {
+      // Complex FFT
+      const complexInput = new Float32Array(size * 2);
+
+      return {
+        module,
+        size,
+        inputSize: size * 2,
+        outputSize: size * 2,
+        ArrayType: Float32Array,
+        isReal: false,
+        _fft: fftInstance,
+        _complexInput: complexInput,
+        _output: null,
+
+        getInputBuffer() {
+          return this._complexInput;
+        },
+
+        getOutputBuffer() {
+          return this._output || new Float32Array(size * 2);
+        },
+
+        run() {
+          this._output = this._fft.fft(this._complexInput);
+        },
+
+        dispose() {
+          this._fft.dispose();
+        },
+      };
+    }
+  } else if (library === "pffft") {
+    const pffft = module._pffft;
+    const PFFFT_COMPLEX = 0;
+    const PFFFT_REAL = 1;
+    const PFFFT_FORWARD = 0;
+
+    if (config.isReal) {
+      // Real FFT - requires size >= 32
+      if (size < 32) {
+        throw new Error("PFFFT Real FFT requires size >= 32");
+      }
+
+      const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
+      const inputPtr = pffft._pffft_aligned_malloc(size * 4);
+      const outputPtr = pffft._pffft_aligned_malloc(size * 4);
+      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
+      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size);
+
+      return {
+        module,
+        size,
+        inputSize: size,
+        outputSize: size,
+        ArrayType: Float32Array,
+        isReal: true,
+        _setup: setup,
+        _inputPtr: inputPtr,
+        _outputPtr: outputPtr,
+        _inputView: inputView,
+        _outputView: outputView,
+        _pffft: pffft,
+
+        getInputBuffer() {
+          return this._inputView;
+        },
+
+        getOutputBuffer() {
+          return this._outputView;
+        },
+
+        run() {
+          this._pffft._pffft_transform_ordered(
+            this._setup,
+            this._inputPtr,
+            this._outputPtr,
+            0,
+            PFFFT_FORWARD,
+          );
+        },
+
+        dispose() {
+          this._pffft._pffft_aligned_free(this._inputPtr);
+          this._pffft._pffft_aligned_free(this._outputPtr);
+          this._pffft._pffft_destroy_setup(this._setup);
+        },
+      };
+    } else {
+      // Complex FFT
+      const setup = pffft._pffft_new_setup(size, PFFFT_COMPLEX);
+      const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+      const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
+      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size * 2);
+
+      return {
+        module,
+        size,
+        inputSize: size * 2,
+        outputSize: size * 2,
+        ArrayType: Float32Array,
+        isReal: false,
+        _setup: setup,
+        _inputPtr: inputPtr,
+        _outputPtr: outputPtr,
+        _inputView: inputView,
+        _outputView: outputView,
+        _pffft: pffft,
+
+        getInputBuffer() {
+          return this._inputView;
+        },
+
+        getOutputBuffer() {
+          return this._outputView;
+        },
+
+        run() {
+          this._pffft._pffft_transform_ordered(
+            this._setup,
+            this._inputPtr,
+            this._outputPtr,
+            0,
+            PFFFT_FORWARD,
+          );
+        },
+
+        dispose() {
+          this._pffft._pffft_aligned_free(this._inputPtr);
+          this._pffft._pffft_aligned_free(this._outputPtr);
+          this._pffft._pffft_destroy_setup(this._setup);
+        },
+      };
+    }
   }
 
   throw new Error(`Unknown library: ${library}`);
