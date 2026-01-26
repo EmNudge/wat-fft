@@ -20,6 +20,9 @@
   ;; SIMD sign mask for complex multiply (from shared.wat)
   (global $SIGN_MASK v128 (v128.const i64x2 0x8000000000000000 0x0000000000000000))
 
+  ;; Conjugate mask for f64 complex: flip sign of imaginary part
+  (global $CONJ_MASK v128 (v128.const i64x2 0x0000000000000000 0x8000000000000000))
+
   ;; ============================================================================
   ;; Utility: Check if N is a power of 4
   ;; ============================================================================
@@ -574,5 +577,103 @@
       (then (call $fft_radix4 (local.get $n)))
       (else (call $fft_stockham (local.get $n)))
     )
+  )
+
+
+  ;; ============================================================================
+  ;; Conjugate Buffer (flip sign of all imaginary parts)
+  ;; ============================================================================
+
+  (func $conjugate_buffer (param $n i32)
+    (local $i i32)
+    (local $bytes i32)
+
+    (local.set $bytes (i32.shl (local.get $n) (i32.const 4)))  ;; n * 16 bytes (f64 complex)
+    (local.set $i (i32.const 0))
+
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
+        (v128.store (local.get $i)
+          (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
+        (br $loop)
+      )
+    )
+  )
+
+
+  ;; ============================================================================
+  ;; Scale and Conjugate Buffer (multiply by 1/N and conjugate)
+  ;; ============================================================================
+
+  (func $scale_and_conjugate (param $n i32)
+    (local $i i32)
+    (local $bytes i32)
+    (local $inv_n v128)
+    (local $v v128)
+
+    (local.set $bytes (i32.shl (local.get $n) (i32.const 4)))  ;; n * 16 bytes
+    (local.set $inv_n (f64x2.splat (f64.div (f64.const 1.0) (f64.convert_i32_u (local.get $n)))))
+    (local.set $i (i32.const 0))
+
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
+        (local.set $v (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK)))
+        (v128.store (local.get $i) (f64x2.mul (local.get $v) (local.get $inv_n)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
+        (br $loop)
+      )
+    )
+  )
+
+
+  ;; ============================================================================
+  ;; N=4 Inverse FFT Kernel
+  ;; ============================================================================
+
+  (func $ifft_4
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    (local $inv_n v128)
+
+    (local.set $inv_n (v128.const f64x2 0.25 0.25))
+
+    (local.set $x0 (v128.load (i32.const 0)))
+    (local.set $x1 (v128.load (i32.const 16)))
+    (local.set $x2 (v128.load (i32.const 32)))
+    (local.set $x3 (v128.load (i32.const 48)))
+
+    (local.set $t0 (f64x2.add (local.get $x0) (local.get $x2)))
+    (local.set $t1 (f64x2.sub (local.get $x0) (local.get $x2)))
+    (local.set $t2 (f64x2.add (local.get $x1) (local.get $x3)))
+    (local.set $t3 (f64x2.sub (local.get $x1) (local.get $x3)))
+
+    ;; Multiply t3 by +j (conjugate of -j): [a,b] -> [-b, a]
+    (local.set $t3
+      (f64x2.mul
+        (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7 (local.get $t3) (local.get $t3))
+        (v128.const f64x2 -1.0 1.0)))
+
+    (v128.store (i32.const 0) (f64x2.mul (f64x2.add (local.get $t0) (local.get $t2)) (local.get $inv_n)))
+    (v128.store (i32.const 16) (f64x2.mul (f64x2.add (local.get $t1) (local.get $t3)) (local.get $inv_n)))
+    (v128.store (i32.const 32) (f64x2.mul (f64x2.sub (local.get $t0) (local.get $t2)) (local.get $inv_n)))
+    (v128.store (i32.const 48) (f64x2.mul (f64x2.sub (local.get $t1) (local.get $t3)) (local.get $inv_n)))
+  )
+
+
+  ;; ============================================================================
+  ;; Main IFFT Entry Point
+  ;; ============================================================================
+  ;; IFFT(X) = (1/N) * conj(FFT(conj(X)))
+
+  (func (export "ifft") (param $n i32)
+    (if (i32.eq (local.get $n) (i32.const 4))
+      (then (call $ifft_4) (return)))
+
+    (call $conjugate_buffer (local.get $n))
+    (call $fft (local.get $n))
+    (call $scale_and_conjugate (local.get $n))
   )
 )

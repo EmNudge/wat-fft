@@ -35,6 +35,7 @@ Detailed record of all optimization experiments.
 | 26  | Performance Analysis Final  | COMPLETE         | Beats fftw-js at all sizes, N=64 within noise |
 | 27  | Dead Code Removal           | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64    |
 | 28  | Dead Parameterized Codelets | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at  |
+| 29  | IFFT Implementation         | SUCCESS          | Full inverse FFT for all modules, 27/27 tests |
 
 ---
 
@@ -537,3 +538,55 @@ These were intended for building a hierarchical N=64 codelet but were never inte
 **Lesson**: Regular dead code audits are valuable for maintenance. Use `grep` to verify function references before removal.
 
 **Files modified**: `modules/fft_real_f32_dual.wat`
+
+---
+
+## Experiment 29: IFFT Implementation (2026-01-25)
+
+**Goal**: Add inverse FFT functionality to all modules to enable full roundtrip signal processing.
+
+**Approach**: IFFT(X) = (1/N) \* conj(FFT(conj(X)))
+
+This uses the mathematical identity that the inverse DFT is equivalent to conjugating the input, applying the forward FFT, then conjugating and scaling the output.
+
+**Implementation**:
+
+1. **f64 Complex FFT** (`fft_combined.wat`):
+   - Added `$CONJ_MASK` global for sign-flip of imaginary parts
+   - Added `$conjugate_buffer`, `$scale_and_conjugate` helpers
+   - Added specialized `$ifft_4` kernel using +j instead of -j twiddles
+   - Exported `ifft(n)` function
+
+2. **f32 Complex FFT** (`fft_stockham_f32_dual.wat`):
+   - Same approach with f32x4 SIMD for dual-complex processing
+   - Conjugate mask: `[0, 0x80000000, 0, 0x80000000]` (flip sign of both imag parts)
+
+3. **f32 Real FFT** (`fft_real_f32_dual.wat`):
+   - Added `$irfft_preprocess` to invert the RFFT post-processing step
+   - Key formula: Z'[k] = 0.5 _ (X[k] + conj(X[n2-k]) + conj(W_rot) _ (X[k] - conj(X[n2-k])))
+   - Special handling for DC (k=0) and middle element (k=n2/2)
+   - Exported `irfft(n)` function
+
+**Challenges Solved**:
+
+1. **Middle element bug**: Forward RFFT at k=n2/2 gives X[k] = conj(Z'[k]) because W_rot = -1. The inverse is Z'[k] = conj(X[k]), not Z'[k] = 2\*X[k] as initially implemented.
+
+2. **DC element packing**: The DC and Nyquist components are packed as (DC.re, Nyquist.re). Unpacking requires: Z[0] = (X[0].re + X[0].im)/2 + i\*(X[0].re - X[0].im)/2
+
+**Result**: SUCCESS - All 27 tests pass
+
+| Test Suite                    | Passed | Max Error (typical) |
+| ----------------------------- | ------ | ------------------- |
+| f64 Complex FFT->IFFT         | 9/9    | ~7e-11              |
+| f32 Complex FFT->IFFT         | 9/9    | ~1e-6               |
+| f32 Real RFFT->IRFFT          | 8/8    | ~1e-6               |
+| Mathematical correctness test | 1/1    | 3e-11               |
+
+**Performance**: Forward FFT performance unchanged. IFFT has same complexity as forward FFT plus O(N) conjugate operations.
+
+**Files modified**:
+
+- `modules/fft_combined.wat` - Added IFFT for f64 complex
+- `modules/fft_stockham_f32_dual.wat` - Added IFFT for f32 complex
+- `modules/fft_real_f32_dual.wat` - Added IRFFT for f32 real
+- `tests/ifft.test.js` - New comprehensive test suite

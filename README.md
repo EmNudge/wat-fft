@@ -131,18 +131,22 @@ fft.fft(N);
 
 // Results are in-place in data[]
 console.log("DC component:", data[0], data[1]);
+
+// Compute inverse FFT (roundtrip back to original)
+fft.ifft(N);
+console.log("Recovered signal:", data[0], data[1]);
 ```
 
 ## Implementations
 
 **Recommended modules:**
 
-| Module                       | Use Case               | Precision |
-| ---------------------------- | ---------------------- | --------- |
-| `fft_combined.wasm`          | Complex FFT (any size) | f64       |
-| `fft_real_combined.wasm`     | Real FFT (any size)    | f64       |
-| `fft_stockham_f32_dual.wasm` | Complex FFT (fastest)  | f32       |
-| `fft_real_f32_dual.wasm`     | Real FFT (fastest)     | f32       |
+| Module                       | Use Case               | Precision | Inverse |
+| ---------------------------- | ---------------------- | --------- | ------- |
+| `fft_combined.wasm`          | Complex FFT (any size) | f64       | `ifft`  |
+| `fft_real_combined.wasm`     | Real FFT (any size)    | f64       | -       |
+| `fft_stockham_f32_dual.wasm` | Complex FFT (fastest)  | f32       | `ifft`  |
+| `fft_real_f32_dual.wasm`     | Real FFT (fastest)     | f32       | `irfft` |
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 

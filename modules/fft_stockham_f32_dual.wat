@@ -25,6 +25,9 @@
   ;; Sign mask for dual-complex multiply: [-1, 1, -1, 1]
   (global $SIGN_MASK v128 (v128.const f32x4 -1.0 1.0 -1.0 1.0))
 
+  ;; Conjugate mask for f32 complex: flip sign of imaginary parts [0, -0, 0, -0]
+  (global $CONJ_MASK v128 (v128.const i32x4 0 0x80000000 0 0x80000000))
+
 
   ;; ============================================================================
   ;; Inline Trig Functions (Taylor Series) - Same as fft_stockham_f32.wat
@@ -425,6 +428,102 @@
 
 
   ;; ============================================================================
+  ;; Conjugate Buffer (flip sign of all imaginary parts)
+  ;; ============================================================================
+  ;; Used for IFFT: IFFT(X) = (1/N) * conj(FFT(conj(X)))
+
+  (func $conjugate_buffer (param $n i32)
+    (local $i i32)
+    (local $bytes i32)
+
+    (local.set $bytes (i32.shl (local.get $n) (i32.const 3)))  ;; n * 8 bytes
+    (local.set $i (i32.const 0))
+
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
+        (v128.store (local.get $i)
+          (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
+        (br $loop)
+      )
+    )
+  )
+
+
+  ;; ============================================================================
+  ;; Scale and Conjugate Buffer (multiply by 1/N and conjugate)
+  ;; ============================================================================
+  ;; Fused operation for IFFT: conj(FFT(conj(X))) / N
+  ;; Both conjugate and scale in one pass for cache efficiency.
+
+  (func $scale_and_conjugate (param $n i32)
+    (local $i i32)
+    (local $bytes i32)
+    (local $inv_n v128)
+    (local $v v128)
+
+    (local.set $bytes (i32.shl (local.get $n) (i32.const 3)))  ;; n * 8 bytes
+    (local.set $inv_n (f32x4.splat (f32.div (f32.const 1.0) (f32.convert_i32_u (local.get $n)))))
+    (local.set $i (i32.const 0))
+
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
+        ;; Load, conjugate (XOR sign bits), scale (multiply by 1/N)
+        (local.set $v (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK)))
+        (v128.store (local.get $i) (f32x4.mul (local.get $v) (local.get $inv_n)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
+        (br $loop)
+      )
+    )
+  )
+
+
+  ;; ============================================================================
+  ;; N=4 Inverse FFT Kernel
+  ;; ============================================================================
+  ;; IFFT-4: Same structure as FFT-4 but with +j instead of -j, then scale.
+  ;; (a+bi)*(+j) = -b + ai => [a,b] -> [-b, a]
+
+  (func $ifft_4
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    (local $inv_n v128)
+
+    (local.set $inv_n (v128.const f32x4 0.25 0.25 0.25 0.25))
+
+    ;; Load 4 complex values (8 bytes each)
+    (local.set $x0 (v128.load64_zero (i32.const 0)))
+    (local.set $x1 (v128.load64_zero (i32.const 8)))
+    (local.set $x2 (v128.load64_zero (i32.const 16)))
+    (local.set $x3 (v128.load64_zero (i32.const 24)))
+
+    ;; Stage 1: butterflies (0,2) and (1,3)
+    (local.set $t0 (f32x4.add (local.get $x0) (local.get $x2)))
+    (local.set $t2 (f32x4.sub (local.get $x0) (local.get $x2)))
+    (local.set $t1 (f32x4.add (local.get $x1) (local.get $x3)))
+    (local.set $t3 (f32x4.sub (local.get $x1) (local.get $x3)))
+
+    ;; Multiply t3 by +j (conjugate of -j): (a+bi)*(+j) = -b + ai => [a,b] -> [-b, a]
+    (local.set $t3
+      (f32x4.mul
+        (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11 (local.get $t3) (local.get $t3))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0)))
+
+    ;; Stage 2: final butterflies with scaling
+    (v128.store64_lane 0 (i32.const 0)
+      (f32x4.mul (f32x4.add (local.get $t0) (local.get $t1)) (local.get $inv_n)))
+    (v128.store64_lane 0 (i32.const 8)
+      (f32x4.mul (f32x4.add (local.get $t2) (local.get $t3)) (local.get $inv_n)))
+    (v128.store64_lane 0 (i32.const 16)
+      (f32x4.mul (f32x4.sub (local.get $t0) (local.get $t1)) (local.get $inv_n)))
+    (v128.store64_lane 0 (i32.const 24)
+      (f32x4.mul (f32x4.sub (local.get $t2) (local.get $t3)) (local.get $inv_n)))
+  )
+
+
+  ;; ============================================================================
   ;; Main FFT Entry Point
   ;; ============================================================================
 
@@ -434,5 +533,31 @@
     ;; For now, use general kernel for all sizes > 4
     ;; Specialized codelets for N=8,16 can be added after verifying correctness
     (call $fft_general (local.get $n))
+  )
+
+
+  ;; ============================================================================
+  ;; Main IFFT Entry Point
+  ;; ============================================================================
+  ;; IFFT(X) = (1/N) * conj(FFT(conj(X)))
+  ;;
+  ;; This is mathematically equivalent to running FFT with conjugate twiddles,
+  ;; but avoids storing separate twiddle tables by using the identity above.
+  ;;
+  ;; For N=4, we use a specialized kernel with fused scaling.
+  ;; For larger N:
+  ;;   1. Conjugate input buffer (XOR sign bits of imaginary parts)
+  ;;   2. Run forward FFT
+  ;;   3. Conjugate output and scale by 1/N (fused for cache efficiency)
+
+  (func (export "ifft") (param $n i32)
+    ;; N=4: use specialized kernel with fused scaling
+    (if (i32.eq (local.get $n) (i32.const 4))
+      (then (call $ifft_4) (return)))
+
+    ;; General case: conj -> FFT -> conj+scale
+    (call $conjugate_buffer (local.get $n))
+    (call $fft_general (local.get $n))
+    (call $scale_and_conjugate (local.get $n))
   )
 )
