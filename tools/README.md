@@ -11,6 +11,7 @@ Tools for debugging Stockham and other FFT implementations.
 | `wasm_compare.js`          | Compare WASM vs JS vs DFT       | `npm run debug:stockham -- multi`  |
 | `butterfly_tester.js`      | Test butterfly math             | `npm run test:butterfly`           |
 | `permutation_validator.js` | Validate data flow              | `npm run debug:perm -- 16`         |
+| `lint-wasm-dead-code.js`   | Find dead code in WASM          | `npm run lint:wasm`                |
 
 ## Usage
 
@@ -48,6 +49,21 @@ npm run debug:perm -- 16 table      # Input->output contribution
 npm run debug:perm -- 16 bitrev     # Compare to bit-reversal
 ```
 
+### WASM Dead Code Linter
+
+Uses [Twiggy](https://rustwasm.github.io/twiggy/) to detect unreferenced code in WASM binaries.
+
+```bash
+npm run lint:wasm              # Basic check (warnings for secondary modules)
+npm run lint:wasm -- --verbose # Show all modules and dead functions
+npm run lint:wasm -- --strict  # Fail on any dead code
+npm run lint:wasm -- --fix     # Show fix instructions
+```
+
+**Prerequisites**: Install Twiggy with `cargo install twiggy`
+
+Primary modules (`fft_real_f32_dual.wasm`, `fft_combined.wasm`) must have zero dead code. Secondary modules show warnings only.
+
 ## Typical Debug Workflow
 
 1. **Identify failing size**: `npm run debug:stockham -- multi`
@@ -55,3 +71,10 @@ npm run debug:perm -- 16 bitrev     # Compare to bit-reversal
 3. **Trace data flow**: `npm run debug:ref -- 32 -v`
 4. **Compare outputs**: `npm run debug:stockham -- compare 32 impulse`
 5. **Test butterfly math**: `npm run test:butterfly`
+
+## Dead Code Removal Workflow
+
+1. **Run lint**: `npm run lint:wasm -- --verbose --fix`
+2. **Find the function**: `grep -n 'func $function_name' modules/*.wat`
+3. **Verify not called**: `grep 'call $function_name' modules/*.wat`
+4. **Remove and test**: Delete the function, `npm run build && npm test`

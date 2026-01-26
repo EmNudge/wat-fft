@@ -69,11 +69,19 @@ jobs:
           sudo mv wac /usr/local/bin/
           wac --version
 
+      - name: Install Twiggy (WASM code size profiler)
+        run: |
+          cargo install twiggy
+          twiggy --version
+
       - name: Install dependencies
         run: npm ci
 
       - name: Build WASM modules
         run: npm run build
+
+      - name: Lint WASM for dead code
+        run: npm run lint:wasm -- --strict
 
       - name: Run unit tests
         run: npm test

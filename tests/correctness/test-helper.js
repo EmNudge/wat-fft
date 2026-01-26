@@ -39,7 +39,7 @@ export async function loadWasmModule(name) {
 export const IMPLEMENTATIONS = {
   fft_combined: {
     wasmName: "fft_combined",
-    fftFunc: "fft_stockham",
+    fftFunc: "fft",
     precompute: "precompute_twiddles",
     precision: "f64",
   },

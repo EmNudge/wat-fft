@@ -60,6 +60,8 @@
     "bench:f32": "node benchmarks/fft_f32_dual.bench.js",
     "bench:rfft32": "node benchmarks/rfft_f32_dual.bench.js",
     "lint": "oxlint .",
+    "lint:all": "npm run lint && npm run lint:wasm",
+    "lint:wasm": "node tools/lint-wasm-dead-code.js",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check ."
   },

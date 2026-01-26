@@ -72,7 +72,7 @@ describe("Boundary Conditions", async () => {
 
       // This may or may not work depending on implementation
       try {
-        wasm.fft_stockham(1);
+        wasm.fft(1);
         const result = readFromMemory(wasm.memory, 1);
         // For N=1, FFT(x) = x
         assert.ok(
@@ -99,7 +99,7 @@ describe("Boundary Conditions", async () => {
       }
 
       try {
-        wasm.fft_stockham(2);
+        wasm.fft(2);
         const result = readFromMemory(wasm.memory, 2);
 
         // FFT of [1, 2] with imag=0:
@@ -142,7 +142,7 @@ describe("Boundary Conditions", async () => {
 
       // Document the behavior - it may throw, produce garbage, or silently fail
       try {
-        wasm.fft_stockham(3);
+        wasm.fft(3);
         assert.ok(true, "N=3 did not throw (result undefined for non-power-of-2)");
       } catch (e) {
         assert.ok(true, `N=3 threw exception (expected): ${e.message}`);
@@ -159,7 +159,7 @@ describe("Boundary Conditions", async () => {
       }
 
       try {
-        wasm.fft_stockham(5);
+        wasm.fft(5);
         assert.ok(true, "N=5 did not throw (result undefined for non-power-of-2)");
       } catch (e) {
         assert.ok(true, `N=5 threw exception (expected): ${e.message}`);
@@ -176,7 +176,7 @@ describe("Boundary Conditions", async () => {
       }
 
       try {
-        wasm.fft_stockham(7);
+        wasm.fft(7);
         assert.ok(true, "N=7 did not throw (result undefined for non-power-of-2)");
       } catch (e) {
         assert.ok(true, `N=7 threw exception (expected): ${e.message}`);
@@ -195,7 +195,7 @@ describe("Boundary Conditions", async () => {
         wasm.precompute_twiddles(4);
       }
 
-      wasm.fft_stockham(4);
+      wasm.fft(4);
       const result = readFromMemory(wasm.memory, 4);
 
       // Verify no NaN or Inf in output
@@ -217,7 +217,7 @@ describe("Boundary Conditions", async () => {
         wasm.precompute_twiddles(4);
       }
 
-      wasm.fft_stockham(4);
+      wasm.fft(4);
       const result = readFromMemory(wasm.memory, 4);
 
       // Expected: DC = 4*large, others = 0
@@ -238,7 +238,7 @@ describe("Boundary Conditions", async () => {
         wasm.precompute_twiddles(4);
       }
 
-      wasm.fft_stockham(4);
+      wasm.fft(4);
       const result = readFromMemory(wasm.memory, 4);
 
       // FFT of zeros should be zeros
@@ -263,7 +263,7 @@ describe("Boundary Conditions", async () => {
         wasm.precompute_twiddles(4);
       }
 
-      wasm.fft_stockham(4);
+      wasm.fft(4);
       const result = readFromMemory(wasm.memory, 4);
 
       // Alternating [1,-1,1,-1] -> DC=0, Nyquist=4
@@ -284,7 +284,7 @@ describe("Boundary Conditions", async () => {
           wasm.precompute_twiddles(8);
         }
 
-        wasm.fft_stockham(8);
+        wasm.fft(8);
         const result = readFromMemory(wasm.memory, 8);
 
         // Impulse response: all bins should be 1
@@ -314,7 +314,7 @@ describe("Boundary Conditions", async () => {
           wasm.precompute_twiddles(n);
         }
 
-        wasm.fft_stockham(n);
+        wasm.fft(n);
         const result = readFromMemory(wasm.memory, n);
 
         // Constant input: DC = N, others = 0
@@ -354,7 +354,7 @@ describe("Memory Layout Tests", async () => {
 
     writeToMemory(wasm.memory, real, imag);
     wasm.precompute_twiddles(N);
-    wasm.fft_stockham(N);
+    wasm.fft(N);
 
     const result = readFromMemory(wasm.memory, N);
 

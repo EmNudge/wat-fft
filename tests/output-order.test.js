@@ -134,7 +134,7 @@ describe("Output Order Verification", async () => {
       }
 
       wasm.precompute_twiddles(n);
-      wasm.fft_stockham(n);
+      wasm.fft(n);
 
       const result = new Float64Array(wasm.memory.buffer, 0, n * 2);
       const outReal = new Float64Array(n);
