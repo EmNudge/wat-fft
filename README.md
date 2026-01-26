@@ -8,15 +8,15 @@ A high-performance FFT implementation in WebAssembly Text format that **signific
 
 Benchmarked against [fft.js](https://github.com/indutny/fft.js) (fastest pure-JS FFT):
 
-| Size   | wat-fft (f64)       | fft.js          | Speedup  |
-| ------ | ------------------- | --------------- | -------- |
-| N=64   | **3,830,000 ops/s** | 2,794,000 ops/s | **1.4x** |
-| N=128  | **1,586,000 ops/s** | 1,105,000 ops/s | **1.4x** |
-| N=256  | **973,000 ops/s**   | 559,000 ops/s   | **1.7x** |
-| N=512  | **344,000 ops/s**   | 223,000 ops/s   | **1.5x** |
-| N=1024 | **191,000 ops/s**   | 113,000 ops/s   | **1.7x** |
-| N=2048 | **74,500 ops/s**    | 47,200 ops/s    | **1.6x** |
-| N=4096 | **44,400 ops/s**    | 23,400 ops/s    | **1.9x** |
+| Size   | wat-fft (f64)       | fft.js          | vs fft.js |
+| ------ | ------------------- | --------------- | --------- |
+| N=64   | **3,830,000 ops/s** | 2,794,000 ops/s | **+37%**  |
+| N=128  | **1,586,000 ops/s** | 1,105,000 ops/s | **+44%**  |
+| N=256  | **973,000 ops/s**   | 559,000 ops/s   | **+74%**  |
+| N=512  | **344,000 ops/s**   | 223,000 ops/s   | **+54%**  |
+| N=1024 | **191,000 ops/s**   | 113,000 ops/s   | **+69%**  |
+| N=2048 | **74,500 ops/s**    | 47,200 ops/s    | **+58%**  |
+| N=4096 | **44,400 ops/s**    | 23,400 ops/s    | **+90%**  |
 
 ```mermaid
 ---
@@ -40,21 +40,21 @@ xychart-beta
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**Choose f64** (`fft_combined.wasm`) for double precision - **1.4-1.9x faster** than fft.js at all sizes. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **2.6x faster** than fft.js.
+**Choose f64** (`fft_combined.wasm`) for double precision - **+37% to +90% faster** than fft.js at all sizes. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **2.6x faster** than fft.js.
 
 ### Real FFT
 
 Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
 
-| Size   | wat-fft (f32)       | fftw-js (f32)   | Comparison |
+| Size   | wat-fft (f32)       | fftw-js (f32)   | vs fftw-js |
 | ------ | ------------------- | --------------- | ---------- |
-| N=64   | **6,700,000 ops/s** | 6,620,000 ops/s | **+1%**    |
-| N=128  | **4,290,000 ops/s** | 4,100,000 ops/s | **+5%**    |
-| N=256  | **2,170,000 ops/s** | 1,430,000 ops/s | **+51%**   |
-| N=512  | **1,130,000 ops/s** | 870,000 ops/s   | **+31%**   |
-| N=1024 | **525,000 ops/s**   | 444,000 ops/s   | **+18%**   |
-| N=2048 | **264,000 ops/s**   | 225,000 ops/s   | **+18%**   |
-| N=4096 | **116,000 ops/s**   | 105,000 ops/s   | **+11%**   |
+| N=64   | **6,800,000 ops/s** | 6,500,000 ops/s | **+5%**    |
+| N=128  | **4,400,000 ops/s** | 4,200,000 ops/s | **+5%**    |
+| N=256  | **2,200,000 ops/s** | 1,480,000 ops/s | **+48%**   |
+| N=512  | **1,150,000 ops/s** | 900,000 ops/s   | **+27%**   |
+| N=1024 | **520,000 ops/s**   | 465,000 ops/s   | **+12%**   |
+| N=2048 | **267,000 ops/s**   | 228,000 ops/s   | **+17%**   |
+| N=4096 | **121,000 ops/s**   | 106,000 ops/s   | **+14%**   |
 
 ```mermaid
 ---
@@ -71,14 +71,14 @@ xychart-beta
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
     line [4.80, 2.99, 1.28, 0.76, 0.27, 0.16, 0.062]
-    line [6.70, 4.29, 2.17, 1.13, 0.525, 0.264, 0.116]
-    line [6.62, 4.10, 1.43, 0.87, 0.444, 0.225, 0.105]
+    line [6.80, 4.40, 2.20, 1.15, 0.52, 0.267, 0.121]
+    line [6.50, 4.20, 1.48, 0.90, 0.465, 0.228, 0.106]
     line [2.93, 1.74, 0.75, 0.42, 0.17, 0.094, 0.039]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats fftw-js at all sizes** (+1% to +51%). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats fftw-js at all sizes** (+5% to +48%). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 

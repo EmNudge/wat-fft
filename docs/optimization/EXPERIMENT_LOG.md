@@ -33,6 +33,7 @@ Detailed record of all optimization experiments.
 | 24  | Derived Conjugate Twiddles  | INCONCLUSIVE     | XOR derivation vs v128.const, within variance |
 | 25  | Unrolled RFFT-128 Post-Proc | SUCCESS +2-5pp   | Inline twiddles, N=128 now consistently +2-6% |
 | 26  | Performance Analysis Final  | COMPLETE         | Beats fftw-js at all sizes, N=64 within noise |
+| 27  | Dead Code Removal           | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64    |
 
 ---
 
@@ -458,3 +459,38 @@ The results show slight improvement at N=64 but high variance (ranging from -3.2
 **Conclusion**: **Optimization is complete**. wat-fft f32 RFFT now matches or beats fftw-js at all sizes. The N=64 gap is within benchmark variance and not actionable. Future work should focus on new features rather than further optimization.
 
 **Files modified**: `docs/OPTIMIZATION_PLAN.md` (updated performance tables)
+
+---
+
+## Experiment 27: Dead Code Removal (2026-01-25)
+
+**Goal**: Remove unused legacy codelets to reduce module size and potentially improve I-cache utilization.
+
+**Dead functions identified**:
+
+1. `$fft_8` (DIF): Superseded by `$fft_8_dit`
+2. `$fft_16` (DIF): Superseded by `$fft_16_dit`
+3. `$fft_32` (DIF): Superseded by `$fft_32_dit`
+4. `$fft_64` (hierarchical DIF): Unused, not called
+5. `$fft_64_dit`: 1848 lines, too many locals causing register spills (never used)
+
+**Result**: SUCCESS - Improved performance and maintainability
+
+| Metric                 | Before | After     | Change   |
+| ---------------------- | ------ | --------- | -------- |
+| Source lines           | 5,748  | 3,299     | **-43%** |
+| N=64 vs fftw-js (avg)  | ~-1%   | **+5-9%** | +6-10pp  |
+| N=128 vs fftw-js (avg) | +2-5%  | **+5-7%** | +2pp     |
+| All sizes              | Win    | **Win**   | stable   |
+
+**Analysis**: Removing 2,449 lines of dead code had an unexpected positive side effect:
+
+1. **Smaller WASM module**: Fewer functions = less code to parse/compile
+2. **Better I-cache**: No wasted space for unused functions
+3. **Cleaner codebase**: Easier to maintain and understand
+
+The N=64 performance improvement (+6-10pp) suggests the dead code was causing some I-cache pressure at small sizes where the working set fits entirely in cache.
+
+**Lesson**: Dead code removal is a legitimate optimization technique for WebAssembly. Large unused functions can impact performance even if never executed.
+
+**Files modified**: `modules/fft_real_f32_dual.wat`
