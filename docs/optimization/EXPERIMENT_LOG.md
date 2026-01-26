@@ -37,6 +37,7 @@ Detailed record of all optimization experiments.
 | 28  | Dead Parameterized Codelets | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at  |
 | 29  | IFFT Implementation         | SUCCESS          | Full inverse FFT for all modules, 27/27 tests |
 | 30  | r=2 Stage Dual-Group        | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage         |
+| 31  | f32 Complex FFT Dual-Group  | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module |
 
 ---
 
@@ -628,3 +629,47 @@ This uses the mathematical identity that the inverse DFT is equivalent to conjug
 The improvement is most significant at N=256-512 where the r=2 stage represents a larger fraction of total work.
 
 **Files modified**: `modules/fft_real_f32_dual.wat`
+
+---
+
+## Experiment 31: f32 Complex FFT Dual-Group Optimization (2026-01-26)
+
+**Goal**: Port the r=1 and r=2 dual-group optimizations from `fft_real_f32_dual.wat` (Experiments 21, 30) to `fft_stockham_f32_dual.wat`.
+
+**Hypothesis**: The f32 complex FFT module still uses single-element processing for r<4 stages, while the RFFT module has optimized dual-group processing. Applying the same optimization should yield significant gains.
+
+**Approach**:
+
+- Replaced the r<4 single-element processing loop with optimized r=1 and r=2 paths
+- r=1 path: Process 2 groups at once, loading [A,B] and [C,D] pairs, shuffling to separate first/second elements, applying different twiddles to each group
+- r=2 path: Process 2 groups (4 v128 loads), apply butterflies for both groups with interleaved twiddle loads
+
+**Result**: SUCCESS - **+30% to +40% improvement** across all sizes
+
+| Size   | Before | After | Improvement |
+| ------ | ------ | ----- | ----------- |
+| N=64   | 4.62M  | 6.18M | **+33.8%**  |
+| N=256  | 1.17M  | 1.64M | **+40.2%**  |
+| N=1024 | 274K   | 370K  | **+35.0%**  |
+| N=2048 | 124K   | 161K  | **+30.0%**  |
+| N=4096 | 61.1K  | 80.6K | **+31.9%**  |
+
+**Analysis**: This is a much larger improvement than in the RFFT module because:
+
+1. The complex FFT uses more r=1 and r=2 stages per transform (every stage for larger N)
+2. The RFFT only calls the internal FFT once per transform, while complex FFT benchmarks measure the full algorithm
+3. The dual-group optimization reduces loop overhead and improves instruction-level parallelism
+
+**vs fft.js** (updated):
+
+| Size   | vs fft.js Before | vs fft.js After |
+| ------ | ---------------- | --------------- |
+| N=64   | +65%             | **+119%**       |
+| N=256  | +119%            | **+191%**       |
+| N=1024 | +143%            | **+224%**       |
+| N=2048 | +161%            | **+240%**       |
+| N=4096 | +160%            | **+243%**       |
+
+**Lesson**: Optimizations proven in one module should be systematically applied to related modules. The r=1/r=2 dual-group pattern is now a standard technique for Stockham FFT SIMD implementations.
+
+**Files modified**: `modules/fft_stockham_f32_dual.wat`

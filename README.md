@@ -31,16 +31,16 @@ config:
 xychart-beta
     title "Complex FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 5
-    line [3.83, 1.59, 0.97, 0.34, 0.19, 0.074, 0.044]
-    line [4.60, 2.40, 1.17, 0.54, 0.27, 0.124, 0.062]
-    line [2.79, 1.11, 0.56, 0.22, 0.11, 0.047, 0.023]
-    line [1.90, 0.80, 0.45, 0.18, 0.10, 0.041, 0.022]
+    y-axis "Million ops/s" 0 --> 7
+    line [3.76, 1.52, 0.93, 0.34, 0.19, 0.074, 0.044]
+    line [6.17, 3.01, 1.59, 0.72, 0.36, 0.160, 0.079]
+    line [2.76, 1.08, 0.55, 0.22, 0.11, 0.046, 0.023]
+    line [1.87, 0.78, 0.43, 0.18, 0.10, 0.041, 0.021]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**Choose f64** (`fft_combined.wasm`) for double precision - **+37% to +90% faster** than fft.js at all sizes. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **2.6x faster** than fft.js.
+**Choose f64** (`fft_combined.wasm`) for double precision - **+37% to +90% faster** than fft.js at all sizes. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum speed with single precision - up to **3.4x faster** than fft.js.
 
 ### Real FFT
 

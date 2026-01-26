@@ -213,6 +213,7 @@
     (local $wi v128)
     (local $prod1 v128)
     (local $swapped v128)
+    (local $tmp_v128 v128)
 
     ;; Pointers
     (local $i0 i32)
@@ -238,84 +239,194 @@
         (local.set $tw_step (i32.div_u (local.get $n) (i32.shl (local.get $l) (i32.const 1))))
         (local.set $j (i32.const 0))
 
-        ;; For r<4, use single-element processing (dual requires at least 2 pairs = 4 elements)
-        (if (i32.lt_u (local.get $r) (i32.const 4))
+        ;; For r<2, use optimized dual-group processing
+        (if (i32.lt_u (local.get $r) (i32.const 2))
           (then
-            ;; Single-element path (matches original algorithm exactly)
-            ;; Initialize output pointers once per stage
+            ;; r=1 optimized path: process 2 groups at once
+            ;; Input layout for 2 groups: [A, B, C, D] where (A,B) and (C,D) are pairs
             (local.set $o0 (local.get $dst))
             (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
             (local.set $i0 (local.get $src))
             (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
 
-            (block $done_groups_single
-              (loop $group_loop_single
-                (br_if $done_groups_single (i32.ge_u (local.get $j) (local.get $l)))
+            ;; Process pairs of groups while we have at least 2 left
+            (block $done_dual_groups
+              (loop $dual_group_loop
+                (br_if $done_dual_groups (i32.ge_u (i32.add (local.get $j) (i32.const 1)) (local.get $l)))
 
-                ;; Load twiddle for this group
+                ;; Load input: [A, B] for group j, [C, D] for group j+1
+                ;; Memory: A at i0, B at i0+8, C at i0+16, D at i0+24
+                (local.set $x0 (v128.load (local.get $i0)))        ;; [A, B]
+                (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16)))) ;; [C, D]
+
+                ;; Separate into first and second elements of each pair
+                ;; first = [A, C], second = [B, D]
+                (local.set $prod1 (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                                 (local.get $x0) (local.get $x1))) ;; [A, C]
+                (local.set $swapped (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+                                                   (local.get $x0) (local.get $x1))) ;; [B, D]
+
+                ;; Load twiddles for both groups
+                ;; Twiddle j at tw_addr, twiddle j+1 at tw_addr + tw_step*16
+                (local.set $w (v128.load (local.get $tw_addr)))  ;; [W_j.re, W_j.im, W_j.re, W_j.im]
+                (local.set $i1 (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4))))
+                (local.set $x1 (v128.load (local.get $i1)))      ;; [W_j+1.re, W_j+1.im, ...]
+
+                ;; Build twiddle vector: [W_j, W_j+1] (both as complex pairs)
+                (local.set $w (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                             (local.get $w) (local.get $x1)))
+
+                ;; Multiply second elements [B, D] by respective twiddles [W_j, W_j+1]
+                (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                              (local.get $w) (local.get $w)))
+                (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                              (local.get $w) (local.get $w)))
+
+                (local.set $x0 (f32x4.mul (local.get $swapped) (local.get $wr)))
+                (local.set $x1 (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                              (local.get $swapped) (local.get $swapped)))
+                (local.set $x1 (f32x4.add (local.get $x0)
+                  (f32x4.mul (f32x4.mul (local.get $x1) (local.get $wi)) (global.get $SIGN_MASK))))
+
+                ;; Butterfly: result0 = first + twiddled, result1 = first - twiddled
+                ;; result0 = [A+W_j*B, C+W_j+1*D], result1 = [A-W_j*B, C-W_j+1*D]
+                (local.set $x0 (f32x4.add (local.get $prod1) (local.get $x1)))
+                (local.set $x1 (f32x4.sub (local.get $prod1) (local.get $x1)))
+
+                ;; Store to output: result0 goes to o0, o0+8; result1 goes to o1, o1+8
+                (v128.store (local.get $o0) (local.get $x0))
+                (v128.store (local.get $o1) (local.get $x1))
+
+                ;; Advance: 2 groups processed, 32 bytes input, 16 bytes each output
+                (local.set $i0 (i32.add (local.get $i0) (i32.const 32)))
+                (local.set $o0 (i32.add (local.get $o0) (i32.const 16)))
+                (local.set $o1 (i32.add (local.get $o1) (i32.const 16)))
+                (local.set $tw_addr (i32.add (local.get $tw_addr)
+                                             (i32.shl (local.get $tw_step) (i32.const 5)))) ;; 2 * tw_step * 16
+                (local.set $j (i32.add (local.get $j) (i32.const 2)))
+                (br $dual_group_loop)
+              )
+            )
+
+            ;; Handle remaining single group if l was odd
+            (if (i32.lt_u (local.get $j) (local.get $l))
+              (then
                 (local.set $w (v128.load (local.get $tw_addr)))
-
-                ;; Prepare single-complex twiddle broadcast
                 (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
                                               (local.get $w) (local.get $w)))
                 (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
                                               (local.get $w) (local.get $w)))
-
-                ;; i1 offset is r_bytes, not n2_bytes!
-                (local.set $i1 (i32.add (local.get $i0) (local.get $r_bytes)))
-                (local.set $k (i32.const 0))
-
-                (block $done_k_single
-                  (loop $k_loop_single
-                    (br_if $done_k_single (i32.ge_u (local.get $k) (local.get $r)))
-
-                    ;; Load single complex
-                    (local.set $x0 (v128.load64_zero (local.get $i0)))
-                    (local.set $x1 (v128.load64_zero (local.get $i1)))
-
-                    ;; Single-complex multiply: x1 * w
-                    (local.set $prod1 (f32x4.mul (local.get $x1) (local.get $wr)))
-                    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
-                                                       (local.get $x1) (local.get $x1)))
-                    (local.set $x1
-                      (f32x4.add
-                        (local.get $prod1)
-                        (f32x4.mul
-                          (f32x4.mul (local.get $swapped) (local.get $wi))
-                          (global.get $SIGN_MASK))))
-
-                    ;; Butterfly and store
-                    (v128.store64_lane 0 (local.get $o0) (f32x4.add (local.get $x0) (local.get $x1)))
-                    (v128.store64_lane 0 (local.get $o1) (f32x4.sub (local.get $x0) (local.get $x1)))
-
-                    ;; Advance pointers by 8 bytes (1 complex)
-                    (local.set $i0 (i32.add (local.get $i0) (i32.const 8)))
-                    (local.set $i1 (i32.add (local.get $i1) (i32.const 8)))
-                    (local.set $o0 (i32.add (local.get $o0) (i32.const 8)))
-                    (local.set $o1 (i32.add (local.get $o1) (i32.const 8)))
-
-                    (local.set $k (i32.add (local.get $k) (i32.const 1)))
-                    (br $k_loop_single)
-                  )
-                )
-
-                ;; Skip over second half of input for next group
-                (local.set $i0 (i32.add (local.get $i0) (local.get $r_bytes)))
-                ;; Advance twiddle for next group (16 bytes per twiddle * tw_step)
-                (local.set $tw_addr (i32.add (local.get $tw_addr)
-                                             (i32.shl (local.get $tw_step) (i32.const 4))))
-                (local.set $j (i32.add (local.get $j) (i32.const 1)))
-                (br $group_loop_single)
+                (local.set $x0 (v128.load64_zero (local.get $i0)))
+                (local.set $x1 (v128.load64_zero (i32.add (local.get $i0) (i32.const 8))))
+                (local.set $prod1 (f32x4.mul (local.get $x1) (local.get $wr)))
+                (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                                   (local.get $x1) (local.get $x1)))
+                (local.set $x1 (f32x4.add (local.get $prod1)
+                  (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+                (v128.store64_lane 0 (local.get $o0) (f32x4.add (local.get $x0) (local.get $x1)))
+                (v128.store64_lane 0 (local.get $o1) (f32x4.sub (local.get $x0) (local.get $x1)))
               )
             )
           )
           (else
-            ;; Dual-complex path (r>=4): process 2 butterflies at a time
-            ;; Initialize pointers once per stage (like original algorithm)
-            (local.set $o0 (local.get $dst))
-            (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
-            (local.set $i0 (local.get $src))
-            (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
+            (if (i32.eq (local.get $r) (i32.const 2))
+              (then
+                ;; r=2 optimized path: process 2 groups at once (4 butterflies total)
+                ;; Each group has 2 elements in first half and 2 in second half
+                ;; Layout per group: [A0, A1] in first half, [B0, B1] in second half
+                ;; For 2 groups: i0=[A0,A1], i0+16=[B0,B1], i0+32=[C0,C1], i0+48=[D0,D1]
+                (local.set $o0 (local.get $dst))
+                (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
+                (local.set $i0 (local.get $src))
+                (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
+
+                ;; Process pairs of groups while we have at least 2 left
+                (block $done_dual_groups_r2
+                  (loop $dual_group_loop_r2
+                    (br_if $done_dual_groups_r2 (i32.ge_u (i32.add (local.get $j) (i32.const 1)) (local.get $l)))
+
+                    ;; Load all 4 v128s for 2 groups
+                    ;; Group j: first half at i0, second half at i0+16
+                    ;; Group j+1: first half at i0+32, second half at i0+48
+                    (local.set $x0 (v128.load (local.get $i0)))                    ;; [A0, A1]
+                    (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16)))) ;; [B0, B1]
+                    (local.set $prod1 (v128.load (i32.add (local.get $i0) (i32.const 32)))) ;; [C0, C1]
+                    (local.set $swapped (v128.load (i32.add (local.get $i0) (i32.const 48)))) ;; [D0, D1]
+
+                    ;; Load twiddle for group j (same twiddle for both elements in group)
+                    (local.set $w (v128.load (local.get $tw_addr)))
+                    (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                                  (local.get $w) (local.get $w)))
+                    (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                                  (local.get $w) (local.get $w)))
+
+                    ;; Multiply B by twiddle: x1 * w
+                    (local.set $tmp_v128 (f32x4.mul (local.get $x1) (local.get $wr)))
+                    (local.set $x1 (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                                  (local.get $x1) (local.get $x1)))
+                    (local.set $x1 (f32x4.add (local.get $tmp_v128)
+                      (f32x4.mul (f32x4.mul (local.get $x1) (local.get $wi)) (global.get $SIGN_MASK))))
+
+                    ;; Butterfly for group j: store A+B*w and A-B*w
+                    (v128.store (local.get $o0) (f32x4.add (local.get $x0) (local.get $x1)))
+                    (v128.store (local.get $o1) (f32x4.sub (local.get $x0) (local.get $x1)))
+
+                    ;; Load twiddle for group j+1
+                    (local.set $w (v128.load (i32.add (local.get $tw_addr) (i32.shl (local.get $tw_step) (i32.const 4)))))
+                    (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                                  (local.get $w) (local.get $w)))
+                    (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                                  (local.get $w) (local.get $w)))
+
+                    ;; Multiply D by twiddle: swapped * w
+                    (local.set $x1 (f32x4.mul (local.get $swapped) (local.get $wr)))
+                    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                                       (local.get $swapped) (local.get $swapped)))
+                    (local.set $swapped (f32x4.add (local.get $x1)
+                      (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+                    ;; Butterfly for group j+1: store C+D*w and C-D*w
+                    (v128.store (i32.add (local.get $o0) (i32.const 16)) (f32x4.add (local.get $prod1) (local.get $swapped)))
+                    (v128.store (i32.add (local.get $o1) (i32.const 16)) (f32x4.sub (local.get $prod1) (local.get $swapped)))
+
+                    ;; Advance: 2 groups processed
+                    (local.set $i0 (i32.add (local.get $i0) (i32.const 64)))   ;; 4 v128s = 64 bytes
+                    (local.set $o0 (i32.add (local.get $o0) (i32.const 32)))   ;; 2 v128s output to each half
+                    (local.set $o1 (i32.add (local.get $o1) (i32.const 32)))
+                    (local.set $tw_addr (i32.add (local.get $tw_addr)
+                                                 (i32.shl (local.get $tw_step) (i32.const 5)))) ;; 2 * tw_step * 16
+                    (local.set $j (i32.add (local.get $j) (i32.const 2)))
+                    (br $dual_group_loop_r2)
+                  )
+                )
+
+                ;; Handle remaining single group if l was odd
+                (if (i32.lt_u (local.get $j) (local.get $l))
+                  (then
+                    (local.set $x0 (v128.load (local.get $i0)))
+                    (local.set $x1 (v128.load (i32.add (local.get $i0) (i32.const 16))))
+                    (local.set $w (v128.load (local.get $tw_addr)))
+                    (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                                  (local.get $w) (local.get $w)))
+                    (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                                  (local.get $w) (local.get $w)))
+                    (local.set $prod1 (f32x4.mul (local.get $x1) (local.get $wr)))
+                    (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                                       (local.get $x1) (local.get $x1)))
+                    (local.set $x1 (f32x4.add (local.get $prod1)
+                      (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+                    (v128.store (local.get $o0) (f32x4.add (local.get $x0) (local.get $x1)))
+                    (v128.store (local.get $o1) (f32x4.sub (local.get $x0) (local.get $x1)))
+                  )
+                )
+              )
+              (else
+                ;; Dual-complex path (r>=4): process 2 butterflies at a time
+                ;; Initialize pointers once per stage (like original algorithm)
+                (local.set $o0 (local.get $dst))
+                (local.set $o1 (i32.add (local.get $dst) (local.get $n2_bytes)))
+                (local.set $i0 (local.get $src))
+                (local.set $tw_addr (global.get $TWIDDLE_OFFSET))
 
             (block $done_groups
               (loop $group_loop
@@ -376,6 +487,8 @@
                 (local.set $j (i32.add (local.get $j) (i32.const 1)))
                 (br $group_loop)
               )
+            )
+          )
             )
           )
         )
