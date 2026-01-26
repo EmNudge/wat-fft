@@ -41,6 +41,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 2. **Depth-first recursive FFT** (-55%) - Call overhead > cache locality benefit
 3. **Large monolithic codelets** - 300+ locals cause register spills
 4. **Hierarchical composition beyond N=1024** - Instruction cache thrashing
+5. **Split real/imaginary format** (-65-75%) - Format conversion overhead negates SIMD gains
 
 ### Key Insights
 
