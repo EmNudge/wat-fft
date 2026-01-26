@@ -39,6 +39,7 @@ Detailed record of all optimization experiments.
 | 30  | r=2 Stage Dual-Group        | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage         |
 | 31  | f32 Complex FFT Dual-Group  | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module |
 | 32  | f64 Complex FFT Dual-Group  | SUCCESS +7-10%   | Dual-group r=1/r=2 for f64 Stockham           |
+| 33  | f64 RFFT Dual-Group         | FAILURE -10-12%  | Optimization harmful for smaller internal FFT |
 
 ---
 
@@ -709,3 +710,39 @@ Note: These improvements apply to radix-2 sizes (N=8,32,128,512,2048). Radix-4 s
 3. Still, reducing loop iterations provides measurable improvement
 
 **Files modified**: `modules/fft_combined.wat`
+
+---
+
+## Experiment 33: f64 RFFT Dual-Group Optimization (2026-01-26)
+
+**Goal**: Port the r=1 and r=2 dual-group optimizations from Experiment 32 to the f64 RFFT module (`fft_real_combined.wat`).
+
+**Hypothesis**: Since the f64 complex FFT (Experiment 32) showed +7-10% gains with dual-group processing, the same optimization applied to the Stockham FFT used internally by the f64 RFFT should provide similar benefits.
+
+**Approach**:
+
+- Same r=1 and r=2 optimized paths as Experiment 32
+- Applied to `$fft_stockham_general` in `fft_real_combined.wat`
+
+**Result**: FAILURE - 10-12% slower at all sizes
+
+| Size   | Before | After  | Change     |
+| ------ | ------ | ------ | ---------- |
+| N=64   | 4.74M  | 4.19M  | **-11.6%** |
+| N=256  | 1.25M  | 1.11M  | **-11.2%** |
+| N=1024 | 284.7K | 254.6K | **-10.6%** |
+| N=4096 | 62.7K  | 54.8K  | **-12.6%** |
+
+**Analysis**: The optimization that worked for the complex FFT module hurts the RFFT module because:
+
+1. **Smaller internal FFT**: RFFT operates on N/2 complex numbers internally. For N=64 RFFT, the internal FFT is only 32 points, meaning fewer stages and fewer opportunities for the optimization to pay off.
+
+2. **Higher relative overhead**: The conditional checks (`if r=1`, `if r=2`) add overhead that dominates at smaller sizes. For the complex FFT benchmark which tests larger sizes directly (N=64, 256, 1024...), the overhead is amortized over more work.
+
+3. **JIT optimization disruption**: The additional branching may interfere with V8's ability to optimize the hot path. The original simple loop structure is more predictable for the JIT compiler.
+
+**Key insight**: Optimizations that work for one module don't necessarily transfer to similar code. The internal FFT size and call patterns significantly affect what optimizations are beneficial.
+
+**Decision**: Reverted changes to `fft_real_combined.wat`. The module's performance is already acceptable (2x faster than kissfft-js at all sizes).
+
+**Files modified**: None (changes reverted)
