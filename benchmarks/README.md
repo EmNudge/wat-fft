@@ -19,9 +19,6 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 | `rfft.bench.js`          | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
 | `fft_f32_dual.bench.js`  | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
 | `rfft_f32_dual.bench.js` | f32 dual-complex rfft - compares against fftw-js (both f32)                     |
-| `radix4.bench.js`        | Radix-4 vs radix-2 comparison - internal optimization validation                |
-| `recursive.bench.js`     | Recursive DIF vs iterative - validates that iterative is faster                 |
-| `rfft_fma.bench.js`      | FMA vs standard - measures relaxed SIMD FMA improvement                         |
 
 ## Running Benchmarks
 
@@ -43,9 +40,8 @@ npm run bench:rfft32 # Real FFT (f32)
 ```bash
 node benchmarks/fft.bench.js
 node benchmarks/rfft.bench.js
-node benchmarks/radix4.bench.js
-node benchmarks/recursive.bench.js
-node benchmarks/rfft_fma.bench.js
+node benchmarks/fft_f32_dual.bench.js
+node benchmarks/rfft_f32_dual.bench.js
 ```
 
 ## Configuration

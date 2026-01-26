@@ -415,8 +415,8 @@ modules.fft.forEach((fft) => {
   buildCombinedModule(fft, `combined_${fft.name.replace("fft_", "")}`);
 });
 
-// Build Radix-4 modules (self-contained, no imports)
-console.log("\nBuilding Radix-4 FFT modules...");
+// Build self-contained modules (no imports)
+console.log("\nBuilding self-contained FFT modules...");
 
 function buildSelfContainedModule(name, outputName = null) {
   const srcPath = path.join(modulesDir, `${name}.wat`);
@@ -435,9 +435,6 @@ function buildSelfContainedModule(name, outputName = null) {
   return false;
 }
 
-buildSelfContainedModule("fft_radix4");
-buildSelfContainedModule("fft_real_radix4");
-buildSelfContainedModule("fft_recursive");
 buildSelfContainedModule("fft_stockham_f32_dual");
 buildSelfContainedModule("fft_real_f32_dual");
 

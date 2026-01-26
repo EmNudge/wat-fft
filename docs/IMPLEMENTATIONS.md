@@ -4,18 +4,12 @@ This document describes all FFT implementations provided by wat-fft.
 
 ## Overview
 
-| Module                       | Algorithm                 | Best For                 | Speed           |
-| ---------------------------- | ------------------------- | ------------------------ | --------------- |
-| `fft_combined.wasm`          | Radix-4 + Radix-2 auto    | **All power-of-2 sizes** | **Recommended** |
-| `fft_real_combined.wasm`     | Real FFT + auto dispatch  | **Real signals (any)**   | **Recommended** |
-| `fft_stockham_f32_dual.wasm` | f32 Dual-Complex SIMD     | **f32 complex (fast)**   | **Fastest f32** |
-| `fft_real_f32_dual.wasm`     | f32 Dual-Complex rfft     | **f32 real signals**     | **Fastest f32** |
-| `fft_radix4.wasm`            | Radix-4 Stockham + SIMD   | Complex FFT, pow-of-4    | Fastest f64     |
-| `fft_real_radix4.wasm`       | Real FFT + Radix-4        | Real signals, pow-of-4   | Fastest rfft    |
-| `combined_stockham.wasm`     | Radix-2 Stockham + SIMD   | All power-of-2 sizes     | Fast            |
-| `combined_stockham_f32.wasm` | f32 Stockham + SIMD       | f32 precision            | Fast f32        |
-| `combined_real.wasm`         | Real FFT (r2c) + Stockham | Real-valued signals      | Fast            |
-| `combined_fast.wasm`         | Radix-2 (no SIMD)         | No SIMD support          | Medium          |
+| Module                       | Algorithm                | Best For                 | Speed           |
+| ---------------------------- | ------------------------ | ------------------------ | --------------- |
+| `fft_combined.wasm`          | Radix-4 + Radix-2 auto   | **All power-of-2 sizes** | **Recommended** |
+| `fft_real_combined.wasm`     | Real FFT + auto dispatch | **Real signals (any)**   | **Recommended** |
+| `fft_stockham_f32_dual.wasm` | f32 Dual-Complex SIMD    | **f32 complex (fast)**   | **Fastest f32** |
+| `fft_real_f32_dual.wasm`     | f32 Dual-Complex rfft    | **f32 real signals**     | **Fastest f32** |
 
 ## Numerical Accuracy
 
@@ -34,31 +28,6 @@ The accuracy difference between implementations comes from trigonometric functio
 For most signal processing applications, ~10⁻⁹ accuracy is more than sufficient. Use `combined_fast.wasm` if you need higher precision and can accept the ~30% performance penalty from JavaScript trig calls.
 
 **Recommended:** Use `fft_combined.wasm` (complex) or `fft_real_combined.wasm` (real) for automatic algorithm selection. These modules use radix-4 for power-of-4 sizes and radix-2 for other sizes, similar to FFTW's approach.
-
-For manual control, use `fft_radix4.wasm` for power-of-4 sizes, `combined_stockham.wasm` for other power-of-2 sizes, or `combined_fast.wasm` for environments without SIMD support.
-
-## Radix-4 (Fastest for Power-of-4 Sizes)
-
-Radix-4 Stockham FFT with SIMD acceleration - the fastest implementation for sizes 4, 16, 64, 256, 1024, 4096:
-
-- **50% fewer stages** than radix-2 (log₄(N) vs log₂(N))
-- **Inlined SIMD complex multiply** - no function call overhead
-- **Fully unrolled N=4 and N=16 codelets** - inline twiddles, zero loop overhead
-- **SIMD v128** for all butterfly operations
-- No bit-reversal needed - Stockham ping-pong buffers
-- **Up to 89% faster** than fft.js at large sizes
-
-```javascript
-// Radix-4 FFT usage (power-of-4 sizes only)
-const wasmBuffer = fs.readFileSync("dist/fft_radix4.wasm");
-const wasmModule = await WebAssembly.compile(wasmBuffer);
-const instance = await WebAssembly.instantiate(wasmModule);
-const fft = instance.exports;
-
-const N = 1024; // Must be power of 4
-fft.precompute_twiddles(N);
-fft.fft_radix4(N);
-```
 
 ## Combined (Recommended - All Power-of-2 Sizes)
 
@@ -173,11 +142,10 @@ Optimized real-to-complex FFT for real-valued input signals:
 - Double precision (f64) for high accuracy
 - **Fused rfft codelets** for N=8 and N=32 with hardcoded twiddles - **beats fftw-js by up to 124%**
 - **Hierarchical FFT composition** for N=64 using optimized sub-codelets
-- **Combined variant** (`fft_real_combined.wasm`) is recommended, auto-selects optimal algorithm
 
 ```javascript
-// Real FFT usage (radix-4 recommended for best performance)
-const wasmBuffer = fs.readFileSync("dist/fft_real_radix4.wasm");
+// Real FFT usage
+const wasmBuffer = fs.readFileSync("dist/fft_real_combined.wasm");
 const wasmModule = await WebAssembly.compile(wasmBuffer);
 const instance = await WebAssembly.instantiate(wasmModule, {});
 const fft = instance.exports;

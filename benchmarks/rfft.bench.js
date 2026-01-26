@@ -18,15 +18,6 @@ import kissfft from "kissfft-js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load our Radix-4 Real FFT WASM module (f64)
-async function loadRadix4RealWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_real_radix4.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {});
-  return instance.exports;
-}
-
 // Load our Combined Real FFT WASM module (f64, auto-dispatch)
 async function loadCombinedRealWasmFFT() {
   const wasmPath = path.join(__dirname, "..", "dist", "fft_real_combined.wasm");
@@ -97,16 +88,11 @@ async function runBenchmarks() {
   console.log("      wat-fft uses Float64 (double precision)");
   console.log("");
 
-  const radix4RealWasmExports = await loadRadix4RealWasmFFT();
   const combinedRealWasmExports = await loadCombinedRealWasmFFT();
 
   for (const size of SIZES) {
-    // N/2 is the internal complex FFT size
-    const n2 = size / 2;
-    const n2IsPow4 = (n2 & (n2 - 1)) === 0 && (n2 & 0xaaaaaaaa) === 0;
-
     console.log("-".repeat(70));
-    console.log(`Real FFT Size: N=${size} (N/2=${n2}, ${n2IsPow4 ? "radix-4" : "radix-2"})`);
+    console.log(`Real FFT Size: N=${size}`);
     console.log("-".repeat(70));
 
     const input = generateRealInput(size);
@@ -128,25 +114,7 @@ async function runBenchmarks() {
     );
     results.push(combinedResult);
 
-    // 2. Our WASM Real FFT with Radix-4 (f64) - only for sizes where N/2 is power-of-4
-    if (n2IsPow4) {
-      const radix4Result = runBenchmark(
-        "wat-fft Radix-4 (f64)",
-        () => {
-          const memory = radix4RealWasmExports.memory;
-          const data = new Float64Array(memory.buffer, 0, size);
-          radix4RealWasmExports.precompute_rfft_twiddles(size);
-          return { data, inputBuffer: input.real64 };
-        },
-        (ctx) => {
-          ctx.data.set(ctx.inputBuffer);
-          radix4RealWasmExports.rfft(size);
-        },
-      );
-      results.push(radix4Result);
-    }
-
-    // 3. fftw-js (single precision)
+    // 2. fftw-js (single precision)
     const fftwResult = runBenchmark(
       "fftw-js (f32)",
       () => {
@@ -162,7 +130,7 @@ async function runBenchmarks() {
     );
     results.push(fftwResult);
 
-    // 4. kissfft-js (single precision)
+    // 3. kissfft-js (single precision)
     const kissfftResult = runBenchmark(
       "kissfft-js (f32)",
       () => {
