@@ -540,6 +540,110 @@ function createJSFFTContext(module, size) {
         this._fft.dispose();
       },
     };
+  } else if (library === "pffft") {
+    const pffft = module._pffft;
+    // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
+    const PFFFT_REAL = 0;
+    const PFFFT_COMPLEX = 1;
+    const PFFFT_FORWARD = 0;
+
+    if (config.isReal) {
+      // Real FFT - requires size >= 32
+      if (size < 32) {
+        throw new Error("PFFFT Real FFT requires size >= 32");
+      }
+
+      const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
+      const inputPtr = pffft._pffft_aligned_malloc(size * 4);
+      const outputPtr = pffft._pffft_aligned_malloc(size * 4);
+      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
+      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size);
+
+      return {
+        module,
+        size,
+        inputSize: size,
+        outputSize: size,
+        ArrayType: Float32Array,
+        isReal: true,
+        _setup: setup,
+        _inputPtr: inputPtr,
+        _outputPtr: outputPtr,
+        _inputView: inputView,
+        _outputView: outputView,
+        _pffft: pffft,
+
+        getInputBuffer() {
+          return this._inputView;
+        },
+
+        getOutputBuffer() {
+          return this._outputView;
+        },
+
+        run() {
+          this._pffft._pffft_transform_ordered(
+            this._setup,
+            this._inputPtr,
+            this._outputPtr,
+            0,
+            PFFFT_FORWARD,
+          );
+        },
+
+        dispose() {
+          this._pffft._pffft_aligned_free(this._inputPtr);
+          this._pffft._pffft_aligned_free(this._outputPtr);
+          this._pffft._pffft_destroy_setup(this._setup);
+        },
+      };
+    } else {
+      // Complex FFT
+      const setup = pffft._pffft_new_setup(size, PFFFT_COMPLEX);
+      const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+      const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+      const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
+      const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size * 2);
+
+      return {
+        module,
+        size,
+        inputSize: size * 2,
+        outputSize: size * 2,
+        ArrayType: Float32Array,
+        isReal: false,
+        _setup: setup,
+        _inputPtr: inputPtr,
+        _outputPtr: outputPtr,
+        _inputView: inputView,
+        _outputView: outputView,
+        _pffft: pffft,
+
+        getInputBuffer() {
+          return this._inputView;
+        },
+
+        getOutputBuffer() {
+          return this._outputView;
+        },
+
+        run() {
+          this._pffft._pffft_transform_ordered(
+            this._setup,
+            this._inputPtr,
+            this._outputPtr,
+            0,
+            PFFFT_FORWARD,
+          );
+        },
+
+        dispose() {
+          this._pffft._pffft_aligned_free(this._inputPtr);
+          this._pffft._pffft_aligned_free(this._outputPtr);
+          this._pffft._pffft_destroy_setup(this._setup);
+        },
+      };
+    }
   }
 
   throw new Error(`Unknown library: ${library}`);

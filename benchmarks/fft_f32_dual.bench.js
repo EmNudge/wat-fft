@@ -72,7 +72,8 @@ async function runBenchmarks() {
   const wasm = await loadWasm("fft_stockham_f32_dual");
   const pffft = await PFFFT();
 
-  const PFFFT_COMPLEX = 0;
+  // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
+  const PFFFT_COMPLEX = 1;
   const PFFFT_FORWARD = 0;
 
   for (const n of SIZES) {

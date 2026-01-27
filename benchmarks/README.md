@@ -83,9 +83,11 @@ FFT Size: N=1024
 | -------------- | ---------- | --------- | ----------------------------------------- |
 | **fft.js**     | Pure JS    | f64       | Fastest pure JS, Radix-4 by Fedor Indutny |
 | **fft-js**     | Pure JS    | f64       | Simple Cooley-Tukey implementation        |
-| **kissfft-js** | Emscripten | f64       | Port of Kiss FFT C library                |
+| **kissfft-js** | Emscripten | f32\*     | Port of Kiss FFT C library                |
 | **webfft**     | Meta-lib   | f32       | Meta-library with multiple backends       |
 | **pffft-wasm** | Emscripten | f32       | PFFFT with SIMD support                   |
+
+\*kissfft-js accepts Float64Array but uses f32 internally
 
 ### Real FFT
 
@@ -95,6 +97,39 @@ FFT Size: N=1024
 | **kissfft-js** | Emscripten | f32       | Port of Kiss FFT                   |
 | **webfft**     | Meta-lib   | f32       | Meta-library with kissWasm backend |
 | **pffft-wasm** | Emscripten | f32       | PFFFT (Pretty Fast FFT) with SIMD  |
+
+### Competitor Library Notes
+
+These notes were discovered through correctness testing (see `tests/third-party-correctness.test.js`):
+
+#### pffft-wasm
+
+**IMPORTANT**: The PFFFT enum values are:
+
+```javascript
+const PFFFT_REAL = 0;
+const PFFFT_COMPLEX = 1; // NOT 0!
+const PFFFT_FORWARD = 0;
+const PFFFT_BACKWARD = 1;
+```
+
+Using `PFFFT_COMPLEX = 0` will actually run a Real FFT, giving incorrect results for complex input.
+
+#### kissfft-js
+
+- Accepts `Float64Array` input but **internally uses f32 precision**
+- Expect errors around 1e-6, not 1e-15
+
+#### webfft
+
+- Complex FFT (`fft()`) works correctly
+- **Real FFT (`fftr()`) has a bug**: DC component returns 0 for constant signals
+- The library is still useful for performance comparison but real FFT results are incorrect
+
+#### fftw-js
+
+- Export is `fftw.FFT` (not `fftw.FFTW`)
+- Only provides Real FFT, not Complex FFT
 
 ## Interpreting Results
 
