@@ -4,14 +4,17 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 
 ## Quick Reference
 
-| Command                | Benchmark         | Competitors                                    |
-| ---------------------- | ----------------- | ---------------------------------------------- |
-| `npm run bench`        | Complex FFT (f64) | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
-| `npm run bench:rfft`   | Real FFT (f64)    | fftw-js, kissfft-js, webfft, pffft-wasm        |
-| `npm run bench:f32`    | Complex FFT (f32) | fft.js                                         |
-| `npm run bench:rfft32` | Real FFT (f32)    | fftw-js                                        |
+| Command                 | Benchmark               | Competitors                                    |
+| ----------------------- | ----------------------- | ---------------------------------------------- |
+| `npm run bench`         | Complex FFT (f64)       | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| `npm run bench:rfft`    | Real FFT (f64)          | fftw-js, kissfft-js, webfft, pffft-wasm        |
+| `npm run bench:f32`     | Complex FFT (f32)       | fft.js                                         |
+| `npm run bench:rfft32`  | Real FFT (f32)          | fftw-js                                        |
+| `npm run bench:browser` | Browser FFT (all types) | fft.js, fft-js, kissfft-js, webfft             |
 
 ## Benchmark Files
+
+### Node.js Benchmarks
 
 | File                     | Purpose                                                                         |
 | ------------------------ | ------------------------------------------------------------------------------- |
@@ -19,6 +22,14 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 | `rfft.bench.js`          | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
 | `fft_f32_dual.bench.js`  | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
 | `rfft_f32_dual.bench.js` | f32 dual-complex rfft - compares against fftw-js (both f32)                     |
+
+### Browser Benchmarks (Vitest)
+
+| File                    | Purpose                                                   |
+| ----------------------- | --------------------------------------------------------- |
+| `browser/fft.bench.ts`  | Complex FFT in browser - wat-fft vs fft.js, kissfft, etc. |
+| `browser/rfft.bench.ts` | Real FFT in browser - wat-rfft vs fft.js real             |
+| `browser/fft-loader.ts` | WASM loader and competitor library initialization         |
 
 ## Running Benchmarks
 
@@ -211,6 +222,40 @@ node --expose-gc benchmarks/fft.bench.js
 ```
 
 ## Browser-Based Benchmarking
+
+### Vitest Browser Benchmarks
+
+Run benchmarks in a real browser environment using Vitest's browser mode with Playwright:
+
+```bash
+# Run all browser benchmarks
+npm run bench:browser
+
+# Run specific benchmark file
+npx vitest bench --run benchmarks/browser/fft.bench.ts
+npx vitest bench --run benchmarks/browser/rfft.bench.ts
+```
+
+Features:
+
+- Runs in Chromium via Playwright (headless by default)
+- Measures all wat-fft variants: f64, f32, f32-split
+- Compares against fft.js, fft-js, kissfft-js, webfft
+- Reports ops/sec, min/max latency, and percentiles
+- Shows relative performance comparisons
+
+Browser benchmark files:
+
+| File                    | Contents                                       |
+| ----------------------- | ---------------------------------------------- |
+| `browser/fft.bench.ts`  | Complex FFT benchmarks (N=64, 256, 1024, 4096) |
+| `browser/rfft.bench.ts` | Real FFT benchmarks                            |
+| `browser/fft-loader.ts` | WASM and competitor library loader             |
+
+Note: pffft-wasm is not included in browser benchmarks because its emscripten-compiled
+WASM requires special configuration to locate companion files in browsers.
+
+### Interactive Playground
 
 For interactive browser-based benchmarking, use the **Benchmark Mode** in the [playground](../playground/):
 
