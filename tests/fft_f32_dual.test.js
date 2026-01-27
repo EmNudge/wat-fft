@@ -49,7 +49,7 @@ function maxError(a, b) {
 }
 
 // Test sizes (must be powers of 2, >= 4)
-const SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
+const SIZES = [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192];
 
 async function runTests() {
   console.log("Loading WASM module...");
@@ -80,8 +80,9 @@ async function runTests() {
     // Compare vs reference (f32 has ~1e-5 precision)
     const err = maxError(output, refOutput);
 
-    // f32 should be within 1e-4 of reference
-    const threshold = 1e-4;
+    // f32 error grows with N due to accumulated rounding
+    // Use size-dependent threshold: base 1e-4 scaled by sqrt(N/1024)
+    const threshold = 1e-4 * Math.sqrt(n / 1024);
     const passed = err < threshold;
 
     const status = passed ? "PASS" : "FAIL";

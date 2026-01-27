@@ -6,17 +6,19 @@
   ;; - Radix-4 when N/2 is power-of-4 (N=8, 32, 128, 512, 2048, 8192)
   ;; - Radix-2 Stockham otherwise (N=16, 64, 256, 1024, 4096)
   ;;
-  ;; Memory layout:
-  ;;   0 - 65535:        Primary buffer (input/output)
-  ;;   65536 - 131071:   Secondary buffer (Stockham ping-pong)
-  ;;   131072 - 196607:  Complex FFT twiddles (for N/2-point FFT)
-  ;;   196608+:          Post-processing twiddles W_N^k for k=0..N/2
+  ;; Memory layout (f64, 16 bytes per complex):
+  ;;   0 - 131071:        Primary buffer (up to 8192 complex = N=16384 real)
+  ;;   131072 - 262143:   Secondary buffer (Stockham ping-pong)
+  ;;   262144 - 393215:   Complex FFT twiddles (for N/2-point FFT)
+  ;;   393216+:           Post-processing twiddles W_N^k for k=0..N/2
+  ;;
+  ;; For N=16384 real FFT: 8 pages needed
 
-  (memory (export "memory") 5)
+  (memory (export "memory") 8)
 
-  (global $SECONDARY_OFFSET i32 (i32.const 65536))
-  (global $TWIDDLE_OFFSET i32 (i32.const 131072))
-  (global $RFFT_TWIDDLE_OFFSET i32 (i32.const 196608))
+  (global $SECONDARY_OFFSET i32 (i32.const 131072))
+  (global $TWIDDLE_OFFSET i32 (i32.const 262144))
+  (global $RFFT_TWIDDLE_OFFSET i32 (i32.const 393216))
   (global $PI f64 (f64.const 3.141592653589793))
   (global $HALF_PI f64 (f64.const 1.5707963267948966))
 

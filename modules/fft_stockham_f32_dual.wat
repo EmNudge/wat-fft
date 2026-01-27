@@ -8,15 +8,17 @@
   ;; to eliminate runtime shuffle for twiddle broadcast.
   ;;
   ;; Memory layout (f32, 8 bytes per complex):
-  ;;   0 - 32767: Primary data buffer (4096 complex numbers max)
-  ;;   32768 - 65535: Secondary buffer for ping-pong
-  ;;   65536+: Pre-replicated twiddle factors (16 bytes each)
+  ;;   0 - 65535: Primary data buffer (8192 complex numbers max)
+  ;;   65536 - 131071: Secondary buffer for ping-pong
+  ;;   131072+: Pre-replicated twiddle factors (16 bytes each)
+  ;;
+  ;; For N=8192: primary=65536, secondary=65536, twiddles=131072 = 262144 bytes = 4 pages
 
   (memory (export "memory") 4)
 
-  ;; Buffer offsets
-  (global $SECONDARY_OFFSET i32 (i32.const 32768))
-  (global $TWIDDLE_OFFSET i32 (i32.const 65536))
+  ;; Buffer offsets (sized for N up to 8192)
+  (global $SECONDARY_OFFSET i32 (i32.const 65536))
+  (global $TWIDDLE_OFFSET i32 (i32.const 131072))
 
   ;; Constants for trig functions
   (global $PI f32 (f32.const 3.1415927))

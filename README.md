@@ -143,15 +143,15 @@ console.log("Recovered signal:", data[0], data[1]);
 
 **Recommended modules:**
 
-| Module                       | Use Case                        | Precision | Inverse      |
-| ---------------------------- | ------------------------------- | --------- | ------------ |
-| `fft_combined.wasm`          | Complex FFT (any size)          | f64       | `ifft`       |
-| `fft_real_combined.wasm`     | Real FFT (any size)             | f64       | -            |
-| `fft_stockham_f32_dual.wasm` | Complex FFT (interleaved)       | f32       | `ifft`       |
-| `fft_split_native_f32.wasm`  | Complex FFT (split format, 95%) | f32       | `ifft_split` |
-| `fft_real_f32_dual.wasm`     | Real FFT (fastest)              | f32       | `irfft`      |
+| Module                       | Use Case                   | Precision | Inverse      |
+| ---------------------------- | -------------------------- | --------- | ------------ |
+| `fft_combined.wasm`          | Complex FFT (any size)     | f64       | `ifft`       |
+| `fft_real_combined.wasm`     | Real FFT (any size)        | f64       | -            |
+| `fft_stockham_f32_dual.wasm` | Complex FFT (interleaved)  | f32       | `ifft`       |
+| `fft_split_native_f32.wasm`  | Complex FFT (split format) | f32       | `ifft_split` |
+| `fft_real_f32_dual.wasm`     | Real FFT (fastest)         | f32       | `irfft`      |
 
-**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays, enabling 4 complex numbers per SIMD operation. Use when you can provide data in split format for maximum performance (95% of pffft-wasm).
+**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays, enabling 4 complex numbers per SIMD operation. Performance is similar to interleaved format - use when your data is already in split format to avoid conversion overhead.
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 
@@ -231,7 +231,7 @@ node tests/fft.test.js 256 impulse
 
 ### Test sizes
 
-Powers of 2: 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096
+Powers of 2: 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192
 
 ## License
 
