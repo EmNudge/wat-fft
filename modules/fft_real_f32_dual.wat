@@ -10,17 +10,20 @@
   ;; 3. Post-process to get real FFT output
   ;;
   ;; Memory layout (f32, 8 bytes per complex):
-  ;;   0 - 32767: Primary data buffer (input real / output complex)
-  ;;   32768 - 65535: Secondary buffer for ping-pong
-  ;;   65536 - 131071: Pre-replicated FFT twiddles (16 bytes each: [w.re, w.im, w.re, w.im])
-  ;;   131072+: RFFT post-processing twiddles (8 bytes each: [w.re, w.im])
+  ;;   0 - 65535: Primary data buffer (input real / output complex, up to 8192 complex)
+  ;;   65536 - 131071: Secondary buffer for ping-pong
+  ;;   131072 - 262143: Pre-replicated FFT twiddles (16 bytes each: [w.re, w.im, w.re, w.im])
+  ;;   262144+: RFFT post-processing twiddles (8 bytes each: [w.re, w.im])
+  ;;
+  ;; For N=16384 real FFT (N/2=8192 complex): 6 pages needed
+  ;; (primary 64KB + secondary 64KB + FFT twiddles 128KB + RFFT twiddles 64KB = 320KB + overhead)
 
-  (memory (export "memory") 4)
+  (memory (export "memory") 6)
 
-  ;; Buffer offsets
-  (global $SECONDARY_OFFSET i32 (i32.const 32768))
-  (global $TWIDDLE_OFFSET i32 (i32.const 65536))
-  (global $RFFT_TWIDDLE_OFFSET i32 (i32.const 131072))
+  ;; Buffer offsets (sized for real FFT up to N=16384)
+  (global $SECONDARY_OFFSET i32 (i32.const 65536))
+  (global $TWIDDLE_OFFSET i32 (i32.const 131072))
+  (global $RFFT_TWIDDLE_OFFSET i32 (i32.const 262144))
 
   ;; Constants for trig functions
   (global $PI f32 (f32.const 3.1415927))

@@ -8,6 +8,7 @@ import { generateSyntheticAudio, loadAudioFile, loadAudioFromUrl } from "./audio
 import { generateSpectrogram, renderSpectrogram, analyzeFrequencyRange } from "./spectrogram.js";
 import { SpectrumAnalyzer } from "./spectrum-analyzer.js";
 import { LiveRecorder } from "./live-recorder.js";
+import { showError, showWarning, showSuccess } from "./toast.js";
 import SAMPLE_FILES from "virtual:sample-files";
 
 // State
@@ -355,6 +356,7 @@ function setupFFTSelector() {
       triggerRegenerate();
     } catch (err) {
       console.error("Failed to load module:", err);
+      showError(`Failed to load FFT module: ${err.message}`);
     }
   });
 }
@@ -612,6 +614,7 @@ async function startRecording() {
   } catch (err) {
     console.error("Failed to start recording:", err);
     elements.recordHint.textContent = "Error: " + (err.message || "Microphone access denied");
+    showError(`Failed to start recording: ${err.message || "Microphone access denied"}`);
   }
 }
 
@@ -651,6 +654,7 @@ async function loadSampleFile(url) {
     triggerRegenerate();
   } catch (err) {
     console.error("Failed to load sample file:", err);
+    showError(`Failed to load sample file: ${err.message}`);
   } finally {
     setProcessing(false);
   }
@@ -795,6 +799,7 @@ function setupFileInput() {
       triggerRegenerate();
     } catch (err) {
       console.error("Failed to load audio file:", err);
+      showError(`Failed to load audio file: ${err.message}`);
     } finally {
       setProcessing(false);
     }
@@ -824,6 +829,7 @@ async function setupAnalyzer() {
     analyzer.setFFTContext(fftContext, analyzerModule);
   } catch (err) {
     console.error("Failed to load analyzer FFT module:", err);
+    showError(`Failed to load analyzer FFT module: ${err.message}`);
   }
 
   // Toggle button
@@ -859,6 +865,7 @@ async function setupAnalyzer() {
       }
     } catch (err) {
       console.error("Failed to load analyzer module:", err);
+      showError(`Failed to load analyzer module: ${err.message}`);
     }
   });
 
@@ -943,6 +950,7 @@ async function startAnalyzer() {
   } catch (err) {
     console.error("Failed to start analyzer:", err);
     elements.analyzerStatus.textContent = "Error: " + (err.message || "Microphone access denied");
+    showError(`Failed to start analyzer: ${err.message || "Microphone access denied"}`);
   }
 }
 
@@ -1002,8 +1010,8 @@ function populateBenchmarkImplementations() {
   container.innerHTML = "";
   const modules = getAvailableModules();
 
-  // Default checked: combined, real_combined, f32_dual, pffft
-  const defaultChecked = ["combined", "real_combined", "f32_dual", "pffft"];
+  // Default checked: combined, real_combined, f32_dual, pffft (and pffft_real for variety)
+  const defaultChecked = ["combined", "real_combined", "f32_dual", "pffft", "pffft_real"];
 
   modules.forEach((mod) => {
     const label = document.createElement("label");
@@ -1099,11 +1107,11 @@ async function runBenchmark() {
   const warmupRuns = parseInt(elements.benchWarmup.value);
 
   if (implementations.length === 0) {
-    alert("Please select at least one implementation");
+    showWarning("Please select at least one implementation");
     return;
   }
   if (sizes.length === 0) {
-    alert("Please select at least one FFT size");
+    showWarning("Please select at least one FFT size");
     return;
   }
 
@@ -1191,7 +1199,7 @@ async function runBenchmark() {
     renderBenchmarkResults();
   } catch (err) {
     console.error("Benchmark error:", err);
-    alert("Benchmark failed: " + err.message);
+    showError(`Benchmark failed: ${err.message}`);
   } finally {
     isBenchmarking = false;
     elements.benchRun.textContent = "Run Benchmark";
@@ -1357,15 +1365,11 @@ function copyBenchmarkResults() {
 
   navigator.clipboard.writeText(md).then(
     () => {
-      const btn = elements.benchCopy;
-      const originalText = btn.textContent;
-      btn.textContent = "Copied!";
-      setTimeout(() => {
-        btn.textContent = originalText;
-      }, 1500);
+      showSuccess("Benchmark results copied to clipboard");
     },
     (err) => {
       console.error("Failed to copy:", err);
+      showError("Failed to copy to clipboard");
     },
   );
 }
@@ -1498,6 +1502,7 @@ async function getAudioSamples() {
 async function generate() {
   if (!currentModule) {
     console.error("No FFT module loaded");
+    showError("No FFT module loaded");
     return;
   }
 
@@ -1556,6 +1561,7 @@ async function generate() {
     updateFreqLabels();
   } catch (err) {
     console.error("Generation error:", err);
+    showError(`Generation error: ${err.message}`);
   } finally {
     setProcessing(false);
 
@@ -1606,6 +1612,7 @@ async function init() {
     updateImplName();
   } catch (err) {
     console.error("Failed to load default module:", err);
+    showError(`Failed to load default FFT module: ${err.message}`);
     return;
   }
 

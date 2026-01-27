@@ -80,7 +80,7 @@ import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-// Note: @echogarden/pffft-wasm removed - produces incorrect FFT output
+import PFFFT from "@echogarden/pffft-wasm";
 
 // fftw-js needs to be loaded dynamically due to WASM initialization
 let fftwModule = null;
@@ -94,7 +94,22 @@ async function getFFTW() {
   return fftwModule;
 }
 
-// Note: pffft-wasm removed - @echogarden/pffft-wasm v0.4.2 produces incorrect output
+// pffft-wasm needs async initialization
+let pffftModule = null;
+async function getPFFFT() {
+  if (!pffftModule) {
+    // Use locateFile to point to our public directory copy of pffft.wasm
+    pffftModule = await PFFFT({
+      locateFile: (path) => {
+        if (path.endsWith(".wasm")) {
+          return "/pffft.wasm";
+        }
+        return path;
+      },
+    });
+  }
+  return pffftModule;
+}
 
 // wat-fft WASM modules
 const WASM_MODULES = {
@@ -186,10 +201,20 @@ const JS_MODULES = {
   },
   // Note: WebFFT Real (fftr) is not available because it produces incorrect output.
   // DC signal gives all zeros, cosine gives near-zero magnitudes.
-
-  // Note: PFFFT (@echogarden/pffft-wasm v0.4.2) is not available because both
-  // Complex and Real modes produce incorrect output (cosine energy spread across
-  // all bins instead of concentrated at bin 1).
+  pffft: {
+    name: "PFFFT",
+    desc: "WASM SIMD f32",
+    isReal: false,
+    isWatFft: false,
+    library: "pffft",
+  },
+  pffft_real: {
+    name: "PFFFT Real",
+    desc: "WASM SIMD f32",
+    isReal: true,
+    isWatFft: false,
+    library: "pffft",
+  },
 };
 
 const ALL_MODULES = { ...WASM_MODULES, ...JS_MODULES };
@@ -252,6 +277,11 @@ export async function loadFFTModule(moduleId) {
     // FFTW needs async initialization
     if (config.library === "fftw") {
       module._fftw = await getFFTW();
+    }
+
+    // PFFFT needs async initialization
+    if (config.library === "pffft") {
+      module._pffft = await getPFFFT();
     }
   }
 
@@ -558,12 +588,14 @@ function createJSFFTContext(module, size) {
       const outputPtr = pffft._pffft_aligned_malloc(size * 4);
       const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
       const outputView = new Float32Array(pffft.HEAPF32.buffer, outputPtr, size);
+      // Pre-allocate interleaved output buffer for conversion
+      const interleavedOutput = new Float32Array((size / 2 + 1) * 2);
 
       return {
         module,
         size,
         inputSize: size,
-        outputSize: size,
+        outputSize: (size / 2 + 1) * 2,
         ArrayType: Float32Array,
         isReal: true,
         _setup: setup,
@@ -571,6 +603,7 @@ function createJSFFTContext(module, size) {
         _outputPtr: outputPtr,
         _inputView: inputView,
         _outputView: outputView,
+        _interleavedOutput: interleavedOutput,
         _pffft: pffft,
 
         getInputBuffer() {
@@ -578,7 +611,28 @@ function createJSFFTContext(module, size) {
         },
 
         getOutputBuffer() {
-          return this._outputView;
+          // Convert pffft packed format to standard interleaved complex
+          // pffft format: [DC_real, Nyquist_real, bin1_real, bin1_imag, bin2_real, bin2_imag, ...]
+          // Standard format: [bin0_real, bin0_imag, bin1_real, bin1_imag, ..., binN/2_real, binN/2_imag]
+          const out = this._interleavedOutput;
+          const pffftOut = this._outputView;
+          const halfSize = size / 2;
+
+          // Bin 0 (DC) - imag is 0
+          out[0] = pffftOut[0];
+          out[1] = 0;
+
+          // Bins 1 to N/2-1 - complex
+          for (let i = 1; i < halfSize; i++) {
+            out[i * 2] = pffftOut[2 * i];
+            out[i * 2 + 1] = pffftOut[2 * i + 1];
+          }
+
+          // Bin N/2 (Nyquist) - imag is 0
+          out[halfSize * 2] = pffftOut[1];
+          out[halfSize * 2 + 1] = 0;
+
+          return out;
         },
 
         run() {

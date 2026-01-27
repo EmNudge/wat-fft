@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "setup": "mkdir -p public/wasm && cp ../dist/*.wasm public/wasm/"
+    "setup": "mkdir -p public/wasm && cp ../dist/*.wasm public/wasm/ && cp node_modules/@echogarden/pffft-wasm/dist/simd/pffft.wasm public/"
   },
   "dependencies": {
     "@echogarden/pffft-wasm": "^0.4.2",

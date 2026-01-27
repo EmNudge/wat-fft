@@ -5,15 +5,17 @@
   ;; - Radix-4 for power-of-4 sizes (4, 16, 64, 256, 1024, 4096) - fastest
   ;; - Radix-2 Stockham for other power-of-2 sizes (8, 32, 128, 512, 2048)
   ;;
-  ;; Memory layout:
-  ;;   0 - 65535: Primary data buffer
-  ;;   65536 - 131071: Secondary buffer for ping-pong
-  ;;   131072+: Twiddle factors
+  ;; Memory layout (f64, 16 bytes per complex):
+  ;;   0 - 131071: Primary data buffer (up to 8192 complex numbers)
+  ;;   131072 - 262143: Secondary buffer for ping-pong
+  ;;   262144+: Twiddle factors
+  ;;
+  ;; For N=8192: 6 pages needed (primary 128KB + secondary 128KB + twiddles 128KB)
 
-  (memory (export "memory") 4)
+  (memory (export "memory") 6)
 
-  (global $SECONDARY_OFFSET i32 (i32.const 65536))
-  (global $TWIDDLE_OFFSET i32 (i32.const 131072))
+  (global $SECONDARY_OFFSET i32 (i32.const 131072))
+  (global $TWIDDLE_OFFSET i32 (i32.const 262144))
   (global $PI f64 (f64.const 3.141592653589793))
   (global $HALF_PI f64 (f64.const 1.5707963267948966))
 

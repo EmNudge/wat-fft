@@ -2,14 +2,16 @@ import { defineConfig } from "vite";
 import { resolve } from "path";
 import { readdirSync, existsSync, readFileSync } from "fs";
 
-// Plugin to serve WASM files from parent dist directory
+// Plugin to serve WASM files from parent dist directory and node_modules
 function wasmServePlugin() {
   const distDir = resolve(__dirname, "../dist");
+  const pffftWasmDir = resolve(__dirname, "node_modules/@echogarden/pffft-wasm/dist/simd");
 
   return {
     name: "wasm-serve",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        // Serve wat-fft WASM files
         if (req.url && req.url.startsWith("/wasm/")) {
           const filename = req.url.replace("/wasm/", "");
           const filepath = resolve(distDir, filename);
@@ -21,6 +23,19 @@ function wasmServePlugin() {
             return;
           }
         }
+
+        // Serve pffft WASM file from node_modules
+        if (req.url && req.url.includes("pffft.wasm")) {
+          const filepath = resolve(pffftWasmDir, "pffft.wasm");
+          if (existsSync(filepath)) {
+            const content = readFileSync(filepath);
+            res.setHeader("Content-Type", "application/wasm");
+            res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+            res.end(content);
+            return;
+          }
+        }
+
         next();
       });
     },
@@ -89,6 +104,6 @@ export default defineConfig({
     },
   },
   optimizeDeps: {
-    exclude: ["*.wasm"],
+    exclude: ["*.wasm", "@echogarden/pffft-wasm"],
   },
 });
