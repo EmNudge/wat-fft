@@ -261,7 +261,8 @@ async function runBenchmarks() {
     results.push(webfftResult);
 
     // pffft-wasm (PFFFT with SIMD support)
-    const PFFFT_COMPLEX = 0;
+    // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
+    const PFFFT_COMPLEX = 1;
     const PFFFT_FORWARD = 0;
     const pffftResult = runBenchmark(
       "pffft-wasm (f32)",

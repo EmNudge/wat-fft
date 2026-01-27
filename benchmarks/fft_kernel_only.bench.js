@@ -67,7 +67,8 @@ async function runBenchmarks() {
   const wasmSplit = await loadWasmWithMath("fft_split_f32");
   const pffft = await PFFFT();
 
-  const PFFFT_COMPLEX = 0;
+  // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
+  const PFFFT_COMPLEX = 1;
   const PFFFT_FORWARD = 0;
 
   // Constants for split format memory layout
