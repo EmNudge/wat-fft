@@ -710,21 +710,25 @@
   ;; ============================================================
 
   ;; IFFT(x) = (1/N) * conj(FFT(conj(x)))
+  ;; Uses SIMD f32x4.neg for 4x throughput on conjugation
   (func (export "ifft_split") (param $n i32)
     (local $i i32)
-    (local $scale f32)
+    (local $n_bytes i32)
+    (local $scale v128)
     (local $addr i32)
 
-    ;; Conjugate input (negate imaginary parts)
+    (local.set $n_bytes (i32.shl (local.get $n) (i32.const 2)))
+
+    ;; Conjugate input (negate imaginary parts) - SIMD 4 elements at a time
     (local.set $i (i32.const 0))
     (block $conj1_done
       (loop $conj1_loop
-        (br_if $conj1_done (i32.ge_u (local.get $i) (i32.shl (local.get $n) (i32.const 2))))
+        (br_if $conj1_done (i32.ge_u (local.get $i) (local.get $n_bytes)))
 
         (local.set $addr (i32.add (global.get $IMAG_A_OFFSET) (local.get $i)))
-        (f32.store (local.get $addr) (f32.neg (f32.load (local.get $addr))))
+        (v128.store (local.get $addr) (f32x4.neg (v128.load (local.get $addr))))
 
-        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
         (br $conj1_loop)
       )
     )
@@ -732,22 +736,22 @@
     ;; Forward FFT
     (call $fft_split (local.get $n))
 
-    ;; Conjugate and scale output
-    (local.set $scale (f32.div (f32.const 1.0) (f32.convert_i32_u (local.get $n))))
+    ;; Conjugate and scale output - SIMD 4 elements at a time
+    (local.set $scale (f32x4.splat (f32.div (f32.const 1.0) (f32.convert_i32_u (local.get $n)))))
     (local.set $i (i32.const 0))
     (block $conj2_done
       (loop $conj2_loop
-        (br_if $conj2_done (i32.ge_u (local.get $i) (i32.shl (local.get $n) (i32.const 2))))
+        (br_if $conj2_done (i32.ge_u (local.get $i) (local.get $n_bytes)))
 
         ;; Scale real part
         (local.set $addr (i32.add (global.get $REAL_A_OFFSET) (local.get $i)))
-        (f32.store (local.get $addr) (f32.mul (f32.load (local.get $addr)) (local.get $scale)))
+        (v128.store (local.get $addr) (f32x4.mul (v128.load (local.get $addr)) (local.get $scale)))
 
         ;; Conjugate and scale imaginary part
         (local.set $addr (i32.add (global.get $IMAG_A_OFFSET) (local.get $i)))
-        (f32.store (local.get $addr) (f32.mul (f32.neg (f32.load (local.get $addr))) (local.get $scale)))
+        (v128.store (local.get $addr) (f32x4.mul (f32x4.neg (v128.load (local.get $addr))) (local.get $scale)))
 
-        (local.set $i (i32.add (local.get $i) (i32.const 4)))
+        (local.set $i (i32.add (local.get $i) (i32.const 16)))
         (br $conj2_loop)
       )
     )
