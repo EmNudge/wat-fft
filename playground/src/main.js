@@ -3,7 +3,7 @@
  * Real-time FFT performance comparison with automatic regeneration
  */
 
-import { loadFFTModule, createFFTContext } from "./fft-loader.js";
+import { loadFFTModule, createFFTContext, getAvailableModules } from "./fft-loader.js";
 import { generateSyntheticAudio, loadAudioFile, loadAudioFromUrl } from "./audio-sources.js";
 import { generateSpectrogram, renderSpectrogram, analyzeFrequencyRange } from "./spectrogram.js";
 import { SpectrumAnalyzer } from "./spectrum-analyzer.js";
@@ -309,27 +309,53 @@ function updateImplName() {
   elements.implName.classList.toggle("alt", isAlt);
 }
 
+// Populate FFT selector with available modules
+function populateFFTSelector(container, defaultModuleId, onSelect) {
+  container.innerHTML = "";
+  const modules = getAvailableModules();
+
+  modules.forEach((mod) => {
+    const option = document.createElement("div");
+    option.className = "fft-option" + (mod.isWatFft ? "" : " alt");
+    option.dataset.fft = mod.id;
+    if (mod.id === defaultModuleId) {
+      option.classList.add("selected");
+    }
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "name";
+    nameSpan.textContent = mod.name;
+
+    const descSpan = document.createElement("span");
+    descSpan.className = "desc";
+    descSpan.textContent = mod.desc;
+
+    option.appendChild(nameSpan);
+    option.appendChild(descSpan);
+
+    option.addEventListener("click", () => onSelect(mod.id, option));
+    container.appendChild(option);
+  });
+}
+
 // FFT Module Selection
 function setupFFTSelector() {
-  const options = elements.fftSelector.querySelectorAll(".fft-option");
+  populateFFTSelector(elements.fftSelector, currentModuleId, async (moduleId, option) => {
+    if (moduleId === currentModuleId) return;
 
-  options.forEach((option) => {
-    option.addEventListener("click", async () => {
-      const moduleId = option.dataset.fft;
-      if (moduleId === currentModuleId) return;
+    elements.fftSelector
+      .querySelectorAll(".fft-option")
+      .forEach((o) => o.classList.remove("selected"));
+    option.classList.add("selected");
 
-      options.forEach((o) => o.classList.remove("selected"));
-      option.classList.add("selected");
-
-      try {
-        currentModule = await loadFFTModule(moduleId);
-        currentModuleId = moduleId;
-        updateImplName();
-        triggerRegenerate();
-      } catch (err) {
-        console.error("Failed to load module:", err);
-      }
-    });
+    try {
+      currentModule = await loadFFTModule(moduleId);
+      currentModuleId = moduleId;
+      updateImplName();
+      triggerRegenerate();
+    } catch (err) {
+      console.error("Failed to load module:", err);
+    }
   });
 }
 
@@ -809,33 +835,31 @@ async function setupAnalyzer() {
     }
   });
 
-  // FFT implementation selector
-  const analyzerFftOptions = elements.analyzerFftSelector.querySelectorAll(".fft-option");
-  analyzerFftOptions.forEach((option) => {
-    option.addEventListener("click", async () => {
-      const moduleId = option.dataset.fft;
-      if (moduleId === analyzerModuleId) return;
+  // FFT implementation selector (dynamically populated)
+  populateFFTSelector(elements.analyzerFftSelector, analyzerModuleId, async (moduleId, option) => {
+    if (moduleId === analyzerModuleId) return;
 
-      analyzerFftOptions.forEach((o) => o.classList.remove("selected"));
-      option.classList.add("selected");
+    elements.analyzerFftSelector
+      .querySelectorAll(".fft-option")
+      .forEach((o) => o.classList.remove("selected"));
+    option.classList.add("selected");
 
-      try {
-        analyzerModule = await loadFFTModule(moduleId);
-        analyzerModuleId = moduleId;
+    try {
+      analyzerModule = await loadFFTModule(moduleId);
+      analyzerModuleId = moduleId;
 
-        // Update analyzer FFT context
-        const fftSize = Math.pow(2, parseInt(elements.analyzerFftSize.value));
-        const fftContext = createFFTContext(analyzerModule, fftSize);
-        analyzer.setFFTContext(fftContext, analyzerModule);
+      // Update analyzer FFT context
+      const fftSize = Math.pow(2, parseInt(elements.analyzerFftSize.value));
+      const fftContext = createFFTContext(analyzerModule, fftSize);
+      analyzer.setFFTContext(fftContext, analyzerModule);
 
-        // Update implementation display if running
-        if (analyzer.isRunning) {
-          updateAnalyzerImplName();
-        }
-      } catch (err) {
-        console.error("Failed to load analyzer module:", err);
+      // Update implementation display if running
+      if (analyzer.isRunning) {
+        updateAnalyzerImplName();
       }
-    });
+    } catch (err) {
+      console.error("Failed to load analyzer module:", err);
+    }
   });
 
   // FFT Size slider
@@ -972,7 +996,39 @@ function updateAnalyzerImplName() {
 }
 
 // Benchmark setup
+// Populate benchmark implementation checkboxes
+function populateBenchmarkImplementations() {
+  const container = elements.benchImplSelector;
+  container.innerHTML = "";
+  const modules = getAvailableModules();
+
+  // Default checked: combined, real_combined, f32_dual, pffft
+  const defaultChecked = ["combined", "real_combined", "f32_dual", "pffft"];
+
+  modules.forEach((mod) => {
+    const label = document.createElement("label");
+    label.className = "bench-checkbox" + (mod.isWatFft ? "" : " alt");
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.dataset.impl = mod.id;
+    if (defaultChecked.includes(mod.id)) {
+      checkbox.checked = true;
+    }
+
+    const span = document.createElement("span");
+    span.textContent = `${mod.name} (${mod.desc})`;
+
+    label.appendChild(checkbox);
+    label.appendChild(span);
+    container.appendChild(label);
+  });
+}
+
 function setupBenchmark() {
+  // Populate implementation checkboxes dynamically
+  populateBenchmarkImplementations();
+
   // Iterations slider
   elements.benchIterations.addEventListener("input", () => {
     elements.benchIterationsValue.textContent = elements.benchIterations.value;

@@ -159,3 +159,14 @@ npm run build
 - Audio too short: Increase duration or decrease FFT size
 - Low frequencies missing: The spectrogram shows 0 Hz at the bottom
 - Frequencies look shifted: This is normal for windowed FFT analysis
+
+### FFT validation error
+
+The playground validates FFT implementations on first use by checking that a cosine signal produces energy at the correct frequency bin. If validation fails, the implementation is rejected with an error message.
+
+**Known broken implementations (removed):**
+
+- **PFFFT**: The `@echogarden/pffft-wasm` package (v0.4.2) produces incorrect output for both Complex and Real modes (cosine energy spread across all bins instead of concentrated at bin 1).
+- **WebFFT Real**: The `webfft` package's `fftr()` function produces incorrect output (DC signal gives all zeros).
+
+If you encounter validation failures with other implementations, please report them.

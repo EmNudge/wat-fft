@@ -25,6 +25,7 @@ const outputs = [
   { name: "fft_real_combined", desc: "Real FFT (f64)" },
   { name: "fft_stockham_f32_dual", desc: "Complex FFT (f32)" },
   { name: "fft_real_f32_dual", desc: "Real FFT (f32)" },
+  { name: "fft_split_native_f32", desc: "Complex FFT (f32 split format)" },
 ];
 
 console.log("Building FFT modules...\n");

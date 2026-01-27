@@ -972,67 +972,8 @@
           <!-- FFT Tab -->
           <div class="tab-content active" id="tab-fft">
             <h2>Implementation</h2>
-            <div class="fft-selector" id="fft-selector">
-              <div class="fft-group-label">wat-fft (this project)</div>
-              <div class="fft-option selected" data-fft="combined">
-                <span class="name">Combined</span>
-                <span class="desc">f64 auto</span>
-              </div>
-              <div class="fft-option" data-fft="combined_stockham">
-                <span class="name">Stockham</span>
-                <span class="desc">f64 SIMD</span>
-              </div>
-              <div class="fft-option" data-fft="f32_dual">
-                <span class="name">f32 Dual</span>
-                <span class="desc">fastest</span>
-              </div>
-              <div class="fft-option" data-fft="real_combined">
-                <span class="name">Real FFT</span>
-                <span class="desc">f64 real</span>
-              </div>
-              <div class="fft-option" data-fft="real_f32_dual">
-                <span class="name">Real f32</span>
-                <span class="desc">fast real</span>
-              </div>
-
-              <div class="fft-group-label alt">Alternatives</div>
-              <div class="fft-option alt" data-fft="fftjs">
-                <span class="name">fft.js</span>
-                <span class="desc">JS radix-4</span>
-              </div>
-              <div class="fft-option alt" data-fft="fftjs_real">
-                <span class="name">fft.js Real</span>
-                <span class="desc">JS real</span>
-              </div>
-              <div class="fft-option alt" data-fft="fft_js">
-                <span class="name">fft-js</span>
-                <span class="desc">JS Cooley-Tukey</span>
-              </div>
-              <div class="fft-option alt" data-fft="fftw_real">
-                <span class="name">FFTW Real</span>
-                <span class="desc">WASM real</span>
-              </div>
-              <div class="fft-option alt" data-fft="kissfft">
-                <span class="name">KissFFT</span>
-                <span class="desc">WASM port</span>
-              </div>
-              <div class="fft-option alt" data-fft="webfft">
-                <span class="name">WebFFT</span>
-                <span class="desc">meta-lib f32</span>
-              </div>
-              <div class="fft-option alt" data-fft="webfft_real">
-                <span class="name">WebFFT Real</span>
-                <span class="desc">meta-lib f32</span>
-              </div>
-              <div class="fft-option alt" data-fft="pffft">
-                <span class="name">PFFFT</span>
-                <span class="desc">WASM SIMD f32</span>
-              </div>
-              <div class="fft-option alt" data-fft="pffft_real">
-                <span class="name">PFFFT Real</span>
-                <span class="desc">WASM SIMD f32</span>
-              </div>
-            </div>
+            <!-- FFT options are dynamically generated from fft-loader.js -->
+            <div class="fft-selector" id="fft-selector"></div>
 
             <h2>Spectrogram</h2>
             <div class="controls">
@@ -1185,63 +1126,8 @@
         <!-- Benchmark Mode -->
         <div id="benchmark-mode" class="hidden">
           <h2>Implementations</h2>
-          <div class="bench-impl-selector" id="bench-impl-selector">
-            <div class="fft-group-label">wat-fft (this project)</div>
-            <label class="bench-checkbox">
-              <input type="checkbox" data-impl="combined" checked />
-              <span>Combined (f64)</span>
-            </label>
-            <label class="bench-checkbox">
-              <input type="checkbox" data-impl="f32_dual" checked />
-              <span>f32 Dual (fastest)</span>
-            </label>
-            <label class="bench-checkbox">
-              <input type="checkbox" data-impl="real_combined" />
-              <span>Real FFT (f64)</span>
-            </label>
-            <label class="bench-checkbox">
-              <input type="checkbox" data-impl="real_f32_dual" checked />
-              <span>Real f32 (fast real)</span>
-            </label>
-
-            <div class="fft-group-label alt">Alternatives</div>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="fftjs" checked />
-              <span>fft.js (JS radix-4)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="fftjs_real" />
-              <span>fft.js Real</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="fft_js" />
-              <span>fft-js (Cooley-Tukey)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="fftw_real" />
-              <span>FFTW Real (WASM)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="kissfft" />
-              <span>KissFFT (WASM)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="webfft" />
-              <span>WebFFT (meta-lib f32)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="webfft_real" />
-              <span>WebFFT Real (f32)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="pffft" checked />
-              <span>PFFFT (WASM SIMD f32)</span>
-            </label>
-            <label class="bench-checkbox alt">
-              <input type="checkbox" data-impl="pffft_real" />
-              <span>PFFFT Real (f32)</span>
-            </label>
-          </div>
+          <!-- Implementation checkboxes are dynamically generated from fft-loader.js -->
+          <div class="bench-impl-selector" id="bench-impl-selector"></div>
 
           <h2>FFT Sizes</h2>
           <div class="bench-sizes" id="bench-sizes">
@@ -1311,43 +1197,8 @@
           </div>
 
           <h2>Implementation</h2>
-          <div class="fft-selector" id="analyzer-fft-selector">
-            <div class="fft-group-label">wat-fft (this project)</div>
-            <div class="fft-option selected" data-fft="real_f32_dual">
-              <span class="name">Real f32</span>
-              <span class="desc">fastest</span>
-            </div>
-            <div class="fft-option" data-fft="real_combined">
-              <span class="name">Real FFT</span>
-              <span class="desc">f64 real</span>
-            </div>
-            <div class="fft-option" data-fft="f32_dual">
-              <span class="name">f32 Dual</span>
-              <span class="desc">complex</span>
-            </div>
-            <div class="fft-option" data-fft="combined">
-              <span class="name">Combined</span>
-              <span class="desc">f64 auto</span>
-            </div>
-
-            <div class="fft-group-label alt">Alternatives</div>
-            <div class="fft-option alt" data-fft="fftjs_real">
-              <span class="name">fft.js Real</span>
-              <span class="desc">JS real</span>
-            </div>
-            <div class="fft-option alt" data-fft="fftw_real">
-              <span class="name">FFTW Real</span>
-              <span class="desc">WASM real</span>
-            </div>
-            <div class="fft-option alt" data-fft="webfft_real">
-              <span class="name">WebFFT Real</span>
-              <span class="desc">meta-lib f32</span>
-            </div>
-            <div class="fft-option alt" data-fft="pffft_real">
-              <span class="name">PFFFT Real</span>
-              <span class="desc">WASM SIMD f32</span>
-            </div>
-          </div>
+          <!-- FFT options are dynamically generated from fft-loader.js -->
+          <div class="fft-selector" id="analyzer-fft-selector"></div>
 
           <h2>Display Mode</h2>
           <div class="controls">
