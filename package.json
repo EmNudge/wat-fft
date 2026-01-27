@@ -60,6 +60,7 @@
     "bench:rfft": "node benchmarks/rfft.bench.js",
     "bench:f32": "node benchmarks/fft_f32_dual.bench.js",
     "bench:rfft32": "node benchmarks/rfft_f32_dual.bench.js",
+    "bench:browser": "vitest bench --run",
     "lint": "oxlint .",
     "lint:all": "npm run lint && npm run lint:wasm",
     "lint:wasm": "node tools/lint-wasm-dead-code.js",
@@ -68,6 +69,7 @@
   },
   "devDependencies": {
     "@echogarden/pffft-wasm": "^0.4.2",
+    "@vitest/browser": "^3.0.0",
     "fast-check": "^4.5.3",
     "fft-js": "^0.0.12",
     "fft.js": "^4.0.4",
@@ -76,6 +78,9 @@
     "kissfft-wasm": "^2.0.1",
     "oxfmt": "^0.26.0",
     "oxlint": "^1.41.0",
+    "playwright": "^1.50.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
     "webfft": "^1.0.3"
   },
   "engines": {
