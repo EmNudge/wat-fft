@@ -5,9 +5,6 @@
  * in a real browser environment using Playwright.
  *
  * Run with: npm run bench:browser
- *
- * Note: pffft-wasm is not included because its emscripten-compiled WASM
- * requires special configuration to locate its companion .wasm file in browsers.
  */
 
 import { describe, bench, afterAll } from "vitest";
@@ -20,11 +17,12 @@ import {
   createFftJsSimple,
   createKissFFT,
   createWebFFT,
+  createPffftComplex,
   type FFTContext,
 } from "./fft-loader";
 
-// Benchmark configuration
-const SIZES = [64, 256, 1024, 4096];
+// Benchmark configuration - matches Node.js benchmarks for parity
+const SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
 describe("Complex FFT Benchmarks", () => {
   for (const size of SIZES) {
@@ -40,6 +38,7 @@ describe("Complex FFT Benchmarks", () => {
       const fftJsSimple = createFftJsSimple(size);
       const kissFFT = createKissFFT(size);
       const webFFT = createWebFFT(size);
+      const pffft = createPffftComplex(size); // null if size < 32
 
       const contexts: FFTContext[] = [
         watF64,
@@ -49,6 +48,7 @@ describe("Complex FFT Benchmarks", () => {
         fftJsSimple,
         kissFFT,
         webFFT,
+        ...(pffft ? [pffft] : []),
       ];
 
       afterAll(() => {
@@ -91,6 +91,14 @@ describe("Complex FFT Benchmarks", () => {
         webFFT.inputBuffer.set(input.interleaved32);
         webFFT.run();
       });
+
+      // pffft-wasm only works for size >= 32
+      if (pffft) {
+        bench("pffft-wasm", () => {
+          pffft.inputBuffer.set(input.interleaved32);
+          pffft.run();
+        });
+      }
     });
   }
 });

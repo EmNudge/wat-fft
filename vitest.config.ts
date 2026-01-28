@@ -14,6 +14,7 @@ export default defineConfig({
     benchmark: {
       include: ["benchmarks/browser/**/*.bench.ts"],
       reporters: ["default"],
+      // JSON output configured via CLI: --reporter=json --outputFile=benchmark-results.json
     },
     // Include pattern for benchmark files
     include: ["benchmarks/browser/**/*.bench.ts"],
@@ -21,6 +22,10 @@ export default defineConfig({
   // Serve WASM files correctly
   assetsInclude: ["**/*.wasm"],
   publicDir: false,
+  // Pre-bundle CommonJS dependencies for stable browser testing
+  optimizeDeps: {
+    include: ["fftw-js"],
+  },
   server: {
     fs: {
       // Allow serving files from project root

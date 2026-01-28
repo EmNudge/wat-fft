@@ -92,6 +92,59 @@ jobs:
       - name: Run benchmarks (smoke test)
         run: timeout 30s npm run bench || true
 
+  browser-benchmarks:
+    name: Browser Benchmarks
+    needs: wasm-build-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install wasm-tools
+        env:
+          WASM_TOOLS_VERSION: "1.244.0"
+        run: |
+          curl -LO "https://github.com/bytecodealliance/wasm-tools/releases/download/v${WASM_TOOLS_VERSION}/wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          tar xzf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+          sudo mv "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux/wasm-tools" /usr/local/bin/
+          rm -rf "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux" "wasm-tools-${WASM_TOOLS_VERSION}-x86_64-linux.tar.gz"
+
+      - name: Install wac-cli
+        env:
+          WAC_VERSION: "0.8.1"
+        run: |
+          curl -L "https://github.com/bytecodealliance/wac/releases/download/v${WAC_VERSION}/wac-cli-x86_64-unknown-linux-musl" -o wac
+          chmod +x wac
+          sudo mv wac /usr/local/bin/
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build WASM modules
+        run: npm run build
+
+      - name: Install Playwright
+        run: npx playwright install chromium
+
+      - name: Run browser benchmarks
+        run: npm run bench:browser:ci
+
+      - name: Check benchmark results
+        run: npm run bench:check
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
+
   playground:
     name: Playground Build
     needs: wasm-build-test
