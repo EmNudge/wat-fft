@@ -12,6 +12,7 @@ Tools for debugging Stockham and other FFT implementations.
 | `butterfly_tester.js`      | Test butterfly math             | `npm run test:butterfly`           |
 | `permutation_validator.js` | Validate data flow              | `npm run debug:perm -- 16`         |
 | `lint-wasm-dead-code.js`   | Find dead code in WASM          | `npm run lint:wasm`                |
+| `fft_split_f32_debug.js`   | Debug split-format f32 FFT      | `npm run debug:split`              |
 
 ## Usage
 
@@ -48,6 +49,16 @@ npm run debug:perm -- 16 validate   # Check all positions written once
 npm run debug:perm -- 16 table      # Input->output contribution
 npm run debug:perm -- 16 bitrev     # Compare to bit-reversal
 ```
+
+### Split-Format FFT Debug
+
+Interactive vitest-based tool for debugging the split-format f32 FFT implementation:
+
+```bash
+npm run debug:split   # Run with vitest (shows detailed output)
+```
+
+Compares output against fft.js reference at various sizes with verbose logging.
 
 ### WASM Dead Code Linter
 

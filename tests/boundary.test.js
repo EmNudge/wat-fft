@@ -367,17 +367,17 @@ describe("Memory Layout Tests", async () => {
     }
   });
 
-  test("Memory limit documented: N=8192 would require 6+ pages", () => {
+  test("Memory limit documented: N=16384 would require 12+ pages", () => {
     const currentPages = wasm.memory.buffer.byteLength / 65536;
-    // N=8192 with Stockham would need:
-    // - Data: 8192 * 16 = 131072 bytes
-    // - Secondary buffer: 8192 * 16 = 131072 bytes
-    // - Twiddles: 8192 * 16 = 131072 bytes
-    // Total: 393216 bytes = 6 pages minimum
-    const requiredPages = Math.ceil((8192 * 16 * 3) / 65536);
+    // N=16384 with Stockham would need:
+    // - Data: 16384 * 16 = 262144 bytes
+    // - Secondary buffer: 16384 * 16 = 262144 bytes
+    // - Twiddles: 16384 * 16 = 262144 bytes
+    // Total: 786432 bytes = 12 pages minimum
+    const requiredPages = Math.ceil((16384 * 16 * 3) / 65536);
     assert.ok(
       requiredPages > currentPages,
-      `N=8192 requires ${requiredPages} pages, but only ${currentPages} allocated`,
+      `N=16384 requires ${requiredPages} pages, but only ${currentPages} allocated`,
     );
   });
 });
