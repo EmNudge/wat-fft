@@ -15,12 +15,18 @@ import fftSplitUrl from "../../dist/fft_split_native_f32.wasm?url";
 import rfftCombinedUrl from "../../dist/fft_real_combined.wasm?url";
 // @ts-ignore
 import rfftF32Url from "../../dist/fft_real_f32_dual.wasm?url";
+// @ts-ignore - pffft WASM URL for browser loading (relative path to node_modules)
+import pffftWasmUrl from "../../node_modules/@echogarden/pffft-wasm/dist/simd/pffft.wasm?url";
 
 // Import competitor libraries
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
+// @ts-ignore - pffft-wasm default export is a factory function
+import PFFFT from "@echogarden/pffft-wasm";
+// @ts-ignore - fftw-js is CommonJS but Vite can handle it
+import fftwJs from "fftw-js";
 
 // Types
 export interface FFTContext {
@@ -71,6 +77,22 @@ export const wasmModules = await Promise.all([
   rfftCombined,
   rfftF32,
 }));
+
+// Initialize pffft-wasm with custom locateFile to work in browser
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const pffft: any = await PFFFT({
+  locateFile: (path: string) => {
+    if (path.endsWith(".wasm")) {
+      return pffftWasmUrl;
+    }
+    return path;
+  },
+});
+
+// pffft constants
+const PFFFT_COMPLEX = 1; // NOT 0! (0 = PFFFT_REAL)
+const PFFFT_REAL = 0;
+const PFFFT_FORWARD = 0;
 
 /**
  * Generate random complex input data
@@ -363,6 +385,139 @@ export function createWebFFT(size: number): FFTContext {
     },
     dispose: () => {
       fftInstance.dispose();
+    },
+  };
+}
+
+/**
+ * Create kissfft-js real FFT context
+ */
+export function createKissFFTReal(size: number): FFTContext {
+  const fftInstance = new kissfft.FFTR(size);
+  const inputBuffer = new Float32Array(size);
+
+  return {
+    name: "kissfft-js (real)",
+    size,
+    isReal: true,
+    isF32: true,
+    inputBuffer,
+    run: () => {
+      fftInstance.forward(inputBuffer);
+    },
+    dispose: () => {
+      fftInstance.dispose();
+    },
+  };
+}
+
+/**
+ * Create webfft real FFT context (using kissWasm backend)
+ */
+export function createWebFFTReal(size: number): FFTContext {
+  const fftInstance = new webfft(size);
+  fftInstance.setSubLibrary("kissWasm");
+  const inputBuffer = new Float32Array(size);
+
+  return {
+    name: "webfft (real)",
+    size,
+    isReal: true,
+    isF32: true,
+    inputBuffer,
+    run: () => {
+      fftInstance.fftr(inputBuffer);
+    },
+    dispose: () => {
+      fftInstance.dispose();
+    },
+  };
+}
+
+/**
+ * Create pffft-wasm complex FFT context (SIMD-accelerated f32)
+ * Requires size >= 32
+ */
+export function createPffftComplex(size: number): FFTContext | null {
+  if (size < 32) return null; // pffft minimum size
+
+  const setup = pffft._pffft_new_setup(size, PFFFT_COMPLEX);
+  const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4); // complex f32 = size * 2 floats
+  const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
+
+  const inputBuffer = new Float32Array(size * 2);
+
+  return {
+    name: "pffft-wasm",
+    size,
+    isReal: false,
+    isF32: true,
+    inputBuffer,
+    run: () => {
+      // Copy input to WASM memory
+      const wasmInput = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
+      wasmInput.set(inputBuffer);
+      pffft._pffft_transform_ordered(setup, inputPtr, outputPtr, 0, PFFFT_FORWARD);
+    },
+    dispose: () => {
+      pffft._pffft_aligned_free(inputPtr);
+      pffft._pffft_aligned_free(outputPtr);
+      pffft._pffft_destroy_setup(setup);
+    },
+  };
+}
+
+/**
+ * Create fftw-js real FFT context (f32)
+ */
+export function createFftwJsReal(size: number): FFTContext {
+  const fft = new fftwJs.FFT(size);
+  const inputBuffer = new Float32Array(size);
+
+  return {
+    name: "fftw-js",
+    size,
+    isReal: true,
+    isF32: true,
+    inputBuffer,
+    run: () => {
+      fft.forward(inputBuffer);
+    },
+    dispose: () => {
+      fft.dispose();
+    },
+  };
+}
+
+/**
+ * Create pffft-wasm real FFT context (SIMD-accelerated f32)
+ * Requires size >= 32
+ */
+export function createPffftReal(size: number): FFTContext | null {
+  if (size < 32) return null; // pffft minimum size
+
+  const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
+  const inputPtr = pffft._pffft_aligned_malloc(size * 4); // real f32 = size floats
+  const outputPtr = pffft._pffft_aligned_malloc(size * 4);
+
+  const inputBuffer = new Float32Array(size);
+
+  return {
+    name: "pffft-wasm (real)",
+    size,
+    isReal: true,
+    isF32: true,
+    inputBuffer,
+    run: () => {
+      // Copy input to WASM memory
+      const wasmInput = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
+      wasmInput.set(inputBuffer);
+      pffft._pffft_transform_ordered(setup, inputPtr, outputPtr, 0, PFFFT_FORWARD);
+    },
+    dispose: () => {
+      pffft._pffft_aligned_free(inputPtr);
+      pffft._pffft_aligned_free(outputPtr);
+      pffft._pffft_destroy_setup(setup);
     },
   };
 }

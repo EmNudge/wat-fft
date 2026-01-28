@@ -5,3 +5,6 @@ buildisolate-*.log
 
 # Copied from node_modules by playground setup
 playground/public/pffft.wasm
+
+# Generated benchmark results
+benchmark-results.json
