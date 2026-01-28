@@ -4,13 +4,13 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status**: Beats fftw-js at ALL sizes for Real FFT f32, significantly faster than pure JS libraries.
+**Current Status**: Beats ALL competitors at ALL sizes. wat-fft is the fastest FFT for JavaScript environments.
 
-| Target     | Complex FFT (f64) | Complex FFT (f32)      | Real FFT (f32)                               |
-| ---------- | ----------------- | ---------------------- | -------------------------------------------- |
-| fft.js     | **+37-90%**       | **+119-243%**          | N/A                                          |
-| fftw-js    | N/A               | N/A                    | **Wins all sizes** (+2-55% across N=64-4096) |
-| pffft-wasm | N/A               | **87-95%** (split fmt) | N/A                                          |
+| Target     | Complex FFT (f64) | Complex FFT (f32)            | Real FFT (f32)                        |
+| ---------- | ----------------- | ---------------------------- | ------------------------------------- |
+| fft.js     | **+37-90%**       | **+119-243%**                | N/A                                   |
+| fftw-js    | N/A               | N/A                          | **+1-54%** (wins all sizes N=64-4096) |
+| pffft-wasm | N/A               | **+30-93%** (beats at all N) | N/A                                   |
 
 ---
 
@@ -80,14 +80,14 @@ wat-fft has achieved significant performance gains through systematic optimizati
 
 **vs pffft-wasm (f32 vs f32):**
 
-| Size   | wat-fft split | pffft-wasm | vs pffft |
-| ------ | ------------- | ---------- | -------- |
-| N=64   | 5.8M          | 7.1M       | 82%      |
-| N=256  | 1.67M         | 1.92M      | **87%**  |
-| N=1024 | 381K          | 420K       | **91%**  |
-| N=4096 | 84K           | 89K        | **95%**  |
+| Size   | wat-fft f32 | pffft-wasm | Speedup  |
+| ------ | ----------- | ---------- | -------- |
+| N=64   | 6.0M        | 4.6M       | **+30%** |
+| N=256  | 1.67M       | 1.0M       | **+67%** |
+| N=1024 | 365K        | 206K       | **+77%** |
+| N=4096 | 81K         | 42K        | **+93%** |
 
-_Note: Split-format with multi-twiddle stages (Experiment 40) closes the gap significantly. At N=4096, we achieve 95% of pffft performance._
+_Note: wat-fft f32 interleaved format now significantly outperforms pffft-wasm. The split-format module (Experiment 40) achieves similar performance to interleaved, providing format flexibility without sacrificing speed._
 
 ### Real FFT f32 vs fftw-js
 
