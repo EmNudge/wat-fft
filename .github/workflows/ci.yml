@@ -83,8 +83,8 @@ jobs:
       - name: Lint WASM for dead code
         run: npm run lint:wasm -- --strict
 
-      - name: Run unit tests
-        run: npm test
+      - name: Run all tests
+        run: npm run test:all
 
       - name: Run property tests
         run: npm run test:property

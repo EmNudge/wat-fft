@@ -7,10 +7,13 @@
  * This ensures benchmark comparisons are meaningful - we're comparing
  * against correctly implemented FFTs.
  *
- * IMPORTANT FINDINGS:
- * - pffft-wasm: Uses PFFFT_COMPLEX=1 (not 0). The benchmarks have this wrong!
+ * NOTES:
+ * - pffft-wasm: Uses PFFFT_COMPLEX=1, PFFFT_REAL=0 (see benchmarks/lib/competitors.js)
  * - kissfft-js: Uses f32 internally despite accepting Float64Array
  * - fftw-js: Export is fftw.FFT (not fftw.FFTW)
+ *
+ * See also: tests/benchmark-correctness.test.js for validation that
+ * benchmarks use the same configuration as these correctness tests.
  */
 
 import { test } from "node:test";
@@ -260,16 +263,15 @@ test("webfft correctness", async (t) => {
 
 // =============================================================================
 // pffft-wasm - PFFFT with SIMD support
-// IMPORTANT: PFFFT_COMPLEX = 1 (not 0!) - the benchmark files have this wrong!
+// Uses shared config from benchmarks/lib/competitors.js to ensure consistency
 // =============================================================================
 test("pffft-wasm correctness", async (t) => {
   const pffft = await PFFFT();
 
-  // CORRECT enum values from pffft.h:
-  // typedef enum { PFFFT_REAL, PFFFT_COMPLEX } pffft_transform_t;
-  // typedef enum { PFFFT_FORWARD, PFFFT_BACKWARD } pffft_direction_t;
-  const PFFFT_COMPLEX = 1; // NOT 0!
-  const PFFFT_FORWARD = 0;
+  // Import from shared config to ensure benchmarks and tests use same values
+  const { PFFFT: PFFFT_CONFIG } = await import("../benchmarks/lib/competitors.js");
+  const PFFFT_COMPLEX = PFFFT_CONFIG.COMPLEX;
+  const PFFFT_FORWARD = PFFFT_CONFIG.FORWARD;
 
   // pffft requires minimum size of 32 for complex FFT
   const pffftSizes = QUICK_SIZES.filter((s) => s >= 32);
@@ -444,13 +446,15 @@ test("webfft correctness (Real FFT)", async (t) => {
 
 // =============================================================================
 // pffft-wasm - Real FFT (PFFFT_REAL mode)
-// NOTE: Output format packs DC and Nyquist as real[0] + i*Nyquist
+// Uses shared config from benchmarks/lib/competitors.js to ensure consistency
 // =============================================================================
 test("pffft-wasm correctness (Real FFT)", async (t) => {
   const pffft = await PFFFT();
 
-  const PFFFT_REAL = 0;
-  const PFFFT_FORWARD = 0;
+  // Import from shared config to ensure benchmarks and tests use same values
+  const { PFFFT: PFFFT_CONFIG } = await import("../benchmarks/lib/competitors.js");
+  const PFFFT_REAL = PFFFT_CONFIG.REAL;
+  const PFFFT_FORWARD = PFFFT_CONFIG.FORWARD;
 
   // pffft real FFT requires minimum size of 32
   const pffftSizes = QUICK_SIZES.filter((s) => s >= 32);
