@@ -169,8 +169,9 @@ async function runBenchmarks() {
     results.push(webfftResult);
 
     // 5. pffft-wasm (PFFFT with SIMD support) - requires size >= 32
+    // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
     if (size >= 32) {
-      const PFFFT_REAL = 1;
+      const PFFFT_REAL = 0;
       const PFFFT_FORWARD = 0;
       const pffftResult = runBenchmark(
         "pffft-wasm (f32)",

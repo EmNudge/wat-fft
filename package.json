@@ -31,9 +31,10 @@
   },
   "scripts": {
     "test": "npm run test:fft && npm run test:combined && npm run test:ifft",
-    "test:all": "npm run test && npm run test:rfft && npm run test:boundary && npm run test:correctness && npm run test:output-order && npm run test:f32 && npm run test:twiddles && npm run test:golden && npm run test:perbin && npm run test:split && npm run test:thirdparty",
+    "test:all": "npm run test && npm run test:rfft && npm run test:boundary && npm run test:correctness && npm run test:output-order && npm run test:f32 && npm run test:twiddles && npm run test:golden && npm run test:perbin && npm run test:split && npm run test:thirdparty && npm run test:bench-correctness",
     "test:split": "node --test tests/fft_split_native.test.js",
     "test:thirdparty": "node --test tests/third-party-correctness.test.js",
+    "test:bench-correctness": "node --test tests/benchmark-correctness.test.js",
     "test:ifft": "node tests/ifft.test.js",
     "test:twiddles": "node tests/twiddle_validation.test.js",
     "test:property": "node --test tests/property_based.test.js",

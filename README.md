@@ -10,13 +10,13 @@ Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft
 
 | Size   | wat-fft (f32)       | pffft-wasm (f32) | Speedup  |
 | ------ | ------------------- | ---------------- | -------- |
-| N=64   | **6,250,000 ops/s** | 4,560,000 ops/s  | **+37%** |
-| N=128  | **3,090,000 ops/s** | 1,970,000 ops/s  | **+57%** |
-| N=256  | **1,640,000 ops/s** | 1,000,000 ops/s  | **+64%** |
-| N=512  | **735,000 ops/s**   | 410,000 ops/s    | **+79%** |
-| N=1024 | **365,000 ops/s**   | 205,000 ops/s    | **+78%** |
-| N=2048 | **163,000 ops/s**   | 87,000 ops/s     | **+87%** |
-| N=4096 | **80,500 ops/s**    | 42,300 ops/s     | **+90%** |
+| N=64   | **6,040,000 ops/s** | 4,440,000 ops/s  | **+36%** |
+| N=128  | **3,040,000 ops/s** | 1,950,000 ops/s  | **+56%** |
+| N=256  | **1,640,000 ops/s** | 980,000 ops/s    | **+67%** |
+| N=512  | **736,000 ops/s**   | 404,000 ops/s    | **+82%** |
+| N=1024 | **365,000 ops/s**   | 201,000 ops/s    | **+81%** |
+| N=2048 | **163,000 ops/s**   | 84,000 ops/s     | **+94%** |
+| N=4096 | **81,000 ops/s**    | 41,000 ops/s     | **+95%** |
 
 ```mermaid
 ---
@@ -32,30 +32,30 @@ xychart-beta
     title "Complex FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 7
-    line [3.84, 1.74, 0.97, 0.37, 0.20, 0.079, 0.044]
-    line [6.25, 3.09, 1.64, 0.74, 0.37, 0.163, 0.081]
-    line [4.56, 1.97, 1.00, 0.41, 0.20, 0.087, 0.042]
-    line [2.79, 1.09, 0.56, 0.22, 0.11, 0.047, 0.024]
-    line [1.90, 0.80, 0.44, 0.18, 0.10, 0.041, 0.022]
+    line [3.83, 1.74, 0.96, 0.37, 0.19, 0.080, 0.044]
+    line [6.04, 3.04, 1.64, 0.74, 0.36, 0.163, 0.081]
+    line [4.44, 1.95, 0.98, 0.40, 0.20, 0.084, 0.041]
+    line [2.80, 1.07, 0.56, 0.22, 0.11, 0.047, 0.023]
+    line [1.86, 0.80, 0.44, 0.18, 0.10, 0.041, 0.022]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟠 **pffft-wasm** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**wat-fft f32 beats pffft-wasm by 37-90%** across all sizes. It's also **2-3.4x faster** than fft.js (the fastest pure JS). **Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats pffft-wasm by 36-95%** across all sizes. It's also **2-3x faster** than fft.js (the fastest pure JS). **Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum single-precision speed.
 
 ### Real FFT
 
-Benchmarked against [fftw-js](https://www.npmjs.com/package/fftw-js) (Emscripten port of FFTW):
+Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) and [fftw-js](https://www.npmjs.com/package/fftw-js):
 
-| Size   | wat-fft (f32)       | fftw-js (f32)   | vs fftw-js |
-| ------ | ------------------- | --------------- | ---------- |
-| N=64   | **6,690,000 ops/s** | 6,730,000 ops/s | **~tied**  |
-| N=128  | **4,610,000 ops/s** | 4,250,000 ops/s | **+9%**    |
-| N=256  | **2,130,000 ops/s** | 1,460,000 ops/s | **+46%**   |
-| N=512  | **1,180,000 ops/s** | 887,000 ops/s   | **+33%**   |
-| N=1024 | **527,000 ops/s**   | 454,000 ops/s   | **+16%**   |
-| N=2048 | **274,000 ops/s**   | 224,000 ops/s   | **+23%**   |
-| N=4096 | **125,000 ops/s**   | 104,000 ops/s   | **+20%**   |
+| Size   | wat-fft (f32)       | pffft-wasm (f32)    | fftw-js (f32)   | vs best     |
+| ------ | ------------------- | ------------------- | --------------- | ----------- |
+| N=64   | 6,640,000 ops/s     | **6,970,000 ops/s** | 6,660,000 ops/s | -5% (pffft) |
+| N=128  | **4,510,000 ops/s** | 3,490,000 ops/s     | 4,290,000 ops/s | **+5%**     |
+| N=256  | **2,280,000 ops/s** | 1,920,000 ops/s     | 1,440,000 ops/s | **+19%**    |
+| N=512  | **1,110,000 ops/s** | 830,000 ops/s       | 850,000 ops/s   | **+31%**    |
+| N=1024 | **531,000 ops/s**   | 419,000 ops/s       | 458,000 ops/s   | **+16%**    |
+| N=2048 | **274,000 ops/s**   | 179,000 ops/s       | 222,000 ops/s   | **+23%**    |
+| N=4096 | **126,000 ops/s**   | 89,000 ops/s        | 106,000 ops/s   | **+19%**    |
 
 ```mermaid
 ---
@@ -71,16 +71,16 @@ xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 8
-    line [4.74, 2.93, 1.27, 0.75, 0.28, 0.16, 0.063]
-    line [6.69, 4.61, 2.13, 1.18, 0.527, 0.274, 0.125]
-    line [6.73, 4.25, 1.46, 0.89, 0.454, 0.224, 0.104]
-    line [4.51, 1.94, 0.99, 0.40, 0.20, 0.085, 0.041]
-    line [2.85, 1.75, 0.75, 0.41, 0.17, 0.092, 0.039]
+    line [4.70, 2.95, 1.28, 0.76, 0.29, 0.16, 0.063]
+    line [6.64, 4.51, 2.28, 1.11, 0.53, 0.27, 0.126]
+    line [6.66, 4.29, 1.44, 0.85, 0.46, 0.22, 0.106]
+    line [6.97, 3.49, 1.92, 0.83, 0.42, 0.18, 0.089]
+    line [2.93, 1.79, 0.76, 0.42, 0.17, 0.094, 0.039]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats fftw-js at N≥128** (+9% to +46%). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats all competitors at N≥128** (+5% to +31%). At N=64, pffft-wasm has a slight edge. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
 ## Quick Start
 
