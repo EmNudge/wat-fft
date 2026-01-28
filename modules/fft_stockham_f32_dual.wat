@@ -301,6 +301,238 @@
 
 
   ;; ============================================================================
+  ;; N=16 Radix-4 Codelet (single-complex per lane, matching f64 structure)
+  ;; ============================================================================
+  ;; Uses radix-4 algorithm: 2 stages instead of 4 stages for radix-2.
+  ;; Each v128 holds one f32 complex in low 64 bits [re, im, 0, 0].
+  ;; This matches the successful f64 approach but with f32 precision.
+  ;;
+  ;; Stage 1: Four radix-4 butterflies on groups (0,4,8,12), (1,5,9,13), etc.
+  ;; Stage 2: Four radix-4 butterflies with twiddle factors
+
+  (func $fft_16
+    (local $x0 v128) (local $x1 v128) (local $x2 v128) (local $x3 v128)
+    (local $x4 v128) (local $x5 v128) (local $x6 v128) (local $x7 v128)
+    (local $x8 v128) (local $x9 v128) (local $x10 v128) (local $x11 v128)
+    (local $x12 v128) (local $x13 v128) (local $x14 v128) (local $x15 v128)
+    (local $t0 v128) (local $t1 v128) (local $t2 v128) (local $t3 v128)
+    (local $tmp v128)
+
+    ;; Load all 16 complex numbers (8 bytes each = 64 bits)
+    (local.set $x0 (v128.load64_zero (i32.const 0)))
+    (local.set $x1 (v128.load64_zero (i32.const 8)))
+    (local.set $x2 (v128.load64_zero (i32.const 16)))
+    (local.set $x3 (v128.load64_zero (i32.const 24)))
+    (local.set $x4 (v128.load64_zero (i32.const 32)))
+    (local.set $x5 (v128.load64_zero (i32.const 40)))
+    (local.set $x6 (v128.load64_zero (i32.const 48)))
+    (local.set $x7 (v128.load64_zero (i32.const 56)))
+    (local.set $x8 (v128.load64_zero (i32.const 64)))
+    (local.set $x9 (v128.load64_zero (i32.const 72)))
+    (local.set $x10 (v128.load64_zero (i32.const 80)))
+    (local.set $x11 (v128.load64_zero (i32.const 88)))
+    (local.set $x12 (v128.load64_zero (i32.const 96)))
+    (local.set $x13 (v128.load64_zero (i32.const 104)))
+    (local.set $x14 (v128.load64_zero (i32.const 112)))
+    (local.set $x15 (v128.load64_zero (i32.const 120)))
+
+    ;; ============================================================================
+    ;; Stage 1: Four radix-4 butterflies (no twiddles)
+    ;; ============================================================================
+
+    ;; Group 0: x0, x4, x8, x12
+    (local.set $t0 (f32x4.add (local.get $x0) (local.get $x8)))
+    (local.set $t1 (f32x4.sub (local.get $x0) (local.get $x8)))
+    (local.set $t2 (f32x4.add (local.get $x4) (local.get $x12)))
+    (local.set $t3 (f32x4.sub (local.get $x4) (local.get $x12)))
+    ;; t3 *= -j: [re,im] -> [im,-re]
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $x0 (f32x4.add (local.get $t0) (local.get $t2)))
+    (local.set $x4 (f32x4.add (local.get $t1) (local.get $t3)))
+    (local.set $x8 (f32x4.sub (local.get $t0) (local.get $t2)))
+    (local.set $x12 (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 1: x1, x5, x9, x13
+    (local.set $t0 (f32x4.add (local.get $x1) (local.get $x9)))
+    (local.set $t1 (f32x4.sub (local.get $x1) (local.get $x9)))
+    (local.set $t2 (f32x4.add (local.get $x5) (local.get $x13)))
+    (local.set $t3 (f32x4.sub (local.get $x5) (local.get $x13)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $x1 (f32x4.add (local.get $t0) (local.get $t2)))
+    (local.set $x5 (f32x4.add (local.get $t1) (local.get $t3)))
+    (local.set $x9 (f32x4.sub (local.get $t0) (local.get $t2)))
+    (local.set $x13 (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 2: x2, x6, x10, x14
+    (local.set $t0 (f32x4.add (local.get $x2) (local.get $x10)))
+    (local.set $t1 (f32x4.sub (local.get $x2) (local.get $x10)))
+    (local.set $t2 (f32x4.add (local.get $x6) (local.get $x14)))
+    (local.set $t3 (f32x4.sub (local.get $x6) (local.get $x14)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $x2 (f32x4.add (local.get $t0) (local.get $t2)))
+    (local.set $x6 (f32x4.add (local.get $t1) (local.get $t3)))
+    (local.set $x10 (f32x4.sub (local.get $t0) (local.get $t2)))
+    (local.set $x14 (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 3: x3, x7, x11, x15
+    (local.set $t0 (f32x4.add (local.get $x3) (local.get $x11)))
+    (local.set $t1 (f32x4.sub (local.get $x3) (local.get $x11)))
+    (local.set $t2 (f32x4.add (local.get $x7) (local.get $x15)))
+    (local.set $t3 (f32x4.sub (local.get $x7) (local.get $x15)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (local.set $x3 (f32x4.add (local.get $t0) (local.get $t2)))
+    (local.set $x7 (f32x4.add (local.get $t1) (local.get $t3)))
+    (local.set $x11 (f32x4.sub (local.get $t0) (local.get $t2)))
+    (local.set $x15 (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; ============================================================================
+    ;; Stage 2: Four radix-4 butterflies with twiddles
+    ;; Twiddles: W_16^k = e^(-2πik/16) = (cos(πk/8), -sin(πk/8))
+    ;; W_16^1 = (0.9238795, -0.3826834)
+    ;; W_16^2 = (0.7071068, -0.7071068)
+    ;; W_16^3 = (0.3826834, -0.9238795)
+    ;; W_16^4 = (0, -1) = -j
+    ;; W_16^6 = (-0.7071068, -0.7071068)
+    ;; W_16^9 = (-0.9238795, 0.3826834)
+    ;; ============================================================================
+
+    ;; Group 0: x0, x1, x2, x3 -> outputs 0,4,8,12 (no twiddles)
+    (local.set $t0 (f32x4.add (local.get $x0) (local.get $x2)))
+    (local.set $t1 (f32x4.sub (local.get $x0) (local.get $x2)))
+    (local.set $t2 (f32x4.add (local.get $x1) (local.get $x3)))
+    (local.set $t3 (f32x4.sub (local.get $x1) (local.get $x3)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (v128.store64_lane 0 (i32.const 0) (f32x4.add (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 32) (f32x4.add (local.get $t1) (local.get $t3)))
+    (v128.store64_lane 0 (i32.const 64) (f32x4.sub (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 96) (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 1: x4, x5, x6, x7 -> outputs 1,5,9,13
+    ;; Apply W_16^1 to x5, W_16^2 to x6, W_16^3 to x7
+    ;; cmul: (a+bi)(c+di) = (ac-bd, ad+bc)
+    ;; Using inline complex multiply: result = a*wr + swap(a)*wi*sign
+    (local.set $tmp (local.get $x5))
+    (local.set $x5 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.9238795 0.9238795 0.9238795 0.9238795))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.3826834 -0.3826834 -0.3826834 -0.3826834))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $tmp (local.get $x6))
+    (local.set $x6 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $tmp (local.get $x7))
+    (local.set $x7 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $t0 (f32x4.add (local.get $x4) (local.get $x6)))
+    (local.set $t1 (f32x4.sub (local.get $x4) (local.get $x6)))
+    (local.set $t2 (f32x4.add (local.get $x5) (local.get $x7)))
+    (local.set $t3 (f32x4.sub (local.get $x5) (local.get $x7)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (v128.store64_lane 0 (i32.const 8) (f32x4.add (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 40) (f32x4.add (local.get $t1) (local.get $t3)))
+    (v128.store64_lane 0 (i32.const 72) (f32x4.sub (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 104) (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 2: x8, x9, x10, x11 -> outputs 2,6,10,14
+    ;; Apply W_16^2 to x9, W_16^4=-j to x10, W_16^6 to x11
+    (local.set $tmp (local.get $x9))
+    (local.set $x9 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.7071068 0.7071068 0.7071068 0.7071068))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    ;; x10 *= -j: [re,im] -> [im,-re]
+    (local.set $x10 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $x10) (local.get $x10))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+    (local.set $tmp (local.get $x11))
+    (local.set $x11 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $t0 (f32x4.add (local.get $x8) (local.get $x10)))
+    (local.set $t1 (f32x4.sub (local.get $x8) (local.get $x10)))
+    (local.set $t2 (f32x4.add (local.get $x9) (local.get $x11)))
+    (local.set $t3 (f32x4.sub (local.get $x9) (local.get $x11)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (v128.store64_lane 0 (i32.const 16) (f32x4.add (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 48) (f32x4.add (local.get $t1) (local.get $t3)))
+    (v128.store64_lane 0 (i32.const 80) (f32x4.sub (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 112) (f32x4.sub (local.get $t1) (local.get $t3)))
+
+    ;; Group 3: x12, x13, x14, x15 -> outputs 3,7,11,15
+    ;; Apply W_16^3 to x13, W_16^6 to x14, W_16^9 to x15
+    (local.set $tmp (local.get $x13))
+    (local.set $x13 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $tmp (local.get $x14))
+    (local.set $x14 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 -0.7071068 -0.7071068 -0.7071068 -0.7071068))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $tmp (local.get $x15))
+    (local.set $x15 (f32x4.add
+      (f32x4.mul (local.get $tmp) (v128.const f32x4 -0.9238795 -0.9238795 -0.9238795 -0.9238795))
+      (f32x4.mul
+        (f32x4.mul (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $tmp) (local.get $tmp))
+                   (v128.const f32x4 0.3826834 0.3826834 0.3826834 0.3826834))
+        (v128.const f32x4 -1.0 1.0 -1.0 1.0))))
+
+    (local.set $t0 (f32x4.add (local.get $x12) (local.get $x14)))
+    (local.set $t1 (f32x4.sub (local.get $x12) (local.get $x14)))
+    (local.set $t2 (f32x4.add (local.get $x13) (local.get $x15)))
+    (local.set $t3 (f32x4.sub (local.get $x13) (local.get $x15)))
+    (local.set $t3 (f32x4.mul
+      (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $t3) (local.get $t3))
+      (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+    (v128.store64_lane 0 (i32.const 24) (f32x4.add (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 56) (f32x4.add (local.get $t1) (local.get $t3)))
+    (v128.store64_lane 0 (i32.const 88) (f32x4.sub (local.get $t0) (local.get $t2)))
+    (v128.store64_lane 0 (i32.const 120) (f32x4.sub (local.get $t1) (local.get $t3)))
+  )
+
+
+  ;; ============================================================================
   ;; General Dual-Complex Stockham FFT
   ;; ============================================================================
   ;; Processes 2 complex numbers per butterfly using full f32x4 SIMD
@@ -751,12 +983,19 @@
   ;; Main FFT Entry Point
   ;; ============================================================================
 
-  (func (export "fft") (param $n i32)
+  ;; Internal dispatch function used by both fft and ifft
+  (func $fft_dispatch (param $n i32)
     (if (i32.eq (local.get $n) (i32.const 4))
       (then (call $fft_4) (return)))
     (if (i32.eq (local.get $n) (i32.const 8))
       (then (call $fft_8_dit) (return)))
+    (if (i32.eq (local.get $n) (i32.const 16))
+      (then (call $fft_16) (return)))
     (call $fft_general (local.get $n))
+  )
+
+  (func (export "fft") (param $n i32)
+    (call $fft_dispatch (local.get $n))
   )
 
 
@@ -780,8 +1019,9 @@
       (then (call $ifft_4) (return)))
 
     ;; General case: conj -> FFT -> conj+scale
+    ;; Note: We use $fft_dispatch to ensure consistency with forward FFT
     (call $conjugate_buffer (local.get $n))
-    (call $fft_general (local.get $n))
+    (call $fft_dispatch (local.get $n))
     (call $scale_and_conjugate (local.get $n))
   )
 )

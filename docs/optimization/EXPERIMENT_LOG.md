@@ -50,6 +50,7 @@ Detailed record of all optimization experiments.
 | 41  | Buffer Copy Unrolling       | INCONCLUSIVE     | Within variance, V8 handles simple loops well    |
 | 42  | Performance Analysis        | COMPLETE         | Optimization complete; beats all competitors     |
 | 43  | SIMD Split-Format IFFT      | SUCCESS          | 4x throughput for IFFT conjugation phases        |
+| 44  | f32 N=16 Radix-4 Codelet    | SUCCESS +18%     | Radix-4 codelet closes gap with f64              |
 
 ---
 
@@ -1264,3 +1265,47 @@ Further gains would require:
 **Lesson**: Consistency across modules makes the codebase easier to maintain. SIMD patterns that work in one module should be applied systematically.
 
 **Files modified**: `modules/fft_split_native_f32.wat`
+
+---
+
+## Experiment 44: f32 N=16 Radix-4 Codelet (2026-01-28)
+
+**Goal**: Improve f32 complex FFT performance at N=16, which underperformed f64.
+
+**Observation**: The f32 complex FFT at N=16 (14.1M ops/s) was 20% slower than f64 (17.6M ops/s). This is counterintuitive since f32 should be faster due to 2x SIMD throughput. The f32 module fell through to `$fft_general` for N=16, while f64 had a specialized `$fft_16` radix-4 codelet.
+
+**Hypothesis**: A radix-4 N=16 codelet for f32 would eliminate loop overhead and match f64 performance.
+
+**Approach**:
+
+- Port the f64 `$fft_16` radix-4 algorithm to f32
+- Use single-complex-per-lane (like f64) rather than dual-complex packing
+- 2 stages instead of 4 for radix-2 Stockham
+- Hardcoded twiddle factors (W_16^k for k=1,2,3,4,6,9)
+- Update dispatch in both `fft` and `ifft` paths (via shared `$fft_dispatch`)
+
+**Result**: SUCCESS - +18% improvement at N=16
+
+| Metric        | Before     | After      | Change |
+| ------------- | ---------- | ---------- | ------ |
+| f32 N=16      | 14.1M op/s | 16.7M op/s | +18%   |
+| Gap vs f64    | 20% slower | 5% slower  | +15pp  |
+| vs pffft-wasm | +0%        | +20%       | +20pp  |
+| vs fft.js     | +22%       | +45%       | +23pp  |
+
+**Analysis**:
+
+The radix-4 algorithm reduces N=16 from 4 stages (radix-2) to 2 stages. Key benefits:
+
+1. **Fewer iterations**: 2 stages × 4 groups vs 4 stages × varying groups
+2. **No loop overhead**: Fully unrolled butterflies
+3. **Inline twiddles**: `v128.const` eliminates memory loads
+4. **Better register usage**: 20 locals vs dynamic allocation in general loop
+
+The f32 codelet uses the same single-complex-per-lane approach as f64. Dual-complex packing was attempted but the complex shuffling required for radix-4 negated the benefits (similar to Experiment 34's N=16 DIT finding).
+
+**Key implementation detail**: The IFFT was initially broken because it called `$fft_general` directly instead of going through dispatch. Fixed by creating a shared `$fft_dispatch` function used by both `fft` export and `ifft`.
+
+**Lesson**: When f32 underperforms f64 at a specific size, check if f64 has a specialized codelet that f32 lacks. Direct algorithm ports often work well.
+
+**Files modified**: `modules/fft_stockham_f32_dual.wat`
