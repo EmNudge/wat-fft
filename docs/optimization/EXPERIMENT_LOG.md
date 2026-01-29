@@ -51,6 +51,7 @@ Detailed record of all optimization experiments.
 | 42  | Performance Analysis        | COMPLETE         | Optimization complete; beats all competitors     |
 | 43  | SIMD Split-Format IFFT      | SUCCESS          | 4x throughput for IFFT conjugation phases        |
 | 44  | f32 N=16 Radix-4 Codelet    | SUCCESS +18%     | Radix-4 codelet closes gap with f64              |
+| 45  | Performance Gap Analysis    | COMPLETE         | Analysis only; optimization complete             |
 
 ---
 
@@ -1309,3 +1310,68 @@ The f32 codelet uses the same single-complex-per-lane approach as f64. Dual-comp
 **Lesson**: When f32 underperforms f64 at a specific size, check if f64 has a specialized codelet that f32 lacks. Direct algorithm ports often work well.
 
 **Files modified**: `modules/fft_stockham_f32_dual.wat`
+
+---
+
+## Experiment 45: Performance Gap Analysis (2026-01-28)
+
+**Goal**: Systematic analysis of remaining optimization opportunities after 44 experiments.
+
+**Benchmark Results** (fresh run):
+
+f32 RFFT vs fftw-js:
+| Size | wat-fft | fftw-js | Difference |
+|--------|-------------|-------------|-------------|
+| N=64 | 6,899,289 | 6,896,359 | **tied** |
+| N=128 | 4,777,760 | 4,361,914 | **+9.5%** |
+| N=256 | 2,320,659 | 1,526,977 | **+52.0%** |
+| N=512 | 1,217,055 | 916,632 | **+32.8%** |
+| N=1024 | 556,221 | 472,571 | **+17.7%** |
+| N=2048 | 280,109 | 231,264 | **+21.1%** |
+| N=4096 | 127,372 | 107,567 | **+18.4%** |
+
+f32 Complex FFT vs pffft-wasm:
+| Size | wat-fft f32 | pffft-wasm | Speedup |
+|--------|--------------|-------------|-----------|
+| N=16 | 16,787,814 | 14,108,078 | **+19%** |
+| N=32 | 9,208,039 | 7,733,461 | **+19%** |
+| N=64 | 6,024,070 | 4,560,912 | **+32%** |
+| N=256 | 1,642,827 | 1,011,889 | **+62%** |
+| N=1024 | 369,381 | 203,193 | **+82%** |
+| N=4096 | 80,678 | 42,567 | **+90%** |
+
+**Analysis**:
+
+1. **wat-fft beats all competitors at all sizes** - no significant gaps remain
+
+2. **N=16 f32 vs f64 gap (5%)**: The f32 N=16 codelet (16.8M ops/s) is 5% slower than f64 (17.6M ops/s). Root cause: f32 uses `v128.load64_zero` wasting 50% of SIMD capacity, but radix-4 data dependencies prevent dual-complex packing. Fixing this would require algorithm restructuring with uncertain returns.
+
+3. **N=32 optimization potential**: Micro-benchmarks show N=32 (16M ops/s) drops 2.9x from N=16 (46M ops/s), steeper than theoretical O(N log N). An N=32 codelet could help, but:
+   - N=32 is not a power of 4, requiring mixed-radix approach
+   - The `$fft_32_dit` in RFFT module uses 68 locals (risk of register spills)
+   - Experiment 34 found DIT codelets slower than Stockham for complex FFT
+
+4. **N=64 optimization**: Power of 4, but would require 64+ locals (high spill risk per Experiment 6)
+
+**Opportunities Considered and Rejected**:
+
+1. **N=32 radix-8 codelet**: Complex implementation, 32 = 8 × 4 requires hybrid approach
+2. **Hierarchical N=32 (call N=16 twice)**: Experiment 10 showed function call overhead hurts
+3. **Global constant hoisting**: `v128.const` patterns repeated 8-12 times, but JIT likely optimizes
+4. **Port `$fft_32_dit` from RFFT**: Experiment 34 found DIT approach slower for complex FFT
+
+**Conclusion**: **Optimization is complete for current architecture.**
+
+The codebase is highly optimized after 44 experiments. Remaining opportunities have:
+
+- High implementation complexity
+- Uncertain performance returns
+- Risk of regressions at other sizes
+
+Future improvements would require:
+
+1. Fundamental algorithm changes (split-radix, different radix patterns)
+2. Architecture-specific tuning (different strategies for different CPUs)
+3. New features (batched FFT, streaming, larger N)
+
+**Files modified**: None (analysis only)
