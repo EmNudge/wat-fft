@@ -58,7 +58,7 @@
     "debug:index": "node tools/index_visualizer.js",
     "debug:perm": "node tools/permutation_validator.js",
     "debug:ref": "node tools/stockham_reference.js",
-    "debug:split": "vitest run --config vitest.node.config.ts tools/fft_split_f32_debug.js",
+    "debug:split": "node tests/debug_split.js",
     "build": "node build.js",
     "bench": "node benchmarks/fft.bench.js",
     "bench:rfft": "node benchmarks/rfft.bench.js",

@@ -13,14 +13,12 @@ import PFFFT from "@echogarden/pffft-wasm";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Load WASM module with sin/cos imports
-async function loadWasmWithMath(name) {
+// Load WASM module (no imports needed)
+async function loadWasm(name) {
   const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
   const wasmBuffer = fs.readFileSync(wasmPath);
   const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {
-    env: { sin: Math.sin, cos: Math.cos },
-  });
+  const instance = await WebAssembly.instantiate(wasmModule);
   return instance.exports;
 }
 
@@ -64,16 +62,16 @@ async function runBenchmarks() {
   console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
   console.log("");
 
-  const wasmSplit = await loadWasmWithMath("fft_split_f32");
+  const wasmSplit = await loadWasm("fft_split_native_f32");
   const pffft = await PFFFT();
 
   // PFFFT enum: { PFFFT_REAL=0, PFFFT_COMPLEX=1 }
   const PFFFT_COMPLEX = 1;
   const PFFFT_FORWARD = 0;
 
-  // Constants for split format memory layout
-  const SPLIT_RE_OFFSET = 32768;
-  const SPLIT_IM_OFFSET = 65536;
+  // Constants for split format memory layout (from fft_split_native_f32)
+  const SPLIT_RE_OFFSET = 0; // REAL_A_OFFSET
+  const SPLIT_IM_OFFSET = 0x8000; // IMAG_A_OFFSET (32768)
 
   for (const n of SIZES) {
     console.log("-".repeat(75));
@@ -82,8 +80,7 @@ async function runBenchmarks() {
 
     const results = [];
 
-    // 1. Split-format FFT kernel only (no format conversion)
-    // Pre-fill split buffers with data
+    // 1. Split-format FFT kernel only (native split format, no conversion)
     const splitResult = runBenchmark(
       "wat-fft split (kernel only)",
       () => {
@@ -97,14 +94,11 @@ async function runBenchmarks() {
           imBuffer[i] = Math.random() * 2 - 1;
         }
 
-        wasmSplit.precompute_twiddles(n);
+        wasmSplit.precompute_twiddles_split(n);
         return { memory, n };
       },
       (ctx) => {
-        // Call internal FFT function if exported, otherwise use SIMD path
-        // For now, we need to export the internal function
-        // Let's measure the full fft() which includes conversion
-        wasmSplit.fft(ctx.n);
+        wasmSplit.fft_split(ctx.n);
       },
     );
     results.push(splitResult);

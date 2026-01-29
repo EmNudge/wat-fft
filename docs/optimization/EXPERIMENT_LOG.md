@@ -52,6 +52,7 @@ Detailed record of all optimization experiments.
 | 43  | SIMD Split-Format IFFT      | SUCCESS          | 4x throughput for IFFT conjugation phases        |
 | 44  | f32 N=16 Radix-4 Codelet    | SUCCESS +18%     | Radix-4 codelet closes gap with f64              |
 | 45  | Performance Gap Analysis    | COMPLETE         | Analysis only; optimization complete             |
+| 46  | Dead Code Cleanup           | SUCCESS          | Removed unused fft_split_f32.wat (536 lines)     |
 
 ---
 
@@ -1375,3 +1376,40 @@ Future improvements would require:
 3. New features (batched FFT, streaming, larger N)
 
 **Files modified**: None (analysis only)
+
+---
+
+## Experiment 46: Dead Code Cleanup (2026-01-28)
+
+**Goal**: Remove unused `fft_split_f32.wat` module discovered during performance analysis.
+
+**Background**: The `fft_split_f32.wat` module (536 lines) was created in Experiment 37 as an initial split-format implementation, but was superseded by `fft_split_native_f32.wat` in Experiment 39. The old module:
+
+- Was NOT included in build.js (not compiled)
+- Had no test coverage in the main test suite
+- Was only referenced by debug tools and benchmarks
+- Used incorrect memory offsets (different from the native split module)
+
+**Files removed**:
+
+- `modules/fft_split_f32.wat` - 536 lines of dead code
+- `tools/fft_split_f32_debug.js` - Associated debug tool
+- `benchmarks/fft_split_f32.bench.js` - Associated benchmark
+
+**Files updated**:
+
+- `benchmarks/fft_kernel_only.bench.js` - Updated to use `fft_split_native_f32` instead
+- `package.json` - Updated debug:split script
+- `tools/README.md` - Removed reference to deleted tool
+
+**Result**: SUCCESS - Cleaner codebase, no production impact
+
+| Metric             | Before   | After    |
+| ------------------ | -------- | -------- |
+| modules/ total WAT | 7,610    | 7,074    |
+| Dead source files  | 3        | 0        |
+| Build output       | Same     | Same     |
+| Tests              | All pass | All pass |
+| Kernel benchmark   | Works    | Works    |
+
+**Lesson**: Regular dead code audits prevent accumulation of unused code. The `fft_split_f32.wat` was kept "for reference" but served no purpose since the native split module has different API and memory layout.
