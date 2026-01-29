@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 40 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 45 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
