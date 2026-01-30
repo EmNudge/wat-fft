@@ -3,15 +3,10 @@ name: Publish to npm
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: "Version bump type"
+      version:
+        description: "Version to publish (e.g., 1.2.3). Leave empty to publish latest release."
         required: false
-        default: "minor"
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+        type: string
 
 jobs:
   publish:
@@ -26,63 +21,53 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check for existing release at HEAD
-        id: check-release
-        run: |
-          HEAD_SHA=$(git rev-parse HEAD)
-          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-
-          # Check if any tag points to HEAD
-          TAG_AT_HEAD=$(git tag --points-at HEAD | grep '^v' | head -n1 || true)
-
-          if [ -n "$TAG_AT_HEAD" ]; then
-            echo "Found existing release: $TAG_AT_HEAD"
-            echo "tag=$TAG_AT_HEAD" >> "$GITHUB_OUTPUT"
-            echo "version=${TAG_AT_HEAD#v}" >> "$GITHUB_OUTPUT"
-            echo "needs_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "No release found at HEAD, will create one"
-            echo "needs_release=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Determine new version
-        if: steps.check-release.outputs.needs_release == 'true'
-        id: new-version
+      - name: Determine version and release strategy
+        id: version-check
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           # Get the latest tag
           LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+          LATEST_VERSION="${LATEST_TAG#v}"
+          echo "Latest release: ${LATEST_TAG:-none}"
 
-          if [ -z "$LATEST_TAG" ]; then
-            # No existing tags, start at 0.1.0
-            VERSION="0.1.0"
+          # Helper function to compare semver (returns 0 if $1 > $2)
+          version_gt() {
+            [ "$(printf '%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ] && [ "$1" != "$2" ]
+          }
+
+          if [ -z "$INPUT_VERSION" ]; then
+            # No version specified - publish latest release
+            if [ -z "$LATEST_TAG" ]; then
+              echo "::error::No existing releases found. Please specify a version to create the first release."
+              exit 1
+            fi
+            echo "Publishing latest release: $LATEST_TAG"
+            echo "version=$LATEST_VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+            echo "needs_release=false" >> "$GITHUB_OUTPUT"
           else
-            # Parse current version
-            CURRENT="${LATEST_TAG#v}"
-            MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-            MINOR=$(echo "$CURRENT" | cut -d. -f2)
-            PATCH=$(echo "$CURRENT" | cut -d. -f3)
+            # Version specified - check if it exists or needs to be created
+            TARGET_VERSION="${INPUT_VERSION#v}"  # Strip leading 'v' if present
+            TARGET_TAG="v$TARGET_VERSION"
 
-            case "${{ inputs.bump }}" in
-              major)
-                MAJOR=$((MAJOR + 1))
-                MINOR=0
-                PATCH=0
-                ;;
-              minor)
-                MINOR=$((MINOR + 1))
-                PATCH=0
-                ;;
-              patch)
-                PATCH=$((PATCH + 1))
-                ;;
-            esac
-
-            VERSION="${MAJOR}.${MINOR}.${PATCH}"
+            if git tag -l "$TARGET_TAG" | grep -q .; then
+              # Tag exists - publish that release
+              echo "Found existing release: $TARGET_TAG"
+              echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+              echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+              echo "needs_release=false" >> "$GITHUB_OUTPUT"
+            elif [ -z "$LATEST_TAG" ] || version_gt "$TARGET_VERSION" "$LATEST_VERSION"; then
+              # Version is greater than latest (or no releases exist) - create new release
+              echo "Creating new release: $TARGET_TAG"
+              echo "version=$TARGET_VERSION" >> "$GITHUB_OUTPUT"
+              echo "tag=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+              echo "needs_release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::error::Version $TARGET_VERSION is not greater than latest release $LATEST_VERSION and doesn't exist as a release."
+              exit 1
+            fi
           fi
-
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
-          echo "New version: $VERSION"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -94,7 +79,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Install wasm-tools
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         env:
           WASM_TOOLS_VERSION: "1.244.0"
         run: |
@@ -105,7 +90,7 @@ jobs:
           wasm-tools --version
 
       - name: Install wac-cli
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         env:
           WAC_VERSION: "0.8.1"
         run: |
@@ -118,41 +103,41 @@ jobs:
         run: npm ci
 
       - name: Build WASM modules
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         run: npm run build
 
       - name: Run tests
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         run: npm test
 
       - name: Create release archive
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         run: |
-          VERSION=${{ steps.new-version.outputs.version }}
+          VERSION=${{ steps.version-check.outputs.version }}
           cd dist
           tar -czvf ../wat-fft-${VERSION}.tar.gz *.wasm
           cd ..
           zip -j wat-fft-${VERSION}.zip dist/*.wasm
 
       - name: Create GitHub Release
-        if: steps.check-release.outputs.needs_release == 'true'
+        if: steps.version-check.outputs.needs_release == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.new-version.outputs.tag }}
-          name: wat-fft ${{ steps.new-version.outputs.tag }}
+          tag_name: ${{ steps.version-check.outputs.tag }}
+          name: wat-fft ${{ steps.version-check.outputs.tag }}
           generate_release_notes: true
           files: |
-            wat-fft-${{ steps.new-version.outputs.version }}.tar.gz
-            wat-fft-${{ steps.new-version.outputs.version }}.zip
+            wat-fft-${{ steps.version-check.outputs.version }}.tar.gz
+            wat-fft-${{ steps.version-check.outputs.version }}.zip
             dist/*.wasm
 
       - name: Download wasm files from existing release
-        if: steps.check-release.outputs.needs_release == 'false'
+        if: steps.version-check.outputs.needs_release == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p dist
-          TAG=${{ steps.check-release.outputs.tag }}
+          TAG=${{ steps.version-check.outputs.tag }}
           echo "Downloading wasm files from release $TAG"
 
           # Download all wasm files from the release
@@ -160,11 +145,7 @@ jobs:
 
       - name: Set version in package.json
         run: |
-          if [ "${{ steps.check-release.outputs.needs_release }}" == "true" ]; then
-            VERSION=${{ steps.new-version.outputs.version }}
-          else
-            VERSION=${{ steps.check-release.outputs.version }}
-          fi
+          VERSION=${{ steps.version-check.outputs.version }}
           npm version "$VERSION" --no-git-tag-version
           echo "Publishing version: $VERSION"
 
