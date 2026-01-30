@@ -89,7 +89,9 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          registry-url: "https://registry.npmjs.org"
+
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
 
       - name: Install wasm-tools
         if: steps.check-release.outputs.needs_release == 'true'
@@ -167,4 +169,4 @@ jobs:
           echo "Publishing version: $VERSION"
 
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish --access public --provenance --registry https://registry.npmjs.org
