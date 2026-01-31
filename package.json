@@ -20,14 +20,27 @@
     "url": "git+https://github.com/EmNudge/wat-fft.git"
   },
   "files": [
+    "browser.d.ts",
+    "browser.js",
+    "index.d.ts",
     "index.js",
     "dist/*.wasm"
   ],
   "type": "module",
+  "types": "./index.d.ts",
   "exports": {
     ".": {
+      "types": "./index.d.ts",
       "import": "./index.js"
-    }
+    },
+    "./browser": {
+      "types": "./browser.d.ts",
+      "import": "./browser.js"
+    },
+    "./wasm/fft.wasm": "./dist/fft_combined.wasm",
+    "./wasm/fft-f32.wasm": "./dist/fft_stockham_f32_dual.wasm",
+    "./wasm/rfft.wasm": "./dist/fft_real_combined.wasm",
+    "./wasm/rfft-f32.wasm": "./dist/fft_real_f32_dual.wasm"
   },
   "scripts": {
     "test": "npm run test:fft && npm run test:combined && npm run test:ifft",

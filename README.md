@@ -83,21 +83,107 @@ xychart-beta
 
 **wat-fft f32 beats all competitors at N≥128** (+5% to +31%). At N=64, pffft-wasm has a slight edge. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
-## Quick Start
+## Installation
 
 ```bash
-# Install dependencies
-npm install
-
-# Build WASM modules
-npm run build
-
-# Run tests
-npm test
-
-# Run benchmarks
-npm run bench
+npm install @emnudge/wat-fft
 ```
+
+## Usage
+
+### High-Level API (Recommended)
+
+The high-level API handles WASM loading, memory management, and twiddle factor precomputation automatically.
+
+#### Node.js
+
+```typescript
+import { createRFFTf32 } from "@emnudge/wat-fft";
+
+// Create an FFT context for size 1024
+const fft = await createRFFTf32(1024);
+
+// Get the input buffer and fill with samples
+const input = fft.getInputBuffer();
+for (let i = 0; i < 1024; i++) {
+  input[i] = Math.sin((2 * Math.PI * i * 10) / 1024);
+}
+
+// Compute FFT
+fft.forward();
+
+// Read results (interleaved complex: [re0, im0, re1, im1, ...])
+const output = fft.getOutputBuffer(); // Length: (1024/2 + 1) * 2 = 1026
+
+// Compute inverse FFT
+fft.inverse();
+```
+
+#### Browser (with Vite, Webpack, etc.)
+
+```typescript
+import { createRFFTf32 } from "@emnudge/wat-fft/browser";
+import wasmUrl from "@emnudge/wat-fft/wasm/rfft-f32.wasm?url";
+
+const fft = await createRFFTf32(1024, wasmUrl);
+const input = fft.getInputBuffer();
+input.set(audioSamples);
+fft.forward();
+const spectrum = fft.getOutputBuffer();
+```
+
+### Available Factory Functions
+
+| Function              | Precision | Input   | Best For                            |
+| --------------------- | --------- | ------- | ----------------------------------- |
+| `createFFT(size)`     | f64       | Complex | High-precision complex signals      |
+| `createFFTf32(size)`  | f32       | Complex | Fast complex signal processing      |
+| `createRFFT(size)`    | f64       | Real    | High-precision audio/real signals   |
+| `createRFFTf32(size)` | f32       | Real    | Fast audio processing (recommended) |
+
+### WASM Exports for Bundlers
+
+For browser builds, import WASM files directly:
+
+| Export Path                           | WASM Module       |
+| ------------------------------------- | ----------------- |
+| `@emnudge/wat-fft/wasm/fft.wasm`      | Complex FFT (f64) |
+| `@emnudge/wat-fft/wasm/fft-f32.wasm`  | Complex FFT (f32) |
+| `@emnudge/wat-fft/wasm/rfft.wasm`     | Real FFT (f64)    |
+| `@emnudge/wat-fft/wasm/rfft-f32.wasm` | Real FFT (f32)    |
+
+### Low-Level API (Advanced)
+
+For users who need direct control over WASM memory and exports:
+
+```typescript
+import { createRFFTf32Instance } from "@emnudge/wat-fft";
+
+const exports = await createRFFTf32Instance();
+
+// Manual twiddle precomputation
+exports.precompute_rfft_twiddles(1024);
+
+// Direct memory access
+const input = new Float32Array(exports.memory.buffer, 0, 1024);
+input.set(samples);
+
+// Execute FFT
+exports.rfft(1024);
+
+// Read output from same memory location
+const output = new Float32Array(exports.memory.buffer, 0, 1026);
+```
+
+### TypeScript Support
+
+Full TypeScript definitions are included. Key types:
+
+```typescript
+import type { FFT, FFTf32, RFFT, RFFTf32, FFTExports, RFFTf32Exports } from "@emnudge/wat-fft";
+```
+
+## Development
 
 ### Prerequisites
 
@@ -108,36 +194,13 @@ npm run bench
 cargo install wasm-tools
 ```
 
-## Usage
+### Quick Start
 
-```javascript
-import fs from "fs";
-
-// Load the WASM module
-// No JavaScript imports needed - trig functions are computed inline
-const wasmBuffer = fs.readFileSync("dist/fft_combined.wasm");
-const wasmModule = await WebAssembly.compile(wasmBuffer);
-const instance = await WebAssembly.instantiate(wasmModule);
-const fft = instance.exports;
-
-// Prepare input (interleaved complex: [re0, im0, re1, im1, ...])
-const N = 1024;
-const data = new Float64Array(fft.memory.buffer, 0, N * 2);
-for (let i = 0; i < N; i++) {
-  data[i * 2] = Math.sin((2 * Math.PI * i) / N); // real
-  data[i * 2 + 1] = 0; // imaginary
-}
-
-// Compute FFT
-fft.precompute_twiddles(N);
-fft.fft(N);
-
-// Results are in-place in data[]
-console.log("DC component:", data[0], data[1]);
-
-// Compute inverse FFT (roundtrip back to original)
-fft.ifft(N);
-console.log("Recovered signal:", data[0], data[1]);
+```bash
+npm install        # Install dependencies
+npm run build      # Build WASM modules
+npm test           # Run tests
+npm run bench      # Run benchmarks
 ```
 
 ## Implementations
