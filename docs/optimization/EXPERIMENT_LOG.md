@@ -1559,3 +1559,31 @@ This is now the largest known performance gap in the library — bigger than the
 - A structurally-identical formula means a proven SIMD pattern ports nearly mechanically — the whole rewrite validated and passed tests on the first build
 - Fusing a sign flip into a pass that already touches every element is free (one xor), and here it also deleted a special case: conjugating `conj(X[mid])` is the identity, so the middle-element branch vanished
 - The inverse's twiddle symmetry (`conj(W_rot_{n2-k}) = W_rot_k`) halves twiddle loads vs the forward equivalent — inverting a transform sometimes exposes structure the forward direction lacks
+
+## Experiment 51: Unrolled IRFFT Preprocess Codelets for N=64/128 (2026-07-05)
+
+**Goal**: Close the remaining small-N IRFFT gap (N=64 -16%, N=128 -9% after Experiment 50) by mirroring the forward path's unrolled postprocess codelets (`$rfft_postprocess_64/128`, Experiments 23/25) for the inverse preprocess.
+
+**Hypothesis**: The forward path wins N=64/128 partly through fully-unrolled postprocess with inline `v128.const` twiddles; the inverse should benefit the same way, eliminating loop overhead and twiddle memory loads.
+
+**Changes**:
+
+- `tools/generate-irfft-preprocess-codelet.js` (new): emits the unrolled WAT — hand-writing ~750 lines of mechanical SIMD was not sensible, and the generator makes regeneration trivial if the formula changes
+- `modules/fft_real_f32_dual.wat`: `$irfft_preprocess_64` / `$irfft_preprocess_128` (generated), dispatched by size in `$irfft`. Each pair block inlines `conj(W_rot)` as a `v128.const` and derives the second side's `W_rot` with a single xor (`CONJ_MASK_F32` flips the re-lane) — the same symmetry the loop version exploits, so each dual pair needs one constant, not two
+
+**Results** (Apple M5 Pro, two runs each, wat-fft ops/s, best of two, baseline = Experiment 50):
+
+| Size  | Before | After  | Change     | vs fftw-js after |
+| ----- | ------ | ------ | ---------- | ---------------- |
+| N=64  | 10.82M | 10.86M | ~0 (noise) | -14.1%           |
+| N=128 | 7.54M  | 7.79M  | **+3.3%**  | -6.6%            |
+
+All other sizes unchanged (dispatch falls through to the generic SIMD loop). Forward RFFT re-benchmarked, unchanged. All 27 tests pass; explicit irfft roundtrip verified at N=32/64/128/256/512 (max error 1.7e-6 f32).
+
+**Result**: PARTIAL — N=128 gains +3.3% (consistent across runs), N=64 within noise. Kept: the gain is real at N=128, there are no regressions, and the codelets are generated (low maintenance cost).
+
+**Analysis**: Unrolling helped the forward path more because the forward postprocess is the FINAL pass over the data. The inverse preprocess at these sizes covers only n2/2 = 16/32 pair slots, while the dominant costs sit elsewhere: `$fft_32_dit`/`$fft_64` core (67% of time at this size per Experiment 47 profiling) plus the inverse-only `$scale_and_conjugate` full-buffer pass that the forward path simply doesn't have. That extra pass is now the structural difference: forward = FFT + postprocess, inverse = preprocess + FFT + scale_and_conjugate.
+
+**Next step for the remaining gap**: A native inverse Stockham FFT (negated twiddles) would eliminate the final conjugate, and the 1/N scale can be folded into the preprocess constants (linearity) — together removing the entire `$scale_and_conjugate` pass. That is the remaining structural overhead at N=64 (-14%) and N=128 (-7%).
+
+**Lesson**: Unrolling pays off in proportion to the fraction of runtime the loop actually occupies. The same optimization that gave the forward path its small-N edge gave the inverse only +3% because the inverse's bottleneck is an extra full-buffer pass, not loop overhead. Measure where the time is before porting a winning optimization to a sibling path.
