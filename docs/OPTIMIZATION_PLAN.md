@@ -4,12 +4,12 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-06): **wat-fft beats ALL competitors at ALL sizes in ALL benchmarked transforms** — complex FFT, real FFT, and both inverse transforms (Experiment 53 closed the last gap at N=64; Experiment 55 made the complex `ifft` a native inverse matching forward throughput).
+**Current Status** (Apple M5 Pro, 2026-07-06): **wat-fft beats ALL competitors at ALL sizes in ALL benchmarked transforms** — complex FFT, real FFT, and both inverse transforms (Experiment 53 closed the last gap at N=64; Experiment 55 made the complex `ifft` a native inverse matching forward throughput; Experiment 56's packed dual-16 radix-4 n=32 codelet pushed real N=64 to +54% in both directions).
 
 | Target     | Complex FFT (f64) | Complex FFT (f32)             | Real FFT (f32)              |
 | ---------- | ----------------- | ----------------------------- | --------------------------- |
 | fft.js     | **+37-90%**       | **+110-230%**                 | N/A                         |
-| fftw-js    | N/A               | N/A                           | **+5-55%** (beats at all N) |
+| fftw-js    | N/A               | N/A                           | **+4-57%** (beats at all N) |
 | pffft-wasm | N/A               | **+21-102%** (beats at all N) | N/A                         |
 
 ---
@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 55 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 56 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -91,11 +91,11 @@ _Note: wat-fft f32 interleaved format now significantly outperforms pffft-wasm. 
 
 ### Real FFT f32 vs fftw-js
 
-Measured on Apple M5 Pro, Node v24.14.1 (Experiment 53, 2026-07-06): n2=16/32 cores now use the Stockham loop instead of DIT codelets.
+Measured on Apple M5 Pro, Node v24.14.1 (Experiments 53/56, 2026-07-06): the n2=32 core uses the packed dual-16 radix-4 codelet, n2=16 uses the Stockham loop.
 
 | Size   | wat-fft f32 | fftw-js | Result   |
 | ------ | ----------- | ------- | -------- |
-| N=64   | 15.3M       | 12.6M   | **+22%** |
+| N=64   | 19.7M       | 12.9M   | **+54%** |
 | N=128  | 8.2M        | 7.8M    | **+5%**  |
 | N=256  | 4.2M        | 2.7M    | **+55%** |
 | N=512  | 2.0M        | 1.6M    | **+25%** |
@@ -105,11 +105,11 @@ Measured on Apple M5 Pro, Node v24.14.1 (Experiment 53, 2026-07-06): n2=16/32 co
 
 ### Inverse Real FFT f32 vs fftw-js
 
-Measured on Apple M5 Pro (Experiments 52-53, 2026-07-06): native inverse FFT (conjugated twiddles via flipped sign mask, 1/N folded into preprocess, no extra passes) with the n2=16/32 cores on the Stockham loop.
+Measured on Apple M5 Pro (Experiments 52-53/56, 2026-07-06): native inverse FFT (conjugated twiddles via flipped sign mask, 1/N folded into preprocess, no extra passes) with the n2=32 core on the inverse packed dual-16 radix-4 codelet.
 
 | Size   | wat-fft f32 | fftw-js | Result   |
 | ------ | ----------- | ------- | -------- |
-| N=64   | 15.4M       | 12.8M   | **+23%** |
+| N=64   | 19.5M       | 12.6M   | **+54%** |
 | N=128  | 8.4M        | 8.1M    | **+4%**  |
 | N=256  | 4.2M        | 3.3M    | **+29%** |
 | N=512  | 2.1M        | 1.8M    | **+17%** |
@@ -121,14 +121,16 @@ Measured on Apple M5 Pro (Experiments 52-53, 2026-07-06): native inverse FFT (co
 
 ## Remaining Gap Analysis
 
-On Apple M5 Pro (Experiments 47-53), **no gaps remain**: wat-fft beats fftw-js at every benchmarked size in both directions (forward +5% to +55%, inverse +4% to +29%).
+On Apple M5 Pro (Experiments 47-56), **no gaps remain**: wat-fft beats fftw-js at every benchmarked size in both directions (forward +4% to +57%, inverse +4% to +54%).
 
 The last gap (N=64, both directions) closed in Experiment 53: the fully-unrolled `fft_32_dit`/`ifft_32_dit` DIT codelets turned out to be 66-97% SLOWER than the plain Stockham loop on M5 (register pressure + shuffle cost), so n=16/32 now dispatch to the loop. N=64 jumped +31-32% in one change.
 
 Open opportunities (wins, not gaps):
 
 - ~~**Complex f32 module small-N dispatch**~~: probed in Experiment 54 - its radix-4 single-lane codelets WIN on M5 (+34-47% vs the loop); no change needed. The Experiment 53 loss was specific to the radix-2 dual-complex DIT codelet design.
-- **Radix-4-style n=32 codelet for the real module**: the complex module's radix-4 n=16 codelet does 67M ops/s where the real module's n2=32 core (now on the loop) does 30M; a 4-4-2-stage codelet could extend the N=64 win further (Experiment 54 data).
+- ~~**Radix-4-style n=32 codelet for the real module**~~: DONE in Experiment 56 - a packed dual-16 radix-4 codelet (even/odd DIT halves ride in the previously wasted upper v128 lanes, zero deinterleave shuffles) beats the loop by +55-84% in isolation; real N=64 jumped +25% forward / +26% inverse.
+- **Packed n=32 codelet for the complex f32 module**: the Experiment 56 codelet design should port directly (write-to-0 variant + fused 1/N inverse); complex N=32 still runs on the loop. Untracked in competitor benches, so a small win.
+- **Memory-staged n=64 codelet**: the lane-packing trick is used up at n=32; an n=64 codelet needs staging through memory between stages. N=128 (weakest margin, +4%) is the size that would benefit.
 - ~~**Native inverse for the complex f32 `ifft`**~~: DONE in Experiment 55 - flipped-sign-mask port of Experiment 52 plus inverse n=8/16 codelets; ifft gained +13-22% and now matches forward fft throughput exactly (benchmark: `npm run bench:ifft32`).
 - **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions; re-run the codelet-vs-loop probes when hardware changes.
 
@@ -148,12 +150,13 @@ Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pf
 
 ## Files Created During Optimization
 
-| File                                | Purpose                              |
-| ----------------------------------- | ------------------------------------ |
-| `modules/fft_combined.wat`          | Auto-dispatch radix-2/4              |
-| `modules/fft_stockham_f32_dual.wat` | f32 dual-complex FFT                 |
-| `modules/fft_real_f32_dual.wat`     | f32 dual-complex rfft                |
-| `modules/fft_real_combined.wat`     | Combined rfft with codelets          |
-| `modules/fft_split_native_f32.wat`  | Native split-format FFT (experiment) |
-| `tools/codelet_generator.js`        | DAG-based codelet generator          |
-| `tools/generate-dit-codelet.js`     | DIT codelet generator                |
+| File                                  | Purpose                                              |
+| ------------------------------------- | ---------------------------------------------------- |
+| `modules/fft_combined.wat`            | Auto-dispatch radix-2/4                              |
+| `modules/fft_stockham_f32_dual.wat`   | f32 dual-complex FFT                                 |
+| `modules/fft_real_f32_dual.wat`       | f32 dual-complex rfft                                |
+| `modules/fft_real_combined.wat`       | Combined rfft with codelets                          |
+| `modules/fft_split_native_f32.wat`    | Native split-format FFT (experiment)                 |
+| `tools/codelet_generator.js`          | DAG-based codelet generator                          |
+| `tools/generate-dit-codelet.js`       | DIT codelet generator                                |
+| `tools/generate-radix4-32-codelet.js` | Packed dual-16 radix-4 n=32 codelets (Experiment 56) |
