@@ -1609,7 +1609,7 @@
   ;; Processes 2 complex numbers per butterfly using full f32x4 SIMD
   ;; NO runtime branching in inner loops
 
-  (func $fft_general (param $n i32)
+  (func $fft_general (param $n i32) (result i32)
     (local $n2 i32)
     (local $r i32)
     (local $l i32)
@@ -1922,10 +1922,9 @@
       )
     )
 
-    ;; Copy result to primary buffer if needed
-    (if (i32.ne (local.get $src) (i32.const 0))
-      (then
-        (call $copy_buffer (local.get $n))))
+    ;; Return the buffer offset where the result landed (0 or SECONDARY_OFFSET).
+    ;; Callers that need the result at offset 0 must copy (see $fft).
+    (local.get $src)
   )
 
 
@@ -2748,7 +2747,10 @@
   ;; Processes 2 pairs per iteration using full f32x4 SIMD throughput.
   ;; Pairs (k, n2-k) and (k+1, n2-k-1) are processed together.
 
-  (func $rfft_postprocess_simd (param $n2 i32)
+  (func $rfft_postprocess_simd (param $n2 i32) (param $src i32)
+    ;; Reads the FFT result Z from $src (0 or SECONDARY_OFFSET), writes X to offset 0.
+    ;; When $src is 0 this is the original in-place behavior (each pair is fully
+    ;; read before either element is written).
     (local $k i32) (local $k_end i32) (local $n2_minus_k i32)
     (local $addr_k i32) (local $addr_n2k i32) (local $tw_addr i32)
     ;; SIMD registers
@@ -2768,8 +2770,8 @@
     (local.set $half (v128.const f32x4 0.5 0.5 0.5 0.5))
 
     ;; DC and Nyquist handling
-    (local.set $z0_re (f32.load (i32.const 0)))
-    (local.set $z0_im (f32.load (i32.const 4)))
+    (local.set $z0_re (f32.load (local.get $src)))
+    (local.set $z0_im (f32.load (i32.add (local.get $src) (i32.const 4))))
     (f32.store (i32.const 0) (f32.add (local.get $z0_re) (local.get $z0_im)))
     (f32.store (i32.const 4) (f32.const 0.0))
     (local.set $addr_k (i32.shl (local.get $n2) (i32.const 3)))
@@ -2791,10 +2793,10 @@
       (local.set $addr_n2k (i32.shl (i32.sub (local.get $n2_minus_k) (i32.const 1)) (i32.const 3)))
 
       ;; Load [Z[k], Z[k+1]] - contiguous
-      (local.set $zk (v128.load (local.get $addr_k)))
+      (local.set $zk (v128.load (i32.add (local.get $src) (local.get $addr_k))))
 
       ;; Load [Z[n2-k-1], Z[n2-k]] and shuffle to [Z[n2-k], Z[n2-k-1]]
-      (local.set $zn2k (v128.load (local.get $addr_n2k)))
+      (local.set $zn2k (v128.load (i32.add (local.get $src) (local.get $addr_n2k))))
       (local.set $zn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
                                       (local.get $zn2k) (local.get $zn2k)))
 
@@ -2884,8 +2886,8 @@
         (local.set $addr_n2k (i32.shl (local.get $n2_minus_k) (i32.const 3)))
 
         ;; Load single pair using 64-bit loads
-        (local.set $zk (v128.load64_zero (local.get $addr_k)))
-        (local.set $zn2k (v128.load64_zero (local.get $addr_n2k)))
+        (local.set $zk (v128.load64_zero (i32.add (local.get $src) (local.get $addr_k))))
+        (local.set $zn2k (v128.load64_zero (i32.add (local.get $src) (local.get $addr_n2k))))
         (local.set $conj_zn2k (v128.xor (local.get $zn2k) (global.get $CONJ_MASK_F32)))
 
         (local.set $sum (f32x4.add (local.get $zk) (local.get $conj_zn2k)))
@@ -2943,7 +2945,7 @@
     (if (i32.and (i32.eqz (i32.and (local.get $n2) (i32.const 1))) (i32.gt_u (local.get $n2) (i32.const 2)))
       (then
         (local.set $addr_k (i32.shl (local.get $k_end) (i32.const 3)))
-        (local.set $zk (v128.load64_zero (local.get $addr_k)))
+        (local.set $zk (v128.load64_zero (i32.add (local.get $src) (local.get $addr_k))))
 
         (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
         (local.set $wk (v128.load64_zero (local.get $tw_addr)))
@@ -2984,26 +2986,35 @@
   ;; Internal FFT Entry Point
   ;; ============================================================================
 
-  (func $fft (param $n i32)
+  (func $fft_nc (param $n i32) (result i32)
     ;; Use DIT codelets for small sizes - they load bit-reversed and output natural order.
     ;; This is compatible with RFFT post-processing.
     ;;
     ;; Note: Dispatch order doesn't significantly affect performance (tested).
     ;; The gap at N=64/128 vs fftw-js is within benchmark variance (~3-5%).
+    ;;
+    ;; Returns the buffer offset where the result landed (0 for codelets;
+    ;; 0 or SECONDARY_OFFSET for the Stockham path) without copying back.
     (if (i32.le_u (local.get $n) (i32.const 32))
       (then
         (if (i32.eq (local.get $n) (i32.const 32))
-          (then (call $fft_32_dit) (return)))
+          (then (call $fft_32_dit) (return (i32.const 0))))
         (if (i32.eq (local.get $n) (i32.const 16))
-          (then (call $fft_16_dit) (return)))
+          (then (call $fft_16_dit) (return (i32.const 0))))
         (if (i32.eq (local.get $n) (i32.const 8))
-          (then (call $fft_8_dit) (return)))
+          (then (call $fft_8_dit) (return (i32.const 0))))
         (call $fft_4)
-        (return)
+        (return (i32.const 0))
       )
     )
     ;; N>=64: Fall back to Stockham (fft_64_dit has too many locals, causing register spills)
     (call $fft_general (local.get $n))
+  )
+
+  (func $fft (param $n i32)
+    ;; FFT with the result guaranteed at offset 0.
+    (if (i32.ne (call $fft_nc (local.get $n)) (i32.const 0))
+      (then (call $copy_buffer (local.get $n))))
   )
 
   ;; ============================================================================
@@ -3049,13 +3060,28 @@
     (local $sum2_re f32) (local $sum2_im f32) (local $diff2_re f32) (local $diff2_im f32)
     (local $wd2_re f32) (local $wd2_im f32)
     (local $xk_re f32) (local $xk_im f32) (local $xn2k_re f32) (local $xn2k_im f32)
+    (local $fft_src i32)
 
     (local.set $n2 (i32.shr_u (local.get $n) (i32.const 1)))
 
-    ;; Step 1: Run N/2-point dual-complex FFT
-    (call $fft (local.get $n2))
+    ;; Step 1: Run N/2-point dual-complex FFT, leaving the result in whichever
+    ;; ping-pong buffer it lands in (avoids a full copy pass when the Stockham
+    ;; stage count is odd - Experiment 48).
+    (local.set $fft_src (call $fft_nc (local.get $n2)))
 
     ;; Step 2: Post-processing
+    ;; SIMD path for N >= 256 (n2 >= 128) reads directly from $fft_src
+    (if (i32.ge_u (local.get $n) (i32.const 256))
+      (then
+        (call $rfft_postprocess_simd (local.get $n2) (local.get $fft_src))
+        (return)
+      )
+    )
+    ;; Remaining paths assume the FFT result is at offset 0. For N <= 128 the
+    ;; FFT lands at offset 0 anyway (codelets, or an even Stockham stage count
+    ;; at n2=64), so this copy never fires today - it guards dispatch changes.
+    (if (i32.ne (local.get $fft_src) (i32.const 0))
+      (then (call $copy_buffer (local.get $n2))))
     ;; Use specialized unrolled codelet for N=64
     (if (i32.eq (local.get $n) (i32.const 64))
       (then
@@ -3067,13 +3093,6 @@
     (if (i32.eq (local.get $n) (i32.const 128))
       (then
         (call $rfft_postprocess_128)
-        (return)
-      )
-    )
-    ;; Use SIMD for N >= 256 (n2 >= 128)
-    (if (i32.ge_u (local.get $n) (i32.const 256))
-      (then
-        (call $rfft_postprocess_simd (local.get $n2))
         (return)
       )
     )

@@ -53,6 +53,8 @@ Detailed record of all optimization experiments.
 | 44  | f32 N=16 Radix-4 Codelet    | SUCCESS +18%     | Radix-4 codelet closes gap with f64              |
 | 45  | Performance Gap Analysis    | COMPLETE         | Analysis only; optimization complete             |
 | 46  | Dead Code Cleanup           | SUCCESS          | Removed unused fft_split_f32.wat (536 lines)     |
+| 47  | M5 Pro Re-Baseline          | COMPLETE         | New hardware: N=64 RFFT now loses to fftw-js     |
+| 48  | Eliminate copy_buffer       | SUCCESS +4.5-6%  | Postprocess reads ping-pong buffer directly      |
 
 ---
 
@@ -1413,3 +1415,74 @@ Future improvements would require:
 | Kernel benchmark   | Works    | Works    |
 
 **Lesson**: Regular dead code audits prevent accumulation of unused code. The `fft_split_f32.wat` was kept "for reference" but served no purpose since the native split module has different API and memory layout.
+
+---
+
+## Experiment 47: Performance Re-Baseline on Apple M5 Pro (2026-07-05)
+
+**Goal**: Fresh benchmark analysis on new hardware (Apple M5 Pro, Node v24.14.1). Prior baselines (Experiments 26-45) were measured on different hardware.
+
+**Environment change**: Absolute throughput roughly doubled for both wat-fft and competitors (e.g., RFFT N=64: 6.9M → 12M ops/s), but relative margins shifted significantly.
+
+**f32 RFFT vs fftw-js** (two runs, consistent):
+
+| Size   | Run 1 | Run 2 | Prior baseline |
+| ------ | ----- | ----- | -------------- |
+| N=64   | -4.5% | -6.3% | tied           |
+| N=128  | +2.1% | +3.7% | +9.5%          |
+| N=256  | +44%  | +47%  | +52%           |
+| N=512  | +24%  | +27%  | +33%           |
+| N=1024 | +10%  | +11%  | +18%           |
+| N=2048 | +11%  | +13%  | +21%           |
+| N=4096 | +7.5% | +8.7% | +18%           |
+
+**Key finding**: On M5 Pro, wat-fft **loses to fftw-js at N=64** (-4.5% to -6.3%, outside noise) and margins at N>=1024 roughly halved. The "beats all competitors at all sizes" claim no longer holds for RFFT on this hardware.
+
+**f32 Complex FFT vs pffft-wasm**: Still dominant everywhere — +21% (N=32) up to +102% (N=4096, split format). No action needed.
+
+**Profiling** (`node --prof`, wasm function ticks):
+
+- RFFT N=64: `fft_32_dit` 67%, `rfft_postprocess_64` 21%, glue ~12%
+- RFFT N=4096: `fft_general` 68%, `rfft_postprocess_simd` 23.5%, **`copy_buffer` 4.8%**
+
+**Opportunities identified**:
+
+1. **Eliminate `copy_buffer` (LOW risk, ~4-5% at affected sizes)**: When the Stockham stage count is odd, the result lands in the secondary buffer and `copy_buffer` does a full extra pass before post-processing. Parameterizing `rfft_postprocess_simd` with a source offset (writing to buffer 0) removes the pass entirely.
+2. **`fft_32_dit` register pressure (HIGH risk)**: 68 locals, 67% of N=64 RFFT time. The M5 loss concentrates here. Prior attempts (Experiments 22-25, 44) found no wins on old hardware, but the microarchitecture shift may change spill economics. Needs fresh investigation, not a rerun of old ideas.
+3. **Docs re-baseline**: README/OPTIMIZATION_PLAN tables reflect old-hardware numbers.
+
+**Files modified**: None (analysis only)
+
+**Lesson**: Performance claims are hardware-relative. A microarchitecture change (M5 Pro) flipped N=64 from tied to losing and halved large-N margins without any code change — periodic re-baselining is part of maintenance.
+
+---
+
+## Experiment 48: Eliminate copy_buffer via Source-Parameterized Post-Processing (2026-07-05)
+
+**Goal**: Remove the redundant full-array copy identified in Experiment 47 profiling (`copy_buffer` = 4.8% of RFFT N=4096 time).
+
+**Hypothesis**: When the Stockham stage count is odd, the FFT result lands in the secondary ping-pong buffer and `copy_buffer` does a full extra pass just so post-processing can read from offset 0. Since `rfft_postprocess_simd` already touches every element, it can read directly from wherever the result landed and write to offset 0, eliminating the pass. Affected sizes (odd stage count, SIMD path): N=256, N=1024, N=4096.
+
+**Changes** (`modules/fft_real_f32_dual.wat`):
+
+- `$fft_general` now returns the buffer offset where the result landed (0 or `SECONDARY_OFFSET`) instead of copying back
+- New `$fft_nc` (no-copy): the old `$fft` dispatch, returning the result offset (codelets always return 0)
+- `$fft` is now a thin wrapper: `$fft_nc` + conditional `copy_buffer` (preserves semantics for `$ifft`/`$irfft`)
+- `$rfft_postprocess_simd` takes a `$src` param: reads Z from `$src`, writes X to offset 0; `$src = 0` reproduces the original in-place behavior exactly
+- `$rfft` passes the offset straight through on the SIMD path (N >= 256); the unrolled/scalar paths keep a guard copy (which never fires today: N <= 128 always lands at offset 0)
+
+**Results** (Apple M5 Pro, two runs each, wat-fft ops/s):
+
+| Size   | Before (best) | After (best) | Change    | vs fftw-js after |
+| ------ | ------------- | ------------ | --------- | ---------------- |
+| N=64   | 12.07M        | 12.09M       | ~0        | -6.3%            |
+| N=128  | 8.07M         | 8.26M        | +2%       | +3.8%            |
+| N=256  | 4.00M         | 4.17M        | **+4.5%** | **+54.3%**       |
+| N=512  | 2.01M         | 2.02M        | ~0        | +23.3%           |
+| N=1024 | 918K          | 966K         | **+5.2%** | **+14.5%**       |
+| N=2048 | 457K          | 461K         | ~0        | +12.2%           |
+| N=4096 | 207K          | 220K         | **+6.3%** | **+13.1%**       |
+
+**Result**: SUCCESS — gains landed exactly at the predicted odd-stage-count sizes; unaffected sizes unchanged (within noise). All 27 tests pass.
+
+**Lesson**: Profile-guided elimination of whole memory passes beats micro-tuning arithmetic. The copy was invisible in per-stage reasoning but obvious in the function-level tick profile. The same pattern (postprocess reads from ping-pong result buffer) may apply to the f64 RFFT module and the IFFT path.

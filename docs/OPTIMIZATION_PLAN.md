@@ -4,13 +4,13 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status**: Beats ALL competitors at ALL sizes. wat-fft is the fastest FFT for JavaScript environments.
+**Current Status** (Apple M5 Pro, 2026-07-05): Complex FFT beats ALL competitors at ALL sizes. Real FFT beats fftw-js at N≥128; fftw-js is ~5-7% faster at N=64 on this hardware (see Remaining Gap Analysis).
 
-| Target     | Complex FFT (f64) | Complex FFT (f32)            | Real FFT (f32)                        |
-| ---------- | ----------------- | ---------------------------- | ------------------------------------- |
-| fft.js     | **+37-90%**       | **+119-243%**                | N/A                                   |
-| fftw-js    | N/A               | N/A                          | **+1-54%** (wins all sizes N=64-4096) |
-| pffft-wasm | N/A               | **+30-93%** (beats at all N) | N/A                                   |
+| Target     | Complex FFT (f64) | Complex FFT (f32)             | Real FFT (f32)                       |
+| ---------- | ----------------- | ----------------------------- | ------------------------------------ |
+| fft.js     | **+37-90%**       | **+110-230%**                 | N/A                                  |
+| fftw-js    | N/A               | N/A                           | **+4-54%** at N≥128, **-6%** at N=64 |
+| pffft-wasm | N/A               | **+21-102%** (beats at all N) | N/A                                  |
 
 ---
 
@@ -91,34 +91,28 @@ _Note: wat-fft f32 interleaved format now significantly outperforms pffft-wasm. 
 
 ### Real FFT f32 vs fftw-js
 
-| Size   | wat-fft f32 | fftw-js | Result    |
-| ------ | ----------- | ------- | --------- |
-| N=64   | 6.9M        | 7.0M    | **~tied** |
-| N=128  | 4.8M        | 4.4M    | **+9%**   |
-| N=256  | 2.3M        | 1.5M    | **+53%**  |
-| N=512  | 1.2M        | 917K    | **+33%**  |
-| N=1024 | 559K        | 471K    | **+19%**  |
-| N=2048 | 282K        | 232K    | **+22%**  |
-| N=4096 | 127K        | 108K    | **+18%**  |
+Measured on Apple M5 Pro, Node v24.14.1 (Experiments 47-48, 2026-07-05). Earlier docs were benchmarked on older hardware; margins shifted with the microarchitecture change.
 
-_Note: N=64 performance varies ±2% between runs (within benchmark noise)._
+| Size   | wat-fft f32 | fftw-js | Result   |
+| ------ | ----------- | ------- | -------- |
+| N=64   | 12.1M       | 12.9M   | **-6%**  |
+| N=128  | 8.3M        | 8.0M    | **+4%**  |
+| N=256  | 4.2M        | 2.7M    | **+54%** |
+| N=512  | 2.0M        | 1.6M    | **+23%** |
+| N=1024 | 966K        | 844K    | **+15%** |
+| N=2048 | 461K        | 411K    | **+12%** |
+| N=4096 | 220K        | 195K    | **+13%** |
 
 ---
 
 ## Remaining Gap Analysis
 
-**There are no remaining gaps** - wat-fft now matches or beats fftw-js at all sizes:
+On Apple M5 Pro (Experiment 47), one gap re-opened:
 
-- **N=64**: Within benchmark variance (±3%), effectively tied
-- **N≥128**: Consistently faster (+9% to +37%)
+- **N=64 RFFT**: fftw-js is consistently ~5-7% faster (outside noise). Profiling shows 67% of time in `$fft_32_dit` (68 locals, register-spill territory) — the prior "tied" result was hardware-specific. Re-investigation on M5 is open work; Experiments 22-25/44 findings were from older hardware.
+- **N≥128**: Consistently faster (+4% to +54%)
 
-The N=64 "gap" was investigated extensively (Experiments 22-25) and found to be:
-
-1. Within measurement noise (benchmark runs show -2.7% to +1.7%)
-2. Due to fundamental algorithmic differences between Stockham and FFTW's genfft
-3. Not addressable through micro-optimizations
-
-For our target use cases (N <= 4096), **optimization is complete**.
+Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).
 
 ---
 
