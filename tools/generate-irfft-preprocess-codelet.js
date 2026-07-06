@@ -30,7 +30,7 @@ function cmul(dst, src, wRe, wIm, wSwap) {
     (local.set $swapped (i8x16.shuffle ${wSwap} (local.get $${dst}) (local.get $${dst})))`;
 }
 
-function dualPair(k, n2) {
+function dualPair(k, n2, dstBase) {
   const addrK = 8 * k;
   const addrN2k = 8 * (n2 - k - 1);
   const [s0, c0] = cwrotLanes(k, n2);
@@ -55,13 +55,13 @@ ${cmul("diff", "cwrot", SHUF_RE_DUAL, SHUF_IM_DUAL, SHUF_SWAPREIM_DUAL)}
 ${cmul("diff2", "wrot", SHUF_RE_DUAL, SHUF_IM_DUAL, SHUF_SWAPREIM_DUAL)}
     (local.set $wd2 (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
     (local.set $zn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
-    (v128.store (i32.const ${addrK}) (local.get $zk))
+    (v128.store (i32.const ${dstBase + addrK}) (local.get $zk))
     (local.set $zn2k (i8x16.shuffle ${SHUF_SWAP_PAIRS} (local.get $zn2k) (local.get $zn2k)))
-    (v128.store (i32.const ${addrN2k}) (local.get $zn2k))
+    (v128.store (i32.const ${dstBase + addrN2k}) (local.get $zn2k))
 `;
 }
 
-function singlePair(k, n2) {
+function singlePair(k, n2, dstBase) {
   const addrK = 8 * k;
   const addrN2k = 8 * (n2 - k);
   const [s0, c0] = cwrotLanes(k, n2);
@@ -82,8 +82,8 @@ ${cmul("diff", "cwrot", SHUF_RE_SINGLE, SHUF_IM_SINGLE, SHUF_SWAPREIM_SINGLE)}
 ${cmul("diff2", "wrot", SHUF_RE_SINGLE, SHUF_IM_SINGLE, SHUF_SWAPREIM_SINGLE)}
     (local.set $wd2 (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
     (local.set $zn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
-    (v128.store64_lane 0 (i32.const ${addrK}) (local.get $zk))
-    (v128.store64_lane 0 (i32.const ${addrN2k}) (local.get $zn2k))
+    (v128.store64_lane 0 (i32.const ${dstBase + addrK}) (local.get $zk))
+    (v128.store64_lane 0 (i32.const ${dstBase + addrN2k}) (local.get $zn2k))
 `;
 }
 
@@ -92,6 +92,10 @@ function genCodelet(n) {
   const kEnd = n2 / 2;
   const h = 0.5 / n2; // exact in binary floating point (n2 a power of 2)
   const inv = 1 / n2;
+  // n=64 (n2=32): the inverse Stockham has an odd stage count, so the
+  // preprocess writes Z to SECONDARY (65536) and the FFT lands at offset 0.
+  // n=128 (n2=64): even stage count, Z stays at offset 0.
+  const dstBase = Math.log2(n2) % 2 === 1 ? 65536 : 0;
   let body = `  (func $irfft_preprocess_${n}
     (local $xk v128) (local $xn2k v128) (local $conj_xn2k v128) (local $conj_xk v128)
     (local $cwrot v128) (local $wrot v128)
@@ -107,17 +111,17 @@ function genCodelet(n) {
     ;; DC (scaled output): Z[0]/n2 = ((X0+Xn2)*h, (X0-Xn2)*h)
     (local.set $x0_re (f32.load (i32.const 0)))
     (local.set $xn2_re (f32.load (i32.const ${8 * n2})))
-    (f32.store (i32.const 0) (f32.mul (f32.const ${h}) (f32.add (local.get $x0_re) (local.get $xn2_re))))
-    (f32.store (i32.const 4) (f32.mul (f32.const ${h}) (f32.sub (local.get $x0_re) (local.get $xn2_re))))
+    (f32.store (i32.const ${dstBase}) (f32.mul (f32.const ${h}) (f32.add (local.get $x0_re) (local.get $xn2_re))))
+    (f32.store (i32.const ${dstBase + 4}) (f32.mul (f32.const ${h}) (f32.sub (local.get $x0_re) (local.get $xn2_re))))
 
 `;
   let k = 1;
-  for (; k + 1 < kEnd; k += 2) body += dualPair(k, n2) + "\n";
-  if (k < kEnd) body += singlePair(k, n2) + "\n";
+  for (; k + 1 < kEnd; k += 2) body += dualPair(k, n2, dstBase) + "\n";
+  if (k < kEnd) body += singlePair(k, n2, dstBase) + "\n";
   body += `    ;; Middle element (k=${kEnd}): Z[mid]/n2 = conj(X[mid]) * ${inv}
     (local.set $xk (v128.load64_zero (i32.const ${8 * kEnd})))
     (local.set $xk (f32x4.mul (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)) (v128.const f32x4 ${inv} ${inv} ${inv} ${inv})))
-    (v128.store64_lane 0 (i32.const ${8 * kEnd}) (local.get $xk))
+    (v128.store64_lane 0 (i32.const ${dstBase + 8 * kEnd}) (local.get $xk))
   )`;
   return body;
 }
