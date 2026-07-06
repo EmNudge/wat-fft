@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import PFFFT from "@echogarden/pffft-wasm";
+import PFFFT from "@echogarden/pffft-wasm/simd";
 import fftw from "fftw-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";

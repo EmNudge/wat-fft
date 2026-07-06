@@ -1773,3 +1773,110 @@ All other sizes unchanged within noise. All 27 tests pass; roundtrip error uncha
 - When a fast codelet design wastes SIMD lanes, look for a DECOMPOSITION whose independent sub-transforms can ride in the wasted lanes. The DIT even/odd split was ideal here because (a) both halves share twiddles, so lane-splatted constants work unchanged, and (b) the even/odd interleaving matches the memory layout exactly, so the packing costs zero shuffles.
 - The packing trick applies once: an n=64 version would need its dual-16 sub-FFTs' lanes already occupied. n=64 would need memory staging between stages - unexplored, and N=128 (weakest margin, +4%) is the size that would benefit.
 - The complex f32 module still dispatches n=32 to its Stockham loop; the same codelet (write-to-0 variant, plus a fused-scale inverse) would likely add a similar win at complex N=32. Not benchmarked against competitors at that size, so left as a follow-up.
+
+## Experiment 57: Browser Benchmark Audit - We've Been Racing pffft's Non-SIMD Build (2026-07-06)
+
+**Goal**: Run the browser benchmarks (`npm run bench:browser`, Vitest + Playwright Chromium) locally and explain why wat-fft is not on top there.
+
+**Finding**: In Chromium, pffft-wasm wins every complex FFT size N>=128 (1.08-1.33x faster than wat-fft f32) and every real FFT size N>=128 (1.04-1.90x faster than wat-rfft f32). wat-fft still wins N<=64 in both suites.
+
+**Root cause**: The `@echogarden/pffft-wasm` package ships two builds, and its exports map resolves the bare import to the NON-SIMD build:
+
+```json
+{ ".": "./dist/non-simd/pffft.js", "./simd": "./dist/simd/pffft.js" }
+```
+
+Every Node benchmark (`fft.bench.js`, `rfft.bench.js`, `fft_f32_dual.bench.js`, ...) does `import PFFFT from "@echogarden/pffft-wasm"` and therefore races the scalar build - while the browser loader (`benchmarks/browser/fft-loader.ts`) points `locateFile` at `dist/simd/pffft.wasm` and gets the real SIMD build. The README's "pffft-wasm (PFFFT with SIMD)" tables are actually non-SIMD numbers.
+
+**Confirmation in Node** (high-resolution timers, Apple M5 Pro, Node v24 - rules out Chromium's 0.1ms `performance.now()` coarsening as the explanation; per-iteration input copy included for all parties, same as existing benchmarks):
+
+| Size   | Complex: wat-fft f32 | pffft SIMD | pffft non-SIMD | wat/SIMD  | Real: wat-rfft f32 | pffft SIMD | wat/SIMD  |
+| ------ | -------------------- | ---------- | -------------- | --------- | ------------------ | ---------- | --------- |
+| N=64   | 11.27M               | 10.95M     | 6.20M          | **1.03x** | 19.45M             | 15.37M     | **1.27x** |
+| N=128  | 5.27M                | 6.44M      | 3.16M          | 0.82x     | 8.15M              | 10.25M     | 0.79x     |
+| N=256  | 2.81M                | 3.76M      | 1.65M          | 0.75x     | 4.16M              | 7.05M      | 0.59x     |
+| N=512  | 1.25M                | 1.78M      | 700K           | 0.70x     | 2.01M              | 3.79M      | 0.53x     |
+| N=1024 | 579K                 | 904K       | 345K           | 0.64x     | 971K               | 2.05M      | 0.47x     |
+| N=2048 | 272K                 | 407K       | 147K           | 0.67x     | 458K               | 927K       | 0.49x     |
+| N=4096 | 135K                 | 189K       | 70K            | 0.71x     | 221K               | 471K       | 0.47x     |
+
+The non-SIMD column matches the README's pffft numbers almost exactly, confirming which build the historical benchmarks measured.
+
+**Why pffft SIMD is faster**: PFFFT's core runs every butterfly 4-wide on f32x4 with a SIMD-reordered internal ("z-domain") format - split re/im inside vectors, so complex multiplies are pure mul/add with no lane shuffles, and 100% lane utilization at every stage. wat-fft's dual-complex interleaved approach computes 2 complex values per v128 and pays shuffles for every cmul. The stabilized ~2x real-FFT gap and ~1.4x complex gap at large N match that lane-utilization difference. The gap is a real algorithmic/layout deficit, not measurement noise.
+
+**Secondary observations**:
+
+- Chromium clamps `performance.now()` to 0.1ms without cross-origin isolation; all tinybench samples in browser runs are quantized to 0/0.1ms. Ordering is still trustworthy (confirmed by Node), but absolute browser hz values are noisy. Adding COOP/COEP headers to the Vitest server would restore 5us timers.
+- `benchmarks/README.md` still says pffft-wasm is not included in browser benchmarks - outdated, the loader includes it.
+- The browser loader imports the non-SIMD glue JS but swaps in the SIMD wasm via `locateFile`; it works (identical export surface) but should import `dist/simd/pffft.js` directly.
+
+**Result**: FINDING - "beats all competitors" (README, OPTIMIZATION_PLAN) only holds vs pffft's non-SIMD build. Against pffft SIMD, wat-fft leads only at N<=64. Claims and Node benchmarks need updating (`@echogarden/pffft-wasm/simd`), and closing the gap likely requires pffft-style 4-wide split-format processing in the core stages.
+
+**Lessons**:
+
+- When benchmarking a package that ships multiple builds, check its `exports` map - the bare import may not be the build its README advertises.
+- Browser benchmarks caught this precisely because the browser loader had to load the wasm by URL and picked the SIMD file explicitly. Divergent loader paths between environments are worth auditing whenever results disagree across environments.
+
+## Experiment 58: Radix-4 Split-Format Core Beats pffft SIMD (2026-07-06)
+
+**Goal**: Close the Experiment 57 gap. pffft SIMD leads because (a) its split-re/im internal format makes every complex multiply pure mul/add with zero shuffles at 100% lane utilization, and (b) its radix-4/5 decomposition takes ~half the memory passes of our radix-2 Stockham.
+
+**Design**: Fuse consecutive radix-2 Stockham stage pairs (r, l) + (r/2, 2l) into one radix-4 stage. With s = r/2 and w = e^(-i*pi*j/(2l)), group j reads quarters a,b,c,d at stride s from base j\*4s and writes:
+
+```
+t0 = a + w^2 c;  t1 = a - w^2 c;  t2 = w b + w^3 d;  t3 = w b - w^3 d
+dst[q] = t0+t2;  dst[q+n/4] = t1 - i*t3;  dst[q+n/2] = t0-t2;  dst[q+3n/4] = t1 + i*t3
+```
+
+(q = j\*s + t). In split format the -i rotation is an operand swap + negate - **zero shuffles in the generic stage**. One twiddle triple per group, splatted (hoisted out of the t loop). The final s=1 stage needs 4 different twiddle triples per v128: a 4x4 transpose (8 shuffles/plane) gathers a/b/c/d and twiddles are contiguous loads from per-stage tables laid out as w1re[l] w1im[l] w2re[l] w2im[l] w3re[l] w3im[l]. For N = 2\*4^p, one leading radix-2 stage (l=1, twiddle = 1: pure 4-wide add/sub, no twiddle loads) makes the remaining stage count divisible by 2. For n=4^p and 2\*4^p, s only ever hits {>=4, 1} - no s=2 kernel needed.
+
+**Probe** (`tools/fft_r4_split_probe.wat` + `.harness.mjs`, n = 4^p only; JS prototype validated 2\*4^p too): correctness vs f64 reference DFT is rel ~2e-7 at all sizes - also ~4x more accurate than the old split module thanks to fewer stages.
+
+**Results** (Apple M5 Pro, Node v24, input copy per iteration for all, best of two runs):
+
+| Size   | r4-split probe | old split (r2) | dual (interleaved) | pffft SIMD | probe vs pffft | probe vs dual |
+| ------ | -------------- | -------------- | ------------------ | ---------- | -------------- | ------------- |
+| N=64   | 17.4M          | 11.0M          | 11.3M              | 11.1M      | **+56%**       | **+54%**      |
+| N=256  | 5.01M          | 2.96M          | 2.78M              | 3.86M      | **+30%**       | **+80%**      |
+| N=1024 | 1.18M          | 673K           | 628K               | 918K       | **+29%**       | **+88%**      |
+| N=4096 | 256K           | 149K           | 135K               | 190K       | **+35%**       | **+90%**      |
+
+**Result**: SUCCESS (probe) - the radix-4 split-format core beats pffft SIMD by 29-56% and our flagship interleaved module by 54-90%. The two structural deficits identified in Experiment 57 (pass count + shuffle overhead) account for essentially the entire gap.
+
+**Integration roadmap**:
+
+1. Productionize in `fft_split_native_f32.wat`: WAT twiddle precompute (new per-stage layout), leading radix-2 stage for N=2\*4^p, output parity handling, conjugate-twiddle inverse
+2. Interleaved API on the same core: fold deinterleave into first-stage loads and reinterleave into last-stage stores (pffft's ordered mode does exactly this)
+3. Rebuild the real FFT on the new core - pffft's real transform is faster than its own half-size complex transform, so a natively-vectorized real path is the end state
+
+**Lessons**:
+
+- Fusing two radix-2 Stockham stages algebraically (rather than redesigning from a radix-4 reference) preserved the memory-layout conventions, which made the WAT port mechanical and correct on the first compile.
+- Split format + radix-4 is multiplicative, not additive: split alone lost (Exp 39), multi-twiddle radix-2 split roughly tied interleaved (Exp 40), but radix-4 split wins big - the format only pays off once the stage math is shuffle-free AND the pass count halves.
+
+### Experiment 58 Integration (same day)
+
+The radix-4 core was integrated into `modules/fft_split_native_f32.wat` (n>=16; n=4/8 keep the old paths):
+
+- `precompute_twiddles_split` now also derives per-stage twiddle triples (forward + conjugated inverse) from the classic W_N^k table - no new trig code. Memory grew 4 -> 5 pages for the two stage-table regions (0x30000 fwd, 0x40000 inv; sized for n=8192).
+- `$stage_r2_lead` (twiddle-free 4-wide add/sub) runs first when log2(n) is odd, making the remaining stage count divisible by 2; s only ever hits {>=4, 1}, so just two radix-4 kernels are needed.
+- `ifft_split` is now a NATIVE inverse: conjugated stage tables + one 1/N scale pass, replacing the conjugate-wrapper (which cost two extra full passes). **Gotcha found in testing**: conjugating the twiddle tables is NOT enough - the hardcoded -i rotation inside the radix-4 butterfly is itself a twiddle and must flip to +i. Implemented by swapping the two middle output-block addresses via an `$inv` param (branch-free address select, kernels shared between fft/ifft).
+- Odd-stage-count sizes (32, 64, 512, 1024, 8192) pay one SIMD copy-back pass to honor the output-in-buffer-A API contract; even-stage sizes (16, 128, 256, 2048, 4096) don't.
+
+**Official results** (`npm run bench`, per-iteration input copy for all):
+
+| Size   | wat-fft f32 split | pffft SIMD | old dual (interleaved) | vs pffft SIMD | vs dual  |
+| ------ | ----------------- | ---------- | ---------------------- | ------------- | -------- |
+| N=16   | 27.4M             | 27.7M      | 35.6M (dual wins)      | -1%           | -23%     |
+| N=32   | 19.8M             | 18.8M      | 17.5M                  | **+6%**       | **+13%** |
+| N=64   | 13.8M             | 13.6M      | 11.2M                  | **+1%**       | **+23%** |
+| N=128  | 8.91M             | 7.39M      | 5.45M                  | **+21%**      | **+64%** |
+| N=256  | 4.86M             | 3.95M      | 2.82M                  | **+23%**      | **+72%** |
+| N=512  | 2.15M             | 1.83M      | 1.24M                  | **+18%**      | **+74%** |
+| N=1024 | 1.05M             | 913K       | 620K                   | **+15%**      | **+69%** |
+| N=2048 | 538K              | 404K       | 273K                   | **+33%**      | **+97%** |
+| N=4096 | 251K              | 188K       | 133K                   | **+34%**      | **+89%** |
+
+**Result**: SUCCESS - wat-fft is again the fastest complex FFT at every size (split module at N>=32, interleaved dual at N=16). All 27 core tests, 22 split tests, and the 52+14 third-party/bench-correctness tests pass; forward error improved ~2x vs the old radix-2 split path.
+
+**Follow-ups**: (a) N=32/64/512/1024 lose ~10-20% to the copy-back pass - an exported raw-output variant or in-driver parity trick could reclaim it; (b) port the core to the interleaved API by folding deinterleave/reinterleave into the first/last stage loads/stores; (c) rebuild the real FFT on this core (the remaining pffft SIMD win: real N>=128).

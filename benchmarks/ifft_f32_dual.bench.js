@@ -9,7 +9,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import FFT from "fft.js";
-import PFFFT from "@echogarden/pffft-wasm";
+import PFFFT from "@echogarden/pffft-wasm/simd";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -112,10 +112,11 @@ async function runBenchmarks() {
         const inputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const outputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, n * 2);
-        inputView.set(inputF32);
-        return { setup, inputPtr, outputPtr };
+        return { setup, inputPtr, outputPtr, inputView, inputBuffer: inputF32 };
       },
       (ctx) => {
+        // Stage input per iteration, same as every other context
+        ctx.inputView.set(ctx.inputBuffer);
         pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_BACKWARD);
       },
     );

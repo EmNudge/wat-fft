@@ -4,17 +4,18 @@ Tools for debugging Stockham and other FFT implementations.
 
 ## Quick Reference
 
-| Tool                                   | Purpose                                           | Command                                           |
-| -------------------------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| `stockham_reference.js`                | JS reference with stage logging                   | `npm run debug:ref -- 16 -v`                      |
-| `index_visualizer.js`                  | Show read/write patterns                          | `npm run debug:index -- 32 verify`                |
-| `wasm_compare.js`                      | Compare WASM vs JS vs DFT                         | `npm run debug:stockham -- multi`                 |
-| `butterfly_tester.js`                  | Test butterfly math                               | `npm run test:butterfly`                          |
-| `permutation_validator.js`             | Validate data flow                                | `npm run debug:perm -- 16`                        |
-| `lint-wasm-dead-code.js`               | Find dead code in WASM                            | `npm run lint:wasm`                               |
-| `generate-dit-codelet.js`              | Generate DIT FFT codelet WAT                      | `node tools/generate-dit-codelet.js`              |
-| `generate-irfft-preprocess-codelet.js` | Generate unrolled IRFFT preprocess WAT (N=64/128) | `node tools/generate-irfft-preprocess-codelet.js` |
-| `generate-radix4-32-codelet.js`        | Generate packed dual-16 radix-4 n=32 codelets     | `node tools/generate-radix4-32-codelet.js`        |
+| Tool                                      | Purpose                                                                  | Command                                           |
+| ----------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
+| `stockham_reference.js`                   | JS reference with stage logging                                          | `npm run debug:ref -- 16 -v`                      |
+| `index_visualizer.js`                     | Show read/write patterns                                                 | `npm run debug:index -- 32 verify`                |
+| `wasm_compare.js`                         | Compare WASM vs JS vs DFT                                                | `npm run debug:stockham -- multi`                 |
+| `butterfly_tester.js`                     | Test butterfly math                                                      | `npm run test:butterfly`                          |
+| `permutation_validator.js`                | Validate data flow                                                       | `npm run debug:perm -- 16`                        |
+| `lint-wasm-dead-code.js`                  | Find dead code in WASM                                                   | `npm run lint:wasm`                               |
+| `generate-dit-codelet.js`                 | Generate DIT FFT codelet WAT                                             | `node tools/generate-dit-codelet.js`              |
+| `generate-irfft-preprocess-codelet.js`    | Generate unrolled IRFFT preprocess WAT (N=64/128)                        | `node tools/generate-irfft-preprocess-codelet.js` |
+| `generate-radix4-32-codelet.js`           | Generate packed dual-16 radix-4 n=32 codelets                            | `node tools/generate-radix4-32-codelet.js`        |
+| `fft_r4_split_probe.wat` + `.harness.mjs` | Experiment 58 radix-4 split-core probe (correctness + A/B vs pffft SIMD) | `node tools/fft_r4_split_probe.harness.mjs`       |
 
 ## Usage
 

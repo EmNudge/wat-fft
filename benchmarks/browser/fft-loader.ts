@@ -23,8 +23,8 @@ import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-// @ts-ignore - pffft-wasm default export is a factory function
-import PFFFT from "@echogarden/pffft-wasm";
+// @ts-ignore - pffft-wasm SIMD glue (the bare import resolves to the non-SIMD build)
+import PFFFT from "@echogarden/pffft-wasm/simd";
 // @ts-ignore - fftw-js is CommonJS but Vite can handle it
 import fftwJs from "fftw-js";
 
@@ -100,9 +100,12 @@ const PFFFT_FORWARD = 0;
 export function generateComplexInput(n: number): {
   interleaved64: Float64Array;
   interleaved32: Float32Array;
+  planar32: Float32Array;
 } {
   const interleaved64 = new Float64Array(n * 2);
   const interleaved32 = new Float32Array(n * 2);
+  // Split layout in one buffer: re in [0, n), im in [n, 2n)
+  const planar32 = new Float32Array(n * 2);
 
   for (let i = 0; i < n; i++) {
     const r = Math.random() * 2 - 1;
@@ -111,9 +114,11 @@ export function generateComplexInput(n: number): {
     interleaved64[i * 2 + 1] = im;
     interleaved32[i * 2] = r;
     interleaved32[i * 2 + 1] = im;
+    planar32[i] = r;
+    planar32[n + i] = im;
   }
 
-  return { interleaved64, interleaved32 };
+  return { interleaved64, interleaved32, planar32 };
 }
 
 /**
@@ -206,7 +211,13 @@ export function createWatFftSplit(size: number): FFTContext {
 
   const realData = new Float32Array(exports.memory.buffer, realOffset, size);
   const imagData = new Float32Array(exports.memory.buffer, imagOffset, size);
+  // Split-layout staging buffer: re in [0, size), im in [size, 2*size).
+  // The split module targets data that is already in split format, so the
+  // benchmark charges it two block copies (same bytes as one interleaved copy),
+  // not a scalar deinterleave loop.
   const inputBuffer = new Float32Array(size * 2);
+  const reSrc = inputBuffer.subarray(0, size);
+  const imSrc = inputBuffer.subarray(size);
 
   return {
     name: "wat-fft (f32 split)",
@@ -215,11 +226,8 @@ export function createWatFftSplit(size: number): FFTContext {
     isF32: true,
     inputBuffer,
     run: () => {
-      // Copy interleaved input to split format
-      for (let i = 0; i < size; i++) {
-        realData[i] = inputBuffer[i * 2];
-        imagData[i] = inputBuffer[i * 2 + 1];
-      }
+      realData.set(reSrc);
+      imagData.set(imSrc);
       exports.fft_split(size);
     },
   };

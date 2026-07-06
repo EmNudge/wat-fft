@@ -31,6 +31,12 @@ export default defineConfig({
       // Allow serving files from project root
       allow: ["."],
     },
+    // Cross-origin isolation gives performance.now() 5µs resolution in Chromium
+    // (otherwise it is clamped to 100µs, quantizing every benchmark sample)
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "require-corp",
+    },
   },
   resolve: {
     alias: {
