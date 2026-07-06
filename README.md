@@ -83,6 +83,8 @@ xychart-beta
 
 **wat-fft f32 beats all competitors at N≥128** (+5% to +31%). At N=64, pffft-wasm has a slight edge. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
+The inverse real FFT (`irfft`) uses a native inverse transform (no conjugate/scale pass) and also beats fftw-js at all sizes N≥128 (+4% to +29% on Apple M5 Pro).
+
 ## Installation
 
 ```bash

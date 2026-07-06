@@ -1,10 +1,11 @@
 // Generates unrolled $irfft_preprocess_64 / $irfft_preprocess_128 WAT codelets
-// (Experiment 51). Mirrors $rfft_postprocess_64/128 structure, but with the
-// inverse formula and fused output conjugate (Experiment 50):
-//   conj(Z[k])    = conj(0.5*(X[k] + conj(X[n2-k]) + conj(W_rot_k)*(X[k] - conj(X[n2-k]))))
-//   conj(Z[n2-k]) = conj(0.5*(X[n2-k] + conj(X[k]) + W_rot_k*(X[n2-k] - conj(X[k]))))
-// where W[k] = exp(-i*pi*k/n2), W_rot = (W.im, -W.re), conj(W_rot) = (W.im, W.re).
-// The middle element is the identity under the fused conjugate -> no code.
+// (Experiments 51-52). Mirrors $rfft_postprocess_64/128 structure, with the
+// inverse formula, emitting Z scaled by 1/n2 (native inverse path):
+//   Z[k]/n2    = h*(X[k] + conj(X[n2-k]) + conj(W_rot_k)*(X[k] - conj(X[n2-k])))
+//   Z[n2-k]/n2 = h*(X[n2-k] + conj(X[k]) + W_rot_k*(X[n2-k] - conj(X[k])))
+// where h = 0.5/n2 folds the inverse FFT's 1/n2 scale into the formula's 0.5,
+// W[k] = exp(-i*pi*k/n2), W_rot = (W.im, -W.re), conj(W_rot) = (W.im, W.re).
+// The middle element is Z[mid]/n2 = conj(X[mid])/n2.
 
 const f = Math.fround;
 
@@ -45,15 +46,15 @@ function dualPair(k, n2) {
     (local.set $cwrot (v128.const f32x4 ${s0} ${c0} ${s1} ${c1}))
 ${cmul("diff", "cwrot", SHUF_RE_DUAL, SHUF_IM_DUAL, SHUF_SWAPREIM_DUAL)}
     (local.set $wd (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
-    (local.set $zk (v128.xor (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)) (global.get $CONJ_MASK_F32)))
-    ;; conj(Z[${n2 - k},${n2 - k - 1}]) side: W_rot = conj(cwrot)
+    (local.set $zk (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)))
+    ;; Z[${n2 - k},${n2 - k - 1}] side: W_rot = conj(cwrot)
     (local.set $conj_xk (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)))
     (local.set $sum2 (f32x4.add (local.get $xn2k) (local.get $conj_xk)))
     (local.set $diff2 (f32x4.sub (local.get $xn2k) (local.get $conj_xk)))
     (local.set $wrot (v128.xor (local.get $cwrot) (global.get $CONJ_MASK_F32)))
 ${cmul("diff2", "wrot", SHUF_RE_DUAL, SHUF_IM_DUAL, SHUF_SWAPREIM_DUAL)}
     (local.set $wd2 (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
-    (local.set $zn2k (v128.xor (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)) (global.get $CONJ_MASK_F32)))
+    (local.set $zn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
     (v128.store (i32.const ${addrK}) (local.get $zk))
     (local.set $zn2k (i8x16.shuffle ${SHUF_SWAP_PAIRS} (local.get $zn2k) (local.get $zn2k)))
     (v128.store (i32.const ${addrN2k}) (local.get $zn2k))
@@ -73,14 +74,14 @@ function singlePair(k, n2) {
     (local.set $cwrot (v128.const f32x4 ${s0} ${c0} ${s0} ${c0}))
 ${cmul("diff", "cwrot", SHUF_RE_SINGLE, SHUF_IM_SINGLE, SHUF_SWAPREIM_SINGLE)}
     (local.set $wd (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
-    (local.set $zk (v128.xor (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)) (global.get $CONJ_MASK_F32)))
+    (local.set $zk (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half)))
     (local.set $conj_xk (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)))
     (local.set $sum2 (f32x4.add (local.get $xn2k) (local.get $conj_xk)))
     (local.set $diff2 (f32x4.sub (local.get $xn2k) (local.get $conj_xk)))
     (local.set $wrot (v128.xor (local.get $cwrot) (global.get $CONJ_MASK_F32)))
 ${cmul("diff2", "wrot", SHUF_RE_SINGLE, SHUF_IM_SINGLE, SHUF_SWAPREIM_SINGLE)}
     (local.set $wd2 (f32x4.add (local.get $prod) (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
-    (local.set $zn2k (v128.xor (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)) (global.get $CONJ_MASK_F32)))
+    (local.set $zn2k (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half)))
     (v128.store64_lane 0 (i32.const ${addrK}) (local.get $zk))
     (v128.store64_lane 0 (i32.const ${addrN2k}) (local.get $zn2k))
 `;
@@ -89,6 +90,8 @@ ${cmul("diff2", "wrot", SHUF_RE_SINGLE, SHUF_IM_SINGLE, SHUF_SWAPREIM_SINGLE)}
 function genCodelet(n) {
   const n2 = n / 2;
   const kEnd = n2 / 2;
+  const h = 0.5 / n2; // exact in binary floating point (n2 a power of 2)
+  const inv = 1 / n2;
   let body = `  (func $irfft_preprocess_${n}
     (local $xk v128) (local $xn2k v128) (local $conj_xn2k v128) (local $conj_xk v128)
     (local $cwrot v128) (local $wrot v128)
@@ -98,19 +101,23 @@ function genCodelet(n) {
     (local $wr v128) (local $wi v128) (local $prod v128) (local $swapped v128)
     (local $x0_re f32) (local $xn2_re f32)
 
-    (local.set $half (v128.const f32x4 0.5 0.5 0.5 0.5))
+    ;; h = 0.5/n2 = ${h}: folds the inverse FFT's 1/n2 scale into the 0.5
+    (local.set $half (v128.const f32x4 ${h} ${h} ${h} ${h}))
 
-    ;; DC (conjugated output): conj(Z[0]) = ((X0+Xn2)/2, (Xn2-X0)/2)
+    ;; DC (scaled output): Z[0]/n2 = ((X0+Xn2)*h, (X0-Xn2)*h)
     (local.set $x0_re (f32.load (i32.const 0)))
     (local.set $xn2_re (f32.load (i32.const ${8 * n2})))
-    (f32.store (i32.const 0) (f32.mul (f32.const 0.5) (f32.add (local.get $x0_re) (local.get $xn2_re))))
-    (f32.store (i32.const 4) (f32.mul (f32.const 0.5) (f32.sub (local.get $xn2_re) (local.get $x0_re))))
+    (f32.store (i32.const 0) (f32.mul (f32.const ${h}) (f32.add (local.get $x0_re) (local.get $xn2_re))))
+    (f32.store (i32.const 4) (f32.mul (f32.const ${h}) (f32.sub (local.get $x0_re) (local.get $xn2_re))))
 
 `;
   let k = 1;
   for (; k + 1 < kEnd; k += 2) body += dualPair(k, n2) + "\n";
   if (k < kEnd) body += singlePair(k, n2) + "\n";
-  body += `    ;; Middle element (k=${kEnd}): conj(conj(X[mid])) = X[mid] -- no-op under fused conjugate
+  body += `    ;; Middle element (k=${kEnd}): Z[mid]/n2 = conj(X[mid]) * ${inv}
+    (local.set $xk (v128.load64_zero (i32.const ${8 * kEnd})))
+    (local.set $xk (f32x4.mul (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)) (v128.const f32x4 ${inv} ${inv} ${inv} ${inv})))
+    (v128.store64_lane 0 (i32.const ${8 * kEnd}) (local.get $xk))
   )`;
   return body;
 }

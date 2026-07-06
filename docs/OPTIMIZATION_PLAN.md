@@ -4,7 +4,7 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-05): Complex FFT beats ALL competitors at ALL sizes. Real FFT beats fftw-js at N≥128; fftw-js is ~5-7% faster at N=64 on this hardware. Inverse Real FFT beats fftw-js at N≥256; fftw-js is faster at N=64/128 (see Remaining Gap Analysis).
+**Current Status** (Apple M5 Pro, 2026-07-05): Complex FFT beats ALL competitors at ALL sizes. Real FFT (forward and inverse) beats fftw-js at N≥128; fftw-js is ~6-7% faster at N=64 on this hardware (see Remaining Gap Analysis).
 
 | Target     | Complex FFT (f64) | Complex FFT (f32)             | Real FFT (f32)                       |
 | ---------- | ----------------- | ----------------------------- | ------------------------------------ |
@@ -105,27 +105,27 @@ Measured on Apple M5 Pro, Node v24.14.1 (Experiments 47-48, 2026-07-05). Earlier
 
 ### Inverse Real FFT f32 vs fftw-js
 
-Measured on Apple M5 Pro (Experiments 50-51, 2026-07-05): SIMD preprocess with fused conjugate, unrolled N=64/128 codelets.
+Measured on Apple M5 Pro (Experiment 52, 2026-07-05): native inverse FFT (conjugated twiddles via flipped sign mask), 1/N scale folded into preprocess - no scale_and_conjugate pass.
 
 | Size   | wat-fft f32 | fftw-js | Result   |
 | ------ | ----------- | ------- | -------- |
-| N=64   | 10.9M       | 12.7M   | **-14%** |
-| N=128  | 7.8M        | 8.3M    | **-7%**  |
-| N=256  | 3.9M        | 3.3M    | **+16%** |
-| N=512  | 1.9M        | 1.8M    | **+8%**  |
-| N=1024 | 921K        | 881K    | **+4%**  |
-| N=2048 | 438K        | 421K    | **+4%**  |
-| N=4096 | 209K        | 195K    | **+6%**  |
+| N=64   | 11.7M       | 12.8M   | **-7%**  |
+| N=128  | 8.5M        | 8.1M    | **+4%**  |
+| N=256  | 4.2M        | 3.3M    | **+29%** |
+| N=512  | 2.1M        | 1.8M    | **+19%** |
+| N=1024 | 995K        | 885K    | **+12%** |
+| N=2048 | 471K        | 415K    | **+14%** |
+| N=4096 | 227K        | 200K    | **+15%** |
 
 ---
 
 ## Remaining Gap Analysis
 
-On Apple M5 Pro (Experiments 47-51), the open gaps are:
+On Apple M5 Pro (Experiments 47-52), the open gaps are:
 
-- **IRFFT N=64/128**: fftw-js `inverse` is faster at N=64 (-14%) and N=128 (-7%). Experiment 50 (SIMD preprocess + fused conjugate) closed most of the original gap — IRFFT wins at all sizes N≥256 (+4% to +19%) — and Experiment 51 (unrolled preprocess codelets) added +3% at N=128. The residual is structural: the inverse does an extra `$scale_and_conjugate` full-buffer pass the forward path doesn't have. Removing it needs a native inverse Stockham (negated twiddles) with the 1/N scale folded into the preprocess constants.
-- **N=64 RFFT**: fftw-js is consistently ~5-7% faster (outside noise). Profiling shows 67% of time in `$fft_32_dit` (68 locals, register-spill territory) — the prior "tied" result was hardware-specific. Re-investigation on M5 is open work; Experiments 22-25/44 findings were from older hardware.
-- **Forward RFFT N≥128**: Consistently faster (+4% to +54%)
+- **N=64 (forward -6%, inverse -7%)**: The only remaining losses. Experiment 52's native inverse FFT (negated twiddles via flipped sign mask, 1/N scale folded into preprocess) removed the inverse path's last structural overhead — IRFFT now wins at all N≥128 and gained +5-8% at every size. Both N=64 paths are now structurally identical (pre/post-process + `$fft_32_dit` core), and profiling puts 67% of the time in `$fft_32_dit` (68 locals, register-spill territory). Re-investigation of that core on M5 is the open work; Experiments 22-25/44 findings were from older hardware.
+- **Forward RFFT N≥128**: Consistently faster (+4% to +55%)
+- **Inverse RFFT N≥128**: Consistently faster (+4% to +29%)
 
 Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).
 
