@@ -145,6 +145,19 @@ Open opportunities (smaller wins):
 - **Memory-staged n=64 codelet**: the lane-packing trick is used up at n=32; an n=64 codelet needs staging through memory between stages. N=128 (weakest margin, +4%) is the size that would benefit.
 - ~~**Native inverse for the complex f32 `ifft`**~~: DONE in Experiment 55 - flipped-sign-mask port of Experiment 52 plus inverse n=8/16 codelets; ifft gained +13-22% and now matches forward fft throughput exactly (benchmark: `npm run bench:ifft32`).
 - **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions, and Experiment 57 reversed the competitive picture entirely; re-run probes when hardware changes and audit competitor builds (`exports` maps!) when adding libraries.
+- **f64 twiddle precision**: the accuracy report (below) shows the f64 modules plateau ~4-5 decimal digits short of f64 precision; more accurate twiddle generation is the identified fix.
+
+---
+
+## Measurement & Accuracy Tooling (2026-07-06)
+
+New instrumentation so experiments are judged against measured noise instead of eyeballed 2s runs:
+
+- **Statistical bench harness** (`benchmarks/lib/harness.js`): all 7 Node bench files now share it. Warmup + 10 batch-calibrated ~150ms samples per benchmark; reports median ops/s with a ±CV column; inputs are seeded (mulberry32) so runs are reproducible. Every run persists JSON to `benchmarks/results/<benchId>.latest.json` with git/machine metadata; `--save-baseline` writes a baseline copy.
+- **Noise-aware diff** (`npm run bench:diff`, `scripts/bench-diff.js`): compares baseline vs latest, flags deltas only when |delta| > max(2%, 3× combined CV). Caveat found during validation: cross-process runs of identical code swung up to -13% at small N (N=64/128 split rfft) despite 0.1% within-run CV (thermal/code-layout); confirm small-N deltas with a second run pair.
+- **Accuracy diagnostics** (`npm run accuracy`, `tools/accuracy_report.js`): max-rel/rms-rel error vs f64 reference DFT for every module × transform × size, plus a `quality` column (max-rel / (eps·√log₂N)) that should stay flat with N. `tests/accuracy.test.js` asserts thresholds from the same measurement code; `tests/per_bin_f32.test.js` extends per-bin validation to the f32 modules (the test class that would have caught the historical rfft_32 bins-9-15 bug, now covering the flagship split module). Both are part of `test:all`.
+
+**Identified opportunity — f64 twiddle precision**: the f32 modules are numerically near-optimal (quality 0.3-3), but the f64 modules (`fft_combined`, `fft_real_combined`) plateau at max-rel ~5e-11 for N≥32 — quality ~65,000-175,000, i.e. 4-5 orders of magnitude above f64 eps. Exception: `fft_combined` N=16 and `fft_real_combined` N=32 hit true f64 precision (~4e-15), so those paths use exact/hardcoded twiddles. Root cause is almost certainly the Taylor-series trig in `precompute_twiddles` (fine for f32, limiting for f64). More accurate twiddle generation (higher-order Taylor, argument reduction, or hardcoded tables) would gain ~4 decimal digits of f64 accuracy; if fixed, tighten `MAX_REL.f64` in `tests/accuracy.test.js`.
 
 ---
 

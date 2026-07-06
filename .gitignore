@@ -8,3 +8,4 @@ playground/public/pffft.wasm
 
 # Generated benchmark results
 benchmark-results.json
+benchmarks/results/

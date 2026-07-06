@@ -9,6 +9,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
 import PFFFT from "@echogarden/pffft-wasm/simd";
+import {
+  DEFAULT_CONFIG,
+  formatNumber,
+  printResults,
+  runBenchmark,
+  saveResults,
+  seededRandom,
+} from "./lib/harness.js";
 
 const PFFFT_REAL = 0;
 const PFFFT_BACKWARD = 1;
@@ -24,53 +32,24 @@ async function loadWasm(name) {
   return instance.exports;
 }
 
-const WARMUP_ITERATIONS = 100;
-const BENCHMARK_DURATION_MS = 2000;
 const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
 
 function generateRealInput(n) {
+  const rand = seededRandom(n);
   const data = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    data[i] = Math.random() * 2 - 1;
+    data[i] = rand();
   }
   return data;
-}
-
-function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
-  const ctx = setupFn();
-  for (let i = 0; i < WARMUP_ITERATIONS; i++) {
-    benchFn(ctx);
-  }
-  if (teardownFn) teardownFn(ctx);
-
-  const freshCtx = setupFn();
-  const startTime = performance.now();
-  let iterations = 0;
-
-  while (performance.now() - startTime < BENCHMARK_DURATION_MS) {
-    benchFn(freshCtx);
-    iterations++;
-  }
-
-  const endTime = performance.now();
-  const elapsed = endTime - startTime;
-  const opsPerSec = (iterations / elapsed) * 1000;
-
-  if (teardownFn) teardownFn(freshCtx);
-
-  return { name, iterations, elapsed, opsPerSec };
-}
-
-function formatNumber(num) {
-  return num.toLocaleString("en-US", { maximumFractionDigits: 0 });
 }
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
   console.log("f32 Inverse Real FFT Benchmark");
   console.log("=".repeat(70));
-  console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
-  console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
+  console.log(
+    `Samples: ${DEFAULT_CONFIG.samples} x ${DEFAULT_CONFIG.sampleMs}ms per test (median reported)`,
+  );
   console.log("");
 
   const wasmExports = await loadWasm("fft_real_f32_dual");
@@ -78,6 +57,7 @@ async function runBenchmarks() {
   const pffft = await PFFFT();
 
   const summary = [];
+  const sizeGroups = [];
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -174,25 +154,12 @@ async function runBenchmarks() {
     );
     results.push(pffftResult);
 
-    // Sort by performance
-    results.sort((a, b) => b.opsPerSec - a.opsPerSec);
-
     // Calculate speedup (best wat-fft implementation: the split core)
     const vsFftw = splitResult.opsPerSec / fftwResult.opsPerSec;
     const vsPffft = splitResult.opsPerSec / pffftResult.opsPerSec;
 
-    // Print results
-    console.log("");
-    console.log("Implementation                 ops/sec      relative");
-    console.log("-".repeat(55));
-    const fastest = results[0].opsPerSec;
-    for (const result of results) {
-      const relative = result.opsPerSec / fastest;
-      const relativeStr = relative === 1 ? "(fastest)" : `${(relative * 100).toFixed(1)}%`;
-      console.log(
-        `${result.name.padEnd(27)} ${formatNumber(result.opsPerSec).padStart(10)}    ${relativeStr.padStart(10)}`,
-      );
-    }
+    printResults(results);
+    sizeGroups.push({ size, results });
     console.log("");
     console.log(`wat-fft vs fftw-js: ${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`);
     console.log(
@@ -226,6 +193,8 @@ async function runBenchmarks() {
   console.log("=".repeat(70));
   console.log("Benchmark complete!");
   console.log("=".repeat(70));
+
+  saveResults("irfft-f32", sizeGroups);
 }
 
 runBenchmarks().catch(console.error);

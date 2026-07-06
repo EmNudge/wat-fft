@@ -17,6 +17,13 @@ import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
 import PFFFT from "@echogarden/pffft-wasm/simd";
+import {
+  DEFAULT_CONFIG,
+  printResults,
+  runBenchmark,
+  saveResults,
+  seededRandom,
+} from "./lib/harness.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,68 +55,40 @@ async function loadWasmFFTSplit() {
   return instance.exports;
 }
 
-// Benchmark configuration
-const WARMUP_ITERATIONS = 100;
-const BENCHMARK_DURATION_MS = 2000;
 // Include both power-of-4 (16, 64, 256, 1024, 4096) and non-power-of-4 (32, 128, 512, 2048)
 const SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
 
-// Generate random complex input data
+// Generate deterministic complex input data
 function generateComplexInput(n) {
+  const rand = seededRandom(n);
   const real = new Float64Array(n);
   const imag = new Float64Array(n);
   const real32 = new Float32Array(n);
   const imag32 = new Float32Array(n);
   for (let i = 0; i < n; i++) {
-    real[i] = Math.random() * 2 - 1;
-    imag[i] = Math.random() * 2 - 1;
+    real[i] = rand();
+    imag[i] = rand();
     real32[i] = real[i];
     imag32[i] = imag[i];
   }
   return { real, imag, real32, imag32 };
 }
 
-// Benchmark runner
-function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
-  const ctx = setupFn();
-  for (let i = 0; i < WARMUP_ITERATIONS; i++) {
-    benchFn(ctx);
-  }
-  if (teardownFn) teardownFn(ctx);
-
-  const freshCtx = setupFn();
-  const startTime = performance.now();
-  let iterations = 0;
-
-  while (performance.now() - startTime < BENCHMARK_DURATION_MS) {
-    benchFn(freshCtx);
-    iterations++;
-  }
-
-  const elapsed = performance.now() - startTime;
-  const opsPerSec = (iterations / elapsed) * 1000;
-
-  if (teardownFn) teardownFn(freshCtx);
-
-  return { name, iterations, elapsed, opsPerSec };
-}
-
-function formatNumber(num) {
-  return num.toLocaleString("en-US", { maximumFractionDigits: 0 });
-}
-
 async function runBenchmarks() {
   console.log("=".repeat(70));
   console.log("FFT Performance Benchmarks");
   console.log("=".repeat(70));
-  console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
-  console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
+  console.log(
+    `Samples: ${DEFAULT_CONFIG.samples} x ${DEFAULT_CONFIG.sampleMs}ms per test (median reported)`,
+  );
   console.log("");
 
   const wasmExports = await loadWasmFFT();
   const wasmExportsF32 = await loadWasmFFTf32();
   const wasmExportsSplit = await loadWasmFFTSplit();
   const pffft = await PFFFT();
+
+  const sizeGroups = [];
 
   for (const size of SIZES) {
     console.log("-".repeat(70));
@@ -291,22 +270,8 @@ async function runBenchmarks() {
     );
     results.push(pffftResult);
 
-    // Sort by performance
-    results.sort((a, b) => b.opsPerSec - a.opsPerSec);
-    const fastest = results[0].opsPerSec;
-
-    console.log("");
-    console.log("Library                   ops/sec        relative");
-    console.log("-".repeat(50));
-
-    for (const result of results) {
-      const relative = result.opsPerSec / fastest;
-      const relativeStr = relative === 1 ? "(fastest)" : `${(relative * 100).toFixed(1)}%`;
-      const bar = "#".repeat(Math.round(relative * 20));
-      console.log(
-        `${result.name.padEnd(22)} ${formatNumber(result.opsPerSec).padStart(10)}    ${relativeStr.padStart(10)}  ${bar}`,
-      );
-    }
+    printResults(results);
+    sizeGroups.push({ size, results });
     console.log("");
   }
 
@@ -323,6 +288,8 @@ async function runBenchmarks() {
   console.log("- webfft: Meta-library with kissWasm backend (f32)");
   console.log("- pffft-wasm: PFFFT compiled to WASM with SIMD (f32)");
   console.log("=".repeat(70));
+
+  saveResults("fft", sizeGroups);
 }
 
 runBenchmarks().catch(console.error);

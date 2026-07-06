@@ -18,14 +18,17 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 
 ### Node.js Benchmarks
 
-| File                      | Purpose                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `fft.bench.js`            | Main complex FFT benchmark - compares all wat-fft variants against JS libraries |
-| `rfft.bench.js`           | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
-| `fft_f32_dual.bench.js`   | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
-| `ifft_f32_dual.bench.js`  | f32 inverse complex FFT - native inverse vs fft.js and pffft-wasm backward      |
-| `rfft_f32_dual.bench.js`  | f32 dual-complex rfft - compares against fftw-js and pffft-wasm SIMD (all f32)  |
-| `irfft_f32_dual.bench.js` | f32 inverse rfft - compares against fftw-js and pffft-wasm SIMD inverses        |
+| File                       | Purpose                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------- |
+| `fft.bench.js`             | Main complex FFT benchmark - compares all wat-fft variants against JS libraries |
+| `rfft.bench.js`            | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
+| `fft_f32_dual.bench.js`    | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
+| `ifft_f32_dual.bench.js`   | f32 inverse complex FFT - native inverse vs fft.js and pffft-wasm backward      |
+| `rfft_f32_dual.bench.js`   | f32 dual-complex rfft - compares against fftw-js and pffft-wasm SIMD (all f32)  |
+| `irfft_f32_dual.bench.js`  | f32 inverse rfft - compares against fftw-js and pffft-wasm SIMD inverses        |
+| `fft_kernel_only.bench.js` | FFT kernel only - excludes interleaved<->split format conversion overhead       |
+
+All Node bench files use the shared statistical harness `lib/harness.js` (see Configuration below).
 
 ### Browser Benchmarks (Vitest)
 
@@ -63,34 +66,50 @@ node benchmarks/rfft_f32_dual.bench.js
 
 ## Configuration
 
-All benchmarks use consistent configuration (defined at top of each file):
+All Node benchmarks share the statistical harness in `benchmarks/lib/harness.js`:
 
 ```javascript
-const WARMUP_ITERATIONS = 100; // JIT warmup
-const BENCHMARK_DURATION_MS = 2000; // 2 seconds per test
-const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
+const DEFAULT_CONFIG = {
+  warmupMs: 200, // time-based JIT warmup (after warmupIterations)
+  warmupIterations: 100,
+  samples: 10, // independent timed samples per benchmark
+  sampleMs: 150, // target duration of each sample
+};
 ```
+
+- **Sampling**: each benchmark runs 10 batch-calibrated samples of ~150ms (no timer calls in the hot loop, which matters at small N). Reported ops/s is the **median** across samples; min/max/CV describe the spread.
+- **Deterministic inputs**: all bench files generate inputs with `seededRandom(n)` (mulberry32), so runs are reproducible across runs and machines.
 
 ## Output Format
 
-Benchmarks output formatted tables showing:
+Each size group prints a table sorted fastest-first, with a ±CV (coefficient of variation) noise column:
 
 ```
-======================================================================
-FFT Performance Benchmarks
-======================================================================
-Duration: 2000ms per test
-Warmup: 100 iterations
-
-----------------------------------------------------------------------
-FFT Size: N=1024
-----------------------------------------------------------------------
-  wat-fft (Combined):      191,234 ops/s
-  fft.js:                  113,456 ops/s
-  kissfft-js:               98,765 ops/s
-
-  Winner: wat-fft (Combined) - 1.69x faster than fft.js
+Implementation                median ops/s     ±CV      relative
+------------------------------------------------------------------
+wat-fft rfft_split               7,912,345    0.3%    (fastest)
+pffft-wasm (SIMD)                7,193,210    0.5%        90.9%
+fftw-js                          2,701,882    0.4%        34.2%
 ```
+
+Every run also persists JSON to `benchmarks/results/<benchId>.latest.json` (gitignored) with full results plus metadata: git commit/branch/dirty flag, Node/V8 version, CPU model, platform, and timestamp. Passing `--save-baseline` additionally writes `<benchId>.baseline.json` for later comparison.
+
+## Comparing Runs (bench:diff)
+
+To judge an optimization, save a baseline before the change and diff after:
+
+```bash
+node benchmarks/rfft_f32_dual.bench.js --save-baseline   # before change
+# ...make changes, npm run build...
+node benchmarks/rfft_f32_dual.bench.js                   # after change
+npm run bench:diff                    # compare all baseline/latest pairs
+npm run bench:diff rfft-f32           # compare one benchmark id
+npm run bench:diff -- --fail-on-regression   # exit 1 on significant regression
+```
+
+`scripts/bench-diff.js` flags a delta as significant (▲/▼) only when |delta| > max(2%, 3× combined CV); everything else is marked `~` (within noise). Two explicit JSON paths can also be passed to compare arbitrary runs.
+
+**Cross-process noise caveat**: separate processes running identical code have shown swings up to -13% at small N (N=64/128 split rfft) even with within-run CV of 0.1% — thermal and code-layout effects. Confirm significant small-N deltas with a second run pair before acting on them.
 
 ## Competitors
 
@@ -169,9 +188,9 @@ Using `PFFFT_COMPLEX = 0` will actually run a Real FFT, giving incorrect results
 
 ### What to Look For
 
-1. **Consistency**: Results should be stable across multiple runs (±5%)
+1. **Consistency**: the ±CV column measures within-run noise; distrust small deltas on any result with CV above ~3%
 2. **Size scaling**: Performance should scale appropriately with N
-3. **Regressions**: Compare against previous benchmark results in experiment log
+3. **Regressions**: use `npm run bench:diff` against a saved baseline (noise-aware); see the experiment log for historical context
 
 ### Precision Considerations
 
@@ -182,32 +201,20 @@ Using `PFFFT_COMPLEX = 0` will actually run a Real FFT, giving incorrect results
 ## Adding New Benchmarks
 
 1. Create `benchmarks/your_benchmark.bench.js`
-2. Follow the existing pattern:
+2. Use the shared harness — do not hand-roll a timing loop:
 
    ```javascript
-   const WARMUP_ITERATIONS = 100;
-   const BENCHMARK_DURATION_MS = 2000;
+   import { runBenchmark, printResults, saveResults, seededRandom } from "./lib/harness.js";
 
-   function runBenchmark(name, setupFn, benchFn, teardownFn = null) {
-     // Warmup
-     const ctx = setupFn();
-     for (let i = 0; i < WARMUP_ITERATIONS; i++) {
-       benchFn(ctx);
-     }
-
-     // Timed run
-     const freshCtx = setupFn();
-     const startTime = performance.now();
-     let iterations = 0;
-     while (performance.now() - startTime < BENCHMARK_DURATION_MS) {
-       benchFn(freshCtx);
-       iterations++;
-     }
-
-     const elapsed = performance.now() - startTime;
-     const opsPerSec = (iterations / elapsed) * 1000;
-     return { name, iterations, elapsed, opsPerSec };
+   const sizeGroups = [];
+   for (const size of [64, 256, 1024, 4096]) {
+     const rand = seededRandom(size); // deterministic input
+     const results = [];
+     results.push(runBenchmark("my-impl", setupFn, benchFn, teardownFn));
+     printResults(results);
+     sizeGroups.push({ size, results });
    }
+   saveResults("my-bench", sizeGroups); // JSON for bench:diff
    ```
 
 3. Add npm script to `package.json` if needed
