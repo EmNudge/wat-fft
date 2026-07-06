@@ -14,6 +14,7 @@ Tools for debugging Stockham and other FFT implementations.
 | `lint-wasm-dead-code.js`               | Find dead code in WASM                            | `npm run lint:wasm`                               |
 | `generate-dit-codelet.js`              | Generate DIT FFT codelet WAT                      | `node tools/generate-dit-codelet.js`              |
 | `generate-irfft-preprocess-codelet.js` | Generate unrolled IRFFT preprocess WAT (N=64/128) | `node tools/generate-irfft-preprocess-codelet.js` |
+| `generate-radix4-32-codelet.js`        | Generate packed dual-16 radix-4 n=32 codelets     | `node tools/generate-radix4-32-codelet.js`        |
 
 ## Usage
 

@@ -52,7 +52,7 @@ Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft
 
 | Size   | wat-fft (f32)        | pffft-wasm (f32) | fftw-js (f32)    | vs best          |
 | ------ | -------------------- | ---------------- | ---------------- | ---------------- |
-| N=64   | **15,000,000 ops/s** | 12,500,000 ops/s | 12,300,000 ops/s | **+20%** (pffft) |
+| N=64   | **19,500,000 ops/s** | 12,500,000 ops/s | 12,300,000 ops/s | **+56%** (pffft) |
 | N=128  | **7,920,000 ops/s**  | 6,160,000 ops/s  | 7,600,000 ops/s  | **+4%** (fftw)   |
 | N=256  | **4,120,000 ops/s**  | 3,330,000 ops/s  | 2,600,000 ops/s  | **+24%** (pffft) |
 | N=512  | **1,960,000 ops/s**  | 1,440,000 ops/s  | 1,550,000 ops/s  | **+27%** (fftw)  |
@@ -73,9 +73,9 @@ config:
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 16
+    y-axis "Million ops/s" 0 --> 20
     line [8.66, 5.01, 2.06, 1.26, 0.451, 0.257, 0.095]
-    line [15.04, 7.92, 4.12, 1.96, 0.955, 0.459, 0.220]
+    line [19.48, 7.92, 4.12, 1.96, 0.955, 0.459, 0.220]
     line [12.26, 7.60, 2.60, 1.55, 0.807, 0.403, 0.190]
     line [12.54, 6.16, 3.33, 1.44, 0.717, 0.301, 0.143]
     line [4.70, 2.81, 1.24, 0.707, 0.283, 0.156, 0.064]
@@ -83,9 +83,9 @@ xychart-beta
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats every competitor at every size** (+4% to +27% vs the best of pffft-wasm/fftw-js). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 beats every competitor at every size** (+4% to +56% vs the best of pffft-wasm/fftw-js). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
-On Apple M5 Pro (Node v24), wat-fft beats fftw-js at **every** size in both directions: forward +4% to +58%, and the inverse real FFT (`irfft`, a native inverse transform with no conjugate/scale pass) +4% to +29%. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
+On Apple M5 Pro (Node v24), wat-fft beats fftw-js at **every** size in both directions: forward +4% to +57%, and the inverse real FFT (`irfft`, a native inverse transform with no conjugate/scale pass) +4% to +54%. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
 
 ## Installation
 
