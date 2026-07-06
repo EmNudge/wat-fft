@@ -3192,29 +3192,6 @@
 
 
   ;; ============================================================================
-  ;; Conjugate Buffer (flip sign of all imaginary parts)
-  ;; ============================================================================
-
-  (func $conjugate_buffer (param $n i32)
-    (local $i i32)
-    (local $bytes i32)
-
-    (local.set $bytes (i32.shl (local.get $n) (i32.const 3)))  ;; n * 8 bytes
-    (local.set $i (i32.const 0))
-
-    (block $done
-      (loop $loop
-        (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
-        (v128.store (local.get $i)
-          (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK_F32)))
-        (local.set $i (i32.add (local.get $i) (i32.const 16)))
-        (br $loop)
-      )
-    )
-  )
-
-
-  ;; ============================================================================
   ;; Scale and Conjugate Buffer (multiply by 1/N and conjugate)
   ;; ============================================================================
   ;; Reads from $src (0 or SECONDARY_OFFSET, wherever the FFT result landed),
@@ -3246,154 +3223,199 @@
 
 
   ;; ============================================================================
-  ;; Internal IFFT Entry Point
+  ;; IRFFT Pre-Processing (SIMD, emits conjugated output)
   ;; ============================================================================
-  ;; IFFT(X) = (1/N) * conj(FFT(conj(X)))
-
-  (func $ifft (param $n i32)
-    ;; scale_and_conjugate reads directly from wherever the FFT result landed,
-    ;; so no copy-back pass is needed (Experiment 49).
-    (call $conjugate_buffer (local.get $n))
-    (call $scale_and_conjugate (local.get $n) (call $fft_nc (local.get $n)))
-  )
-
-
-  ;; ============================================================================
-  ;; IRFFT Pre-Processing
-  ;; ============================================================================
-  ;; Converts N/2+1 complex spectrum values back to N/2 packed complex values.
-  ;; This is the inverse of RFFT post-processing.
+  ;; Converts N/2+1 complex spectrum values back to N/2 packed complex values,
+  ;; emitting conj(Z) directly so the IFFT identity needs no separate initial
+  ;; conjugate pass (Experiment 50):
+  ;;   IFFT(Z) = (1/N) * conj(FFT(conj(Z)))
   ;;
-  ;; For RFFT post-processing:
-  ;;   X[k] = 0.5 * (Z[k] + conj(Z[n2-k]) + W_rot * (Z[k] - conj(Z[n2-k])))
+  ;; Inverse of the forward post-processing:
+  ;;   Z[k]    = 0.5 * (X[k] + conj(X[n2-k]) + conj(W_rot_k) * (X[k] - conj(X[n2-k])))
+  ;;   Z[n2-k] = 0.5 * (X[n2-k] + conj(X[k]) + W_rot_k * (X[n2-k] - conj(X[k])))
+  ;; where W_rot_k = (W.im, -W.re) and conj(W_rot_k) = (W.im, W.re). Both sides
+  ;; use W[k] (conj(W_rot_{n2-k}) = W_rot_k), so each dual pair needs only one
+  ;; twiddle load, unlike the forward post-process which loads W[n2-k] too.
   ;;
-  ;; The inverse formula (derived by inverting the linear transformation):
-  ;;   Z[k] = 0.5 * (X[k] + conj(X[n2-k]) + conj(W_rot) * (X[k] - conj(X[n2-k])))
-  ;;
-  ;; Note: The inverse uses conj(W_rot) = (W.im, W.re) instead of W_rot = (W.im, -W.re)
+  ;; Dual-pair SIMD structure mirrors $rfft_postprocess_simd.
 
   (func $irfft_preprocess (param $n2 i32)
-    (local $k i32) (local $n2_minus_k i32) (local $k_end i32)
+    (local $k i32) (local $k_end i32) (local $n2_minus_k i32)
     (local $addr_k i32) (local $addr_n2k i32) (local $tw_addr i32)
-    ;; Scalar values
+    ;; SIMD registers
+    (local $xk v128) (local $xn2k v128) (local $conj_xn2k v128) (local $conj_xk v128)
+    (local $wk v128) (local $cwrot v128) (local $wrot v128)
+    (local $sum v128) (local $diff v128) (local $wd v128)
+    (local $sum2 v128) (local $diff2 v128) (local $wd2 v128)
+    (local $zk v128) (local $zn2k v128)
+    (local $half v128)
+    ;; Scalar for DC
     (local $x0_re f32) (local $xn2_re f32)
-    (local $xk_re f32) (local $xk_im f32) (local $xn2k_re f32) (local $xn2k_im f32)
-    (local $wk_re f32) (local $wk_im f32)
-    (local $wrot_re f32) (local $wrot_im f32)
-    (local $zk_re f32) (local $zk_im f32) (local $zn2k_re f32) (local $zn2k_im f32)
-    ;; Temporaries
-    (local $conj_xn2k_re f32) (local $conj_xn2k_im f32)
-    (local $conj_xk_re f32) (local $conj_xk_im f32)
-    (local $sum_re f32) (local $sum_im f32)
-    (local $diff_re f32) (local $diff_im f32)
-    (local $wd_re f32) (local $wd_im f32)
+    ;; For complex multiply
+    (local $wr v128) (local $wi v128) (local $prod v128) (local $swapped v128)
 
-    ;; DC handling: Z[0].re = (X[0].re + X[n2].re)/2, Z[0].im = (X[0].re - X[n2].re)/2
-    ;; This comes from: X[0] = Z[0].re + Z[0].im, X[n2] = Z[0].re - Z[0].im
+    (local.set $half (v128.const f32x4 0.5 0.5 0.5 0.5))
+
+    ;; DC handling (conjugated output):
+    ;; Z[0] = ((X[0].re + X[n2].re)/2, (X[0].re - X[n2].re)/2), so
+    ;; conj(Z[0]).im = (X[n2].re - X[0].re)/2
     (local.set $x0_re (f32.load (i32.const 0)))
     (local.set $addr_n2k (i32.shl (local.get $n2) (i32.const 3)))
     (local.set $xn2_re (f32.load (local.get $addr_n2k)))
     (f32.store (i32.const 0) (f32.mul (f32.const 0.5) (f32.add (local.get $x0_re) (local.get $xn2_re))))
-    (f32.store (i32.const 4) (f32.mul (f32.const 0.5) (f32.sub (local.get $x0_re) (local.get $xn2_re))))
+    (f32.store (i32.const 4) (f32.mul (f32.const 0.5) (f32.sub (local.get $xn2_re) (local.get $x0_re))))
 
-    ;; Process pairs (k, n2-k)
+    ;; Main SIMD loop: process 2 pairs per iteration
+    ;; Pairs (k, n2-k) and (k+1, n2-k-1)
     (local.set $k_end (i32.shr_u (local.get $n2) (i32.const 1)))
     (local.set $k (i32.const 1))
 
     (block $done_main (loop $main_loop
-      (br_if $done_main (i32.ge_u (local.get $k) (local.get $k_end)))
+      ;; Need at least 2 pairs, so k+1 < k_end
+      (br_if $done_main (i32.ge_u (i32.add (local.get $k) (i32.const 1)) (local.get $k_end)))
 
       (local.set $n2_minus_k (i32.sub (local.get $n2) (local.get $k)))
       (local.set $addr_k (i32.shl (local.get $k) (i32.const 3)))
-      (local.set $addr_n2k (i32.shl (local.get $n2_minus_k) (i32.const 3)))
+      ;; addr_n2k points to X[n2-k-1], loading 16 bytes gives [X[n2-k-1], X[n2-k]]
+      (local.set $addr_n2k (i32.shl (i32.sub (local.get $n2_minus_k) (i32.const 1)) (i32.const 3)))
 
-      ;; Load X[k] and X[n2-k]
-      (local.set $xk_re (f32.load (local.get $addr_k)))
-      (local.set $xk_im (f32.load (i32.add (local.get $addr_k) (i32.const 4))))
-      (local.set $xn2k_re (f32.load (local.get $addr_n2k)))
-      (local.set $xn2k_im (f32.load (i32.add (local.get $addr_n2k) (i32.const 4))))
+      ;; Load [X[k], X[k+1]] - contiguous
+      (local.set $xk (v128.load (local.get $addr_k)))
 
-      ;; conj(X[n2-k]) and conj(X[k])
-      (local.set $conj_xn2k_re (local.get $xn2k_re))
-      (local.set $conj_xn2k_im (f32.neg (local.get $xn2k_im)))
-      (local.set $conj_xk_re (local.get $xk_re))
-      (local.set $conj_xk_im (f32.neg (local.get $xk_im)))
+      ;; Load [X[n2-k-1], X[n2-k]] and shuffle to [X[n2-k], X[n2-k-1]]
+      (local.set $xn2k (v128.load (local.get $addr_n2k)))
+      (local.set $xn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+                                      (local.get $xn2k) (local.get $xn2k)))
 
-      ;; Load W[k] and compute conj(W_rot) = (W.im, W.re)
-      ;; W_rot = (W.im, -W.re), so conj(W_rot) = (W.im, W.re)
-      (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (i32.shl (local.get $k) (i32.const 3))))
-      (local.set $wk_re (f32.load (local.get $tw_addr)))
-      (local.set $wk_im (f32.load (i32.add (local.get $tw_addr) (i32.const 4))))
-      (local.set $wrot_re (local.get $wk_im))       ;; conj(W_rot).re = W.im
-      (local.set $wrot_im (local.get $wk_re))       ;; conj(W_rot).im = W.re (not negated!)
+      (local.set $conj_xn2k (v128.xor (local.get $xn2k) (global.get $CONJ_MASK_F32)))
 
-      ;; Z[k] = 0.5 * (X[k] + conj(X[n2-k]) + conj(W_rot) * (X[k] - conj(X[n2-k])))
-      ;; sum = X[k] + conj(X[n2-k])
-      (local.set $sum_re (f32.add (local.get $xk_re) (local.get $conj_xn2k_re)))
-      (local.set $sum_im (f32.add (local.get $xk_im) (local.get $conj_xn2k_im)))
+      ;; sum = X[k,k+1] + conj(X[n2-k, n2-k-1])
+      ;; diff = X[k,k+1] - conj(X[n2-k, n2-k-1])
+      (local.set $sum (f32x4.add (local.get $xk) (local.get $conj_xn2k)))
+      (local.set $diff (f32x4.sub (local.get $xk) (local.get $conj_xn2k)))
 
-      ;; diff = X[k] - conj(X[n2-k])
-      (local.set $diff_re (f32.sub (local.get $xk_re) (local.get $conj_xn2k_re)))
-      (local.set $diff_im (f32.sub (local.get $xk_im) (local.get $conj_xn2k_im)))
+      ;; Load [W[k], W[k+1]]; conj(W_rot) = (W.im, W.re) is a plain re/im swap
+      (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
+      (local.set $wk (v128.load (local.get $tw_addr)))
+      (local.set $cwrot
+        (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11 (local.get $wk) (local.get $wk)))
 
-      ;; wd = conj(W_rot) * diff (complex multiply)
-      (local.set $wd_re (f32.sub (f32.mul (local.get $wrot_re) (local.get $diff_re))
-                                  (f32.mul (local.get $wrot_im) (local.get $diff_im))))
-      (local.set $wd_im (f32.add (f32.mul (local.get $wrot_re) (local.get $diff_im))
-                                  (f32.mul (local.get $wrot_im) (local.get $diff_re))))
+      ;; wd = conj(W_rot) * diff (dual-complex multiply)
+      (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                    (local.get $cwrot) (local.get $cwrot)))
+      (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                    (local.get $cwrot) (local.get $cwrot)))
+      (local.set $prod (f32x4.mul (local.get $diff) (local.get $wr)))
+      (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                         (local.get $diff) (local.get $diff)))
+      (local.set $wd (f32x4.add (local.get $prod)
+        (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
 
-      ;; Z[k] = 0.5 * (sum + wd)
-      (local.set $zk_re (f32.mul (f32.const 0.5) (f32.add (local.get $sum_re) (local.get $wd_re))))
-      (local.set $zk_im (f32.mul (f32.const 0.5) (f32.add (local.get $sum_im) (local.get $wd_im))))
+      ;; conj(Z[k, k+1]) = conj(0.5 * (sum + wd))
+      (local.set $zk (v128.xor
+        (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half))
+        (global.get $CONJ_MASK_F32)))
 
-      ;; Z[n2-k] = 0.5 * (X[n2-k] + conj(X[k]) + conj(W_rot_{n2-k}) * (X[n2-k] - conj(X[k])))
-      ;; Note: conj(W_rot_{n2-k}) = W_rot_k (the twiddles are conjugates of each other)
-      ;; So conj(W_rot_{n2-k}) = conj(conj(W_rot_k)) = W_rot_k = (W.im, -W.re)
-      (local.set $wrot_re (local.get $wk_im))       ;; W_rot.re = W.im
-      (local.set $wrot_im (f32.neg (local.get $wk_re)))  ;; W_rot.im = -W.re
+      ;; Second half: Z[n2-k, n2-k-1] uses W_rot = (W.im, -W.re) from the SAME W[k, k+1]
+      (local.set $conj_xk (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)))
+      (local.set $sum2 (f32x4.add (local.get $xn2k) (local.get $conj_xk)))
+      (local.set $diff2 (f32x4.sub (local.get $xn2k) (local.get $conj_xk)))
 
-      ;; sum2 = X[n2-k] + conj(X[k])
-      (local.set $sum_re (f32.add (local.get $xn2k_re) (local.get $conj_xk_re)))
-      (local.set $sum_im (f32.add (local.get $xn2k_im) (local.get $conj_xk_im)))
-
-      ;; diff2 = X[n2-k] - conj(X[k])
-      (local.set $diff_re (f32.sub (local.get $xn2k_re) (local.get $conj_xk_re)))
-      (local.set $diff_im (f32.sub (local.get $xn2k_im) (local.get $conj_xk_im)))
+      (local.set $wrot
+        (f32x4.mul (local.get $cwrot) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
 
       ;; wd2 = W_rot * diff2
-      (local.set $wd_re (f32.sub (f32.mul (local.get $wrot_re) (local.get $diff_re))
-                                  (f32.mul (local.get $wrot_im) (local.get $diff_im))))
-      (local.set $wd_im (f32.add (f32.mul (local.get $wrot_re) (local.get $diff_im))
-                                  (f32.mul (local.get $wrot_im) (local.get $diff_re))))
+      (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 8 9 10 11 8 9 10 11
+                                    (local.get $wrot) (local.get $wrot)))
+      (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 12 13 14 15 12 13 14 15
+                                    (local.get $wrot) (local.get $wrot)))
+      (local.set $prod (f32x4.mul (local.get $diff2) (local.get $wr)))
+      (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 12 13 14 15 8 9 10 11
+                                         (local.get $diff2) (local.get $diff2)))
+      (local.set $wd2 (f32x4.add (local.get $prod)
+        (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
 
-      ;; Z[n2-k] = 0.5 * (sum2 + wd2)
-      (local.set $zn2k_re (f32.mul (f32.const 0.5) (f32.add (local.get $sum_re) (local.get $wd_re))))
-      (local.set $zn2k_im (f32.mul (f32.const 0.5) (f32.add (local.get $sum_im) (local.get $wd_im))))
+      ;; conj(Z[n2-k, n2-k-1])
+      (local.set $zn2k (v128.xor
+        (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half))
+        (global.get $CONJ_MASK_F32)))
 
-      ;; Store Z[k] and Z[n2-k]
-      (f32.store (local.get $addr_k) (local.get $zk_re))
-      (f32.store (i32.add (local.get $addr_k) (i32.const 4)) (local.get $zk_im))
-      (f32.store (local.get $addr_n2k) (local.get $zn2k_re))
-      (f32.store (i32.add (local.get $addr_n2k) (i32.const 4)) (local.get $zn2k_im))
+      ;; Store conj(Z[k, k+1])
+      (v128.store (local.get $addr_k) (local.get $zk))
 
-      (local.set $k (i32.add (local.get $k) (i32.const 1)))
+      ;; Store conj(Z[n2-k, n2-k-1]) - shuffle back to [n2-k-1, n2-k] order
+      (local.set $zn2k (i8x16.shuffle 8 9 10 11 12 13 14 15 0 1 2 3 4 5 6 7
+                                      (local.get $zn2k) (local.get $zn2k)))
+      (v128.store (local.get $addr_n2k) (local.get $zn2k))
+
+      (local.set $k (i32.add (local.get $k) (i32.const 2)))
       (br $main_loop)
     ))
 
-    ;; Handle middle element when n2 is even (k = n2/2)
-    ;; For the middle element, the forward formula gives: X[k] = conj(Z'[k])
-    ;; (because W_rot = -1 at k=n2/2 for N-point spectrum)
-    ;; The inverse is: Z'[k] = conj(X[k])
-    (if (i32.and (i32.eqz (i32.and (local.get $n2) (i32.const 1))) (i32.gt_u (local.get $n2) (i32.const 2)))
+    ;; Handle remaining pair if k < k_end (odd number of pairs)
+    (if (i32.lt_u (local.get $k) (local.get $k_end))
       (then
-        (local.set $addr_k (i32.shl (local.get $k_end) (i32.const 3)))
-        (local.set $xk_re (f32.load (local.get $addr_k)))
-        (local.set $xk_im (f32.load (i32.add (local.get $addr_k) (i32.const 4))))
-        ;; Z'[k] = conj(X[k]) = (X[k].re, -X[k].im)
-        (f32.store (local.get $addr_k) (local.get $xk_re))
-        (f32.store (i32.add (local.get $addr_k) (i32.const 4)) (f32.neg (local.get $xk_im)))
+        (local.set $n2_minus_k (i32.sub (local.get $n2) (local.get $k)))
+        (local.set $addr_k (i32.shl (local.get $k) (i32.const 3)))
+        (local.set $addr_n2k (i32.shl (local.get $n2_minus_k) (i32.const 3)))
+
+        ;; Load single pair using 64-bit loads
+        (local.set $xk (v128.load64_zero (local.get $addr_k)))
+        (local.set $xn2k (v128.load64_zero (local.get $addr_n2k)))
+        (local.set $conj_xn2k (v128.xor (local.get $xn2k) (global.get $CONJ_MASK_F32)))
+
+        (local.set $sum (f32x4.add (local.get $xk) (local.get $conj_xn2k)))
+        (local.set $diff (f32x4.sub (local.get $xk) (local.get $conj_xn2k)))
+
+        (local.set $tw_addr (i32.add (global.get $RFFT_TWIDDLE_OFFSET) (local.get $addr_k)))
+        (local.set $wk (v128.load64_zero (local.get $tw_addr)))
+        (local.set $cwrot
+          (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 (local.get $wk) (local.get $wk)))
+
+        (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+                                      (local.get $cwrot) (local.get $cwrot)))
+        (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
+                                      (local.get $cwrot) (local.get $cwrot)))
+        (local.set $prod (f32x4.mul (local.get $diff) (local.get $wr)))
+        (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                           (local.get $diff) (local.get $diff)))
+        (local.set $wd (f32x4.add (local.get $prod)
+          (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+        (local.set $zk (v128.xor
+          (f32x4.mul (f32x4.add (local.get $sum) (local.get $wd)) (local.get $half))
+          (global.get $CONJ_MASK_F32)))
+
+        ;; Z[n2-k]
+        (local.set $conj_xk (v128.xor (local.get $xk) (global.get $CONJ_MASK_F32)))
+        (local.set $sum2 (f32x4.add (local.get $xn2k) (local.get $conj_xk)))
+        (local.set $diff2 (f32x4.sub (local.get $xn2k) (local.get $conj_xk)))
+
+        (local.set $wrot
+          (f32x4.mul (local.get $cwrot) (v128.const f32x4 1.0 -1.0 1.0 -1.0)))
+
+        (local.set $wr (i8x16.shuffle 0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3
+                                      (local.get $wrot) (local.get $wrot)))
+        (local.set $wi (i8x16.shuffle 4 5 6 7 4 5 6 7 4 5 6 7 4 5 6 7
+                                      (local.get $wrot) (local.get $wrot)))
+        (local.set $prod (f32x4.mul (local.get $diff2) (local.get $wr)))
+        (local.set $swapped (i8x16.shuffle 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3
+                                           (local.get $diff2) (local.get $diff2)))
+        (local.set $wd2 (f32x4.add (local.get $prod)
+          (f32x4.mul (f32x4.mul (local.get $swapped) (local.get $wi)) (global.get $SIGN_MASK))))
+
+        (local.set $zn2k (v128.xor
+          (f32x4.mul (f32x4.add (local.get $sum2) (local.get $wd2)) (local.get $half))
+          (global.get $CONJ_MASK_F32)))
+
+        (v128.store64_lane 0 (local.get $addr_k) (local.get $zk))
+        (v128.store64_lane 0 (local.get $addr_n2k) (local.get $zn2k))
       )
     )
+
+    ;; Middle element (n2 even): forward gives X[mid] = conj(Z[mid]), so
+    ;; Z[mid] = conj(X[mid]) and the conjugated output conj(Z[mid]) = X[mid].
+    ;; With the fused conjugate this is the identity -- nothing to do.
   )
 
 
@@ -3403,9 +3425,11 @@
   ;; Input: N/2+1 complex f32 values at offset 0 (half-spectrum)
   ;; Output: N real f32 values at offset 0
   ;;
-  ;; Algorithm:
-  ;; 1. Pre-process: Convert spectrum back to N/2 packed complex values
-  ;; 2. Run IFFT on the N/2 complex values
+  ;; Algorithm (IFFT via conjugation: IFFT(Z) = (1/N) * conj(FFT(conj(Z)))):
+  ;; 1. Pre-process: Convert spectrum to N/2 packed complex values, already
+  ;;    conjugated (Experiment 50 - saves a full conjugate pass)
+  ;; 2. Run the forward N/2-point FFT, then scale by 1/N2 and conjugate,
+  ;;    reading directly from wherever the FFT result landed (Experiment 49)
   ;; 3. The interleaved real/imag output IS the N real values
 
   (func $irfft (export "irfft") (param $n i32)
@@ -3413,11 +3437,10 @@
 
     (local.set $n2 (i32.shr_u (local.get $n) (i32.const 1)))
 
-    ;; Step 1: Pre-process to convert spectrum to packed complex
+    ;; Step 1: Pre-process to conjugated packed complex (conj(Z))
     (call $irfft_preprocess (local.get $n2))
 
-    ;; Step 2: Run N/2-point IFFT
-    ;; The result is N/2 complex values = N interleaved real values
-    (call $ifft (local.get $n2))
+    ;; Step 2: FFT + scale + final conjugate completes the IFFT identity
+    (call $scale_and_conjugate (local.get $n2) (call $fft_nc (local.get $n2)))
   )
 )

@@ -1523,3 +1523,39 @@ Future improvements would require:
 This is now the largest known performance gap in the library — bigger than the N=64 RFFT gap (-6%).
 
 **Lesson**: Unbenchmarked code paths hide large regressions. The inverse path was assumed to inherit forward-path performance because it reuses the same FFT core, but its pre/post-processing was never given the same optimization treatment. Every exported entry point should have a benchmark.
+
+## Experiment 50: SIMD IRFFT Preprocess with Fused Conjugate (2026-07-05)
+
+**Goal**: Close the IRFFT gap found in Experiment 49 by attacking its top two suspects at once: the fully scalar `$irfft_preprocess` and the extra `conjugate_buffer` full-buffer pass in the conjugation-based IFFT.
+
+**Hypothesis**: The inverse preprocess formula has the same sum/diff/complex-multiply shape as the forward one, so `$rfft_postprocess_simd`'s dual-pair v128 structure transfers directly. And since the preprocess already touches every element, it can emit `conj(Z)` for free (one xor per store), letting the IFFT identity `IFFT(Z) = (1/N) * conj(FFT(conj(Z)))` skip its initial conjugate pass entirely.
+
+**Changes** (`modules/fft_real_f32_dual.wat`):
+
+- `$irfft_preprocess` rewritten as dual-pair SIMD mirroring `$rfft_postprocess_simd`, with three inverse-specific twists:
+  - Uses `conj(W_rot) = (W.im, W.re)` for the k side — a plain re/im shuffle, no sign flip needed
+  - Both sides reuse `W[k]` (since `conj(W_rot_{n2-k}) = W_rot_k`), so each dual pair needs ONE twiddle load where the forward needs two
+  - Output is conjugated in the final store (`v128.xor` with `CONJ_MASK_F32`), which makes the middle-element special case (`Z[mid] = conj(X[mid])`) the identity — that branch is deleted outright
+- `$irfft` now calls `$fft_nc` + `$scale_and_conjugate` directly; the dead `$ifft` wrapper and `$conjugate_buffer` are removed
+
+**Results** (Apple M5 Pro, two runs each, wat-fft ops/s, best of two):
+
+| Size   | Before | After  | Change     | vs fftw-js: before → after |
+| ------ | ------ | ------ | ---------- | -------------------------- |
+| N=64   | 9.15M  | 10.82M | **+18.3%** | -29.2% → -16.2%            |
+| N=128  | 6.29M  | 7.54M  | **+19.9%** | -23.9% → -8.6%             |
+| N=256  | 3.17M  | 3.90M  | **+23.0%** | -3.6% → **+16.4%**         |
+| N=512  | 1.56M  | 1.92M  | **+22.9%** | -11.7% → **+8.0%**         |
+| N=1024 | 751K   | 921K   | **+22.6%** | -11.4% → **+4.0%**         |
+| N=2048 | 357K   | 438K   | **+22.6%** | -13.5% → **+3.6%**         |
+| N=4096 | 169K   | 209K   | **+23.5%** | -14.0% → **+5.8%**         |
+
+**Result**: SUCCESS — +18-24% at every size. IRFFT now BEATS fftw-js at all sizes N>=256 (was losing at every size). Forward RFFT re-benchmarked, unchanged within noise. All 27 tests pass (IRFFT roundtrip error 3.25e-11).
+
+**Remaining gap**: N=64 (-16%) and N=128 (-9%) still lose. The forward path closes these sizes with fully-unrolled postprocess codelets (`$rfft_postprocess_64/128`, Experiments 23/25); mirroring those for the inverse preprocess is the natural next step. A native inverse Stockham (negated twiddles) would additionally remove the final `scale_and_conjugate` conjugate, but with the gap now this small the unrolled-codelet route is lower risk.
+
+**Lessons**:
+
+- A structurally-identical formula means a proven SIMD pattern ports nearly mechanically — the whole rewrite validated and passed tests on the first build
+- Fusing a sign flip into a pass that already touches every element is free (one xor), and here it also deleted a special case: conjugating `conj(X[mid])` is the identity, so the middle-element branch vanished
+- The inverse's twiddle symmetry (`conj(W_rot_{n2-k}) = W_rot_k`) halves twiddle loads vs the forward equivalent — inverting a transform sometimes exposes structure the forward direction lacks
