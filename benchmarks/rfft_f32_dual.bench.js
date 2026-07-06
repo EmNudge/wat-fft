@@ -74,6 +74,7 @@ async function runBenchmarks() {
   console.log("");
 
   const wasmExports = await loadWasm("fft_real_f32_dual");
+  const splitExports = await loadWasm("fft_split_native_f32");
   const pffft = await PFFFT();
 
   const summary = [];
@@ -102,7 +103,23 @@ async function runBenchmarks() {
     );
     results.push(wasmResult);
 
-    // 2. fftw-js (f32)
+    // 2. f32 split-core RFFT (Experiment 59)
+    const splitResult = runBenchmark(
+      "wat-fft split (f32)",
+      () => {
+        const memory = splitExports.memory;
+        const data = new Float32Array(memory.buffer, 0, size);
+        splitExports.precompute_rfft_twiddles_split(size);
+        return { data, inputBuffer: input };
+      },
+      (ctx) => {
+        ctx.data.set(ctx.inputBuffer);
+        splitExports.rfft_split(size);
+      },
+    );
+    results.push(splitResult);
+
+    // 3. fftw-js (f32)
     const fftwResult = runBenchmark(
       "fftw-js (f32)",
       () => {
@@ -142,9 +159,9 @@ async function runBenchmarks() {
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
 
-    // Calculate speedup
-    const vsFftw = wasmResult.opsPerSec / fftwResult.opsPerSec;
-    const vsPffft = wasmResult.opsPerSec / pffftResult.opsPerSec;
+    // Calculate speedup (split-core rfft, the flagship, vs competitors)
+    const vsFftw = splitResult.opsPerSec / fftwResult.opsPerSec;
+    const vsPffft = splitResult.opsPerSec / pffftResult.opsPerSec;
 
     // Print results
     console.log("");
@@ -167,7 +184,7 @@ async function runBenchmarks() {
 
     summary.push({
       size,
-      wasm: wasmResult.opsPerSec,
+      wasm: splitResult.opsPerSec,
       fftw: fftwResult.opsPerSec,
       pffft: pffftResult.opsPerSec,
       vsFftw: `${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`,

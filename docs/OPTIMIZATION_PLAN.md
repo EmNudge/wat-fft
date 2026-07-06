@@ -4,13 +4,13 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-06, post-Experiments 57-58): **wat-fft is the fastest complex FFT at every size** (Experiment 58's radix-4 split-format core beats pffft-wasm SIMD by 1-34% at N≥32; the interleaved module wins N=16 by +29%). Real FFT beats fftw-js everywhere and pffft SIMD at N=64, but **pffft SIMD still leads the real FFT at N≥128 (up to 2.1x)** — rebuilding the real FFT on the radix-4 split core is the top priority. Note: Experiments 1-56 accidentally raced pffft's non-SIMD build (see Experiment 57).
+**Current Status** (Apple M5 Pro, 2026-07-06, post-Experiments 57-59): **wat-fft is the fastest complex FFT at every size** (Experiment 58's radix-4 split-format core beats pffft-wasm SIMD by 1-34% at N≥32; the interleaved module wins N=16 by +29%). The forward real FFT was rebuilt on the same core (Experiment 59, `rfft_split`): it beats fftw-js by +53-193% everywhere and pffft SIMD at N≤256; N=512-4096 trail pffft SIMD by only 1-5% (was 23-53%) — fusing the post-process into the final stage is the identified fix. Note: Experiments 1-56 accidentally raced pffft's non-SIMD build (see Experiment 57).
 
-| Target          | Complex FFT (f64) | Complex FFT (f32)           | Real FFT (f32)                          |
-| --------------- | ----------------- | --------------------------- | --------------------------------------- |
-| fft.js          | **+37-90%**       | **+101-458%** (split core)  | N/A                                     |
-| fftw-js         | N/A               | N/A                         | **+4-56%** (beats at all N)             |
-| pffft-wasm SIMD | N/A               | **+1-34%** (beats at all N) | **+29%** at N=64; -23% to -53% at N≥128 |
+| Target          | Complex FFT (f64) | Complex FFT (f32)           | Real FFT forward (f32)                    |
+| --------------- | ----------------- | --------------------------- | ----------------------------------------- |
+| fft.js          | **+37-90%**       | **+101-458%** (split core)  | N/A                                       |
+| fftw-js         | N/A               | N/A                         | **+53-193%** (beats at all N)             |
+| pffft-wasm SIMD | N/A               | **+1-34%** (beats at all N) | **+10-35%** at N≤256; -1% to -5% at N≥512 |
 
 ---
 
@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 58 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 59 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -96,17 +96,17 @@ _Note: older tables in this file compared against pffft's non-SIMD build. The sp
 
 ### Real FFT f32 vs fftw-js and pffft-wasm SIMD
 
-Measured on Apple M5 Pro, Node v24.14.1 (re-baselined 2026-07-06, Experiment 57): the n2=32 core uses the packed dual-16 radix-4 codelet, n2=16 uses the Stockham loop.
+Measured on Apple M5 Pro, Node v24 (2026-07-06, Experiment 59): `rfft_split` on the radix-4 split core - fused deinterleaving first stage (radix-8 for odd log2(N/2)), parity-routed ping-pong with zero copy-back, split-format SIMD post-process. The old dual-complex `rfft` column is retained for comparison.
 
-| Size   | wat-fft f32 | fftw-js | pffft SIMD | vs fftw  | vs pffft SIMD |
-| ------ | ----------- | ------- | ---------- | -------- | ------------- |
-| N=64   | 19.2M       | 12.5M   | 14.9M      | **+54%** | **+29%**      |
-| N=128  | 8.1M        | 7.8M    | 10.5M      | **+4%**  | -23%          |
-| N=256  | 4.2M        | 2.7M    | 7.1M       | **+56%** | -42%          |
-| N=512  | 2.0M        | 1.6M    | 3.8M       | **+26%** | -47%          |
-| N=1024 | 968K        | 824K    | 2.04M      | **+17%** | -52%          |
-| N=2048 | 461K        | 407K    | 941K       | **+13%** | -51%          |
-| N=4096 | 221K        | 192K    | 474K       | **+15%** | -53%          |
+| Size   | rfft_split | old rfft | fftw-js | pffft SIMD | vs fftw   | vs pffft SIMD |
+| ------ | ---------- | -------- | ------- | ---------- | --------- | ------------- |
+| N=64   | 19.1M      | 19.2M    | 12.5M   | 14.2M      | **+53%**  | **+35%**      |
+| N=128  | 13.9M      | 8.1M     | 7.9M    | 10.6M      | **+74%**  | **+31%**      |
+| N=256  | 7.9M       | 4.2M     | 2.7M    | 7.2M       | **+189%** | **+10%**      |
+| N=512  | 3.8M       | 2.0M     | 1.6M    | 3.85M      | **+130%** | -1%           |
+| N=1024 | 1.95M      | 977K     | 837K    | 2.07M      | **+132%** | -5%           |
+| N=2048 | 914K       | 464K     | 412K    | 946K       | **+121%** | -3.5%         |
+| N=4096 | 452K       | 223K     | 191K    | 475K       | **+134%** | -5%           |
 
 ### Inverse Real FFT f32 vs fftw-js and pffft-wasm SIMD
 
@@ -126,7 +126,7 @@ Measured on Apple M5 Pro (re-baselined 2026-07-06): native inverse FFT (conjugat
 
 ## Remaining Gap Analysis
 
-**The gap is pffft-wasm's SIMD build** (Experiment 57 revealed all earlier benchmarks raced the non-SIMD build). Against pffft SIMD on Apple M5 Pro: complex FFT trails by 8-33% at N≥32, real FFT trails by 23-53% at N≥128 (both directions). wat-fft still beats fftw-js at every real-FFT size and every JS library everywhere.
+**The remaining gap is 1-5% on the forward real FFT at N=512-4096 vs pffft SIMD** (plus the inverse real FFT, still on the old dual-complex module). Everything else wins: complex FFT beats pffft SIMD at every size (Experiment 58), forward real FFT beats it at N≤256 and fftw-js everywhere (Experiment 59).
 
 **Why pffft SIMD wins**: 4-wide f32 butterflies in a split-re/im internal format — complex multiplies are pure mul/add with zero lane shuffles at 100% lane utilization, and its radix-4/5 decomposition takes roughly half the memory passes of a radix-2 Stockham.
 
@@ -134,8 +134,8 @@ Measured on Apple M5 Pro (re-baselined 2026-07-06): native inverse FFT (conjugat
 
 1. ~~Productionize the radix-4 split core in `fft_split_native_f32.wat`~~ DONE (native inverse included; see Experiment 58 integration notes)
 2. Give the interleaved module the same core by folding deinterleave/reinterleave shuffles into the first/last stages (pffft does exactly this in ordered mode)
-3. **Rebuild the real FFT on the new core** — the only remaining loss (real N≥128, up to 2.1x); pffft's real FFT is faster than its own half-size complex FFT, so a natively-vectorized real path is the end state
-4. Reclaim the copy-back pass on odd-stage sizes (32/64/512/1024/8192 lose ~10-20% to it)
+3. ~~Rebuild the real FFT on the new core~~ **DONE for forward (Experiment 59)**: `rfft_split` roughly doubled real-FFT throughput at N≥128 via a fused deinterleaving first stage (radix-8 for odd log2(M)), parity-routed ping-pong across three buffers (zero copy-back), and a split-format SIMD post-process. Remaining: **(a) fuse the post-process into the final s=1 stage** (the last 1-5% at N≥512 is exactly this one pass — pffft fuses its real finalization the same way; pairing details sketched in Experiment 59), **(b) rebuild `irfft` the same way** (conjugate the post-process, mirror the fused first stage into a fused last stage + reinterleave)
+4. Reclaim the copy-back pass on odd-stage sizes of the complex API (32/64/512/1024/8192 lose ~10-20% to it; the rfft path already avoids it via parity routing)
 
 Open opportunities (smaller wins):
 
@@ -160,13 +160,13 @@ Open opportunities (smaller wins):
 
 ## Files Created During Optimization
 
-| File                                  | Purpose                                              |
-| ------------------------------------- | ---------------------------------------------------- |
-| `modules/fft_combined.wat`            | Auto-dispatch radix-2/4                              |
-| `modules/fft_stockham_f32_dual.wat`   | f32 dual-complex FFT                                 |
-| `modules/fft_real_f32_dual.wat`       | f32 dual-complex rfft                                |
-| `modules/fft_real_combined.wat`       | Combined rfft with codelets                          |
-| `modules/fft_split_native_f32.wat`    | Native split-format FFT (experiment)                 |
-| `tools/codelet_generator.js`          | DAG-based codelet generator                          |
-| `tools/generate-dit-codelet.js`       | DIT codelet generator                                |
-| `tools/generate-radix4-32-codelet.js` | Packed dual-16 radix-4 n=32 codelets (Experiment 56) |
+| File                                  | Purpose                                               |
+| ------------------------------------- | ----------------------------------------------------- |
+| `modules/fft_combined.wat`            | Auto-dispatch radix-2/4                               |
+| `modules/fft_stockham_f32_dual.wat`   | f32 dual-complex FFT                                  |
+| `modules/fft_real_f32_dual.wat`       | f32 dual-complex rfft                                 |
+| `modules/fft_real_combined.wat`       | Combined rfft with codelets                           |
+| `modules/fft_split_native_f32.wat`    | Radix-4 split-format complex FFT + real FFT (fastest) |
+| `tools/codelet_generator.js`          | DAG-based codelet generator                           |
+| `tools/generate-dit-codelet.js`       | DIT codelet generator                                 |
+| `tools/generate-radix4-32-codelet.js` | Packed dual-16 radix-4 n=32 codelets (Experiment 56)  |

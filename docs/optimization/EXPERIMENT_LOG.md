@@ -1880,3 +1880,39 @@ The radix-4 core was integrated into `modules/fft_split_native_f32.wat` (n>=16; 
 **Result**: SUCCESS - wat-fft is again the fastest complex FFT at every size (split module at N>=32, interleaved dual at N=16). All 27 core tests, 22 split tests, and the 52+14 third-party/bench-correctness tests pass; forward error improved ~2x vs the old radix-2 split path.
 
 **Follow-ups**: (a) N=32/64/512/1024 lose ~10-20% to the copy-back pass - an exported raw-output variant or in-driver parity trick could reclaim it; (b) port the core to the interleaved API by folding deinterleave/reinterleave into the first/last stage loads/stores; (c) rebuild the real FFT on this core (the remaining pffft SIMD win: real N>=128).
+
+## Experiment 59: Real FFT on the Radix-4 Split Core (2026-07-06)
+
+**Goal**: Close the last pffft SIMD gap - real FFT N>=128 trailed by 23-53% both directions (Experiment 57 baseline). Rebuild the forward real FFT on the Experiment 58 radix-4 split-format core.
+
+**Design** (`rfft_split` in `fft_split_native_f32.wat`, N >= 32, same API contract as the old `rfft`: N real f32 at offset 0 in, N/2+1 interleaved complex out at offset 0):
+
+1. **Fused first stage**: the M = N/2 complex core's first stage reads the packed real input at offset 0 directly, folding the even/odd deinterleave shuffles into its loads - no standalone deinterleave pass. Even log2(M): a twiddle-free radix-4 first stage (l=1, w=1). Odd log2(M): a **radix-8 first stage** replacing deinterleave + leading radix-2 + first radix-4 (three passes -> one); its twiddles are the constants 1, -i, sqrt(2)/2\*(1-+i), so it stays shuffle-free splat arithmetic.
+2. **Parity-routed ping-pong, zero copy-back**: the fused stage always writes buffer B (never overlaps the input, which ends where B begins). The remaining stages ping-pong against A when the remainder is even (result returns to B) or against a new buffer C when odd (result ends in C). Either way the result avoids A, so the post-process can stream its output over A. The complex module's copy-back pass has no equivalent here at any size.
+3. **Split-format SIMD post-process**: G/H even/odd-spectrum recombination entirely in split planes - forward loads of Z[k..k+3], one lane-reverse shuffle for Z[M-k-3..M-k], contiguous split twiddle loads (new W_N^k table at 0x50000), pure mul/add math, and interleave-on-store shuffles writing X directly in output format. 6 shuffles per 8 output bins. DC/Nyquist handled scalar; Nyquist is stored after the loop because at N=16384 it lands on the first bytes of buffer B, which the loop still reads as Z[1].
+
+Memory grew 5 -> 8 pages (rfft twiddle table + buffer C). The core driver was refactored into `$fft_r4_pipeline` (arbitrary start point and buffer pair) with `$fft_r4_core_nc`/`$fft_r4_core` wrappers; the complex `fft_split`/`ifft_split` paths are unchanged and still pass all 22 tests.
+
+**Correctness**: max relative error vs f64 reference DFT <= 1.1e-6 across N=32..16384 for impulse/sinusoid/random inputs (36/36 tests). Matches the old `rfft` to f32 rounding.
+
+**Results** (Apple M5 Pro, Node v24, per-iteration input copy for all, 2 official runs):
+
+| Size   | rfft_split | old rfft | fftw-js | pffft SIMD | vs old    | vs pffft SIMD |
+| ------ | ---------- | -------- | ------- | ---------- | --------- | ------------- |
+| N=64   | 19.1-21.9M | 19.2M    | 12.5M   | 14.2-15.3M | ~tie      | **+35-43%**   |
+| N=128  | 13.9M      | 8.1M     | 7.9M    | 10.5M      | **+71%**  | **+31%**      |
+| N=256  | 7.9M       | 4.2M     | 2.7M    | 7.2M       | **+88%**  | **+10%**      |
+| N=512  | 3.8M       | 2.0M     | 1.6M    | 3.8M       | **+87%**  | -1%           |
+| N=1024 | 1.95M      | 977K     | 837K    | 2.07M      | **+100%** | -5%           |
+| N=2048 | 914K       | 464K     | 412K    | 946K       | **+97%**  | -3.5%         |
+| N=4096 | 452K       | 223K     | 191K    | 475K       | **+103%** | -5%           |
+
+**Result**: SUCCESS - the real FFT roughly doubled at every size N>=128, now beats pffft SIMD at N<=256 and sits within 1-5% at N=512-4096 (was 23-53% behind). fftw-js is beaten by +130-190% at N>=512.
+
+**Lessons**:
+
+- The memory-pass model predicts f32 FFT throughput on M5 almost exactly: each eliminated full pass over the data was worth its predicted share. Count passes before writing code.
+- A radix-8 first stage is free in split format when it is the FIRST stage: all its twiddles are constants, so fusing three radix-2 levels costs no table loads and no shuffles beyond the deinterleave that had to happen anyway.
+- Three ping-pong buffers + parity routing eliminate copy-back passes structurally: pick the partner buffer so the result lands where the next consumer wants it, instead of copying afterwards.
+
+**Remaining gap / next step (Experiment 60 candidate)**: the last 1-5% at N>=512 is exactly one more pass: pffft fuses its real-FFT finalization into the final butterfly stage. Fusing our post-process into the s=1 stage requires pairing stage iterations j and M/4-4-j with a one-vector software-pipeline carry (mirrored blocks are misaligned by one element) - intricate but well-understood.
