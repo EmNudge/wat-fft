@@ -61,6 +61,12 @@ Detailed record of all optimization experiments.
 | 52  | Native inverse FFT           | SUCCESS +5-8%    | Flipped sign mask = conjugated twiddles for free                      |
 | 53  | Loop beats n=16/32 codelets  | SUCCESS +30-32%  | On M5, Stockham loop crushes DIT codelets; N=64 flips to +22% vs fftw |
 | 54  | Complex-module codelet probe | NO CHANGE        | Radix-4 single-lane codelets still win on M5; keep them               |
+| 55  | Native inverse complex f32   | SUCCESS +13-22%  | Flipped-sign-mask twiddles; ifft now matches forward fft              |
+| 56  | Packed dual-16 n=32 codelet  | SUCCESS +25%     | Even/odd DIT halves ride the wasted upper v128 lanes                  |
+| 57  | Benchmark audit: pffft SIMD  | RE-BASELINE      | Exps 1-56 raced pffft's non-SIMD build; real gaps were 23-53%         |
+| 58  | Radix-4 split-format core    | SUCCESS +1-34%   | Fused stage pairs + shuffle-free stages beat pffft SIMD at all N      |
+| 59  | Real FFT on split core       | SUCCESS ~2x      | Fused deinterleaving first stage + parity-routed ping-pong            |
+| 60  | Inverse real FFT, split core | SUCCESS ~2x      | Mirrored Exp 59: fused pre-process + interleave-on-store last stage   |
 
 ---
 
@@ -1915,4 +1921,40 @@ Memory grew 5 -> 8 pages (rfft twiddle table + buffer C). The core driver was re
 - A radix-8 first stage is free in split format when it is the FIRST stage: all its twiddles are constants, so fusing three radix-2 levels costs no table loads and no shuffles beyond the deinterleave that had to happen anyway.
 - Three ping-pong buffers + parity routing eliminate copy-back passes structurally: pick the partner buffer so the result lands where the next consumer wants it, instead of copying afterwards.
 
-**Remaining gap / next step (Experiment 60 candidate)**: the last 1-5% at N>=512 is exactly one more pass: pffft fuses its real-FFT finalization into the final butterfly stage. Fusing our post-process into the s=1 stage requires pairing stage iterations j and M/4-4-j with a one-vector software-pipeline carry (mirrored blocks are misaligned by one element) - intricate but well-understood.
+**Remaining gap / next step (Experiment 61 candidate)**: the last 1-5% at N>=512 is exactly one more pass: pffft fuses its real-FFT finalization into the final butterfly stage. Fusing our post-process into the s=1 stage requires pairing stage iterations j and M/4-4-j with a one-vector software-pipeline carry (mirrored blocks are misaligned by one element) - intricate but well-understood.
+
+## Experiment 60: Inverse Real FFT on the Radix-4 Split Core (2026-07-06)
+
+**Goal**: Close the biggest remaining gap. The inverse real FFT still ran on the old dual-complex module and trailed pffft SIMD by 40-53% at N>=256 (2026-07-06 baseline). Mirror Experiment 59's design for the inverse direction.
+
+**Design** (`irfft_split` in `fft_split_native_f32.wat`, N >= 32, same API contract as the old `irfft`: N/2+1 interleaved complex f32 at offset 0 in, N fully-normalized real f32 at offset 0 out):
+
+1. **Fused SIMD pre-process** (`$irfft_preprocess_split`): the exact conjugate mirror of the forward post-process, in one pass. Reads X[k..k+3] and lane-reversed X[M-k-3..M-k] interleaved from the A region (deinterleave folded into the load shuffles), recombines G/H with the conjugated twiddle (`H = conj(W_N^k) * (X[k] - conj(X[M-k]))/2` - pure split mul/add, no shuffles), and writes both Z[k..k+3] and Z[M-k-3..M-k] to split planes in buffer B. The **0.5/M normalization is folded into this pass** (the /2 from G/H plus the 1/M inverse scale), so the inverse pipeline needs no scale pass at all. 6 shuffles per 8 bins, same as forward. The only read/write overlap is X[M] at N=16384 (its bytes coincide with B's first word); the scalar DC/Nyquist prologue reads it before storing Z[0].
+2. **Inverse pipeline ping-pongs B<->C**: standard conjugated-table stages (`$stage_r2_lead` + `$stage_r4_generic` with inv=1), never touching buffer A. No parity routing needed - A is only used at the two ends.
+3. **Fused final stage + reinterleave** (`$stage_r4_s1_inv_fused`): the s=1 stage with inverse rotation, but each output quarter is interleaved (re,im) on store and streamed to offset 0. Since z[j] = x[2j] + i\*x[2j+1], interleaved z IS the packed real output - the entire reinterleave pass costs 8 extra shuffles per 16 outputs inside a stage that was running anyway.
+
+Total memory passes match the forward `rfft_split` exactly: pre/post-process + log4(M) stages, zero copy-back, zero scale pass. No new tables or memory (reuses `precompute_rfft_twiddles_split`, buffer C, and the Experiment 55/58 inverse stage tables).
+
+**Correctness**: max relative error <= 1.4e-6 across N=32..16384 for impulse/shifted-impulse/sinusoid/random inputs, both against exact f64 reference spectra and for full rfft_split -> irfft_split roundtrips (20 new test cases; full suite 9/9 files green).
+
+**Results** (Apple M5 Pro, Node v24, per-iteration spectrum copy for all, 2 official runs):
+
+| Size   | irfft_split | old irfft | fftw-js | pffft SIMD | vs old   | vs pffft SIMD |
+| ------ | ----------- | --------- | ------- | ---------- | -------- | ------------- |
+| N=64   | 17.6-17.7M  | 19.4M     | 12.5M   | 14.3M      | -9%      | **+22-24%**   |
+| N=128  | 11.7-11.9M  | 8.3M      | 8.0M    | 10.3M      | **+43%** | **+14-16%**   |
+| N=256  | 6.88M       | 4.24M     | 3.3M    | 7.1M       | **+62%** | -3%           |
+| N=512  | 3.64M       | 2.07M     | 1.7M    | 3.75M      | **+76%** | -3%           |
+| N=1024 | 1.68-1.72M  | 990K      | 870K    | 2.0M       | **+74%** | -12 to -17%   |
+| N=2048 | 858-861K    | 469K      | 416K    | 930K       | **+83%** | -8%           |
+| N=4096 | 403-406K    | 221K      | 192K    | 455K       | **+83%** | -8 to -14%    |
+
+**Result**: SUCCESS - the inverse real FFT gained +43-83% at N>=128 and now beats pffft SIMD at N<=128 (was: losing at every size N>=128). The gap at N>=256 shrank from 40-53% to 3-17%. Note pffft's backward transform is unscaled (it skips the 1/N multiply entirely), so it does strictly less work per call than our fully-normalized inverse. At N=64 the old dual-module `irfft` (Experiment 56's packed codelet) remains fastest - keep routing N<128 there if inverse throughput at small N matters.
+
+**Lessons**:
+
+- The Experiment 59 blueprint mirrored cleanly: pre-process instead of post-process, fused last stage instead of fused first stage. Total wall-clock landed within ~10% of the forward transform at most sizes, as the pass-count model predicts.
+- Folding the inverse 1/N scale into an existing pre-process pass is free (one extra vector multiply on data already in registers) and deletes a whole memory pass vs the complex module's separate scale loop.
+- Interleave-on-store in an s=1 stage is cheaper than a standalone reinterleave pass but not free: the stage already burns 16 transpose shuffles per iteration, and adding 8 interleave shuffles makes it the shuffle-heaviest loop in the module. The residual -12 to -17% at N=1024/4096 vs pffft likely lives partly here and partly in pffft's unscaled backward.
+
+**Remaining**: fusing the forward post-process into the final s=1 stage (Experiment 61 candidate) is still open, and the same idea applies in reverse to the inverse pre-process + first stage.

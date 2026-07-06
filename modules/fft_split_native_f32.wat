@@ -15,7 +15,7 @@
   ;;   0x50000 - 0x5FFFF: rfft post-process twiddles W_N^k, split (Experiment 59)
   ;;   0x60000 - 0x6FFFF: Real buffer C / Imag buffer C (rfft ping-pong partner
   ;;                      when the stage count is even, keeping A free for the
-  ;;                      interleaved rfft output)
+  ;;                      interleaved rfft output; irfft pipeline partner)
   ;;
   ;; Usage:
   ;;   const real = new Float32Array(memory.buffer, 0, N);
@@ -30,6 +30,8 @@
   ;;   precompute_rfft_twiddles_split(N);
   ;;   rfft_split(N);
   ;;   // Output: N/2+1 interleaved complex f32 at offset 0
+  ;;   irfft_split(N);
+  ;;   // Back to N real samples at offset 0 (fully normalized)
 
   (memory (export "memory") 8)  ;; 8 pages = 512KB
 
@@ -1620,6 +1622,366 @@
 
     (call $rfft_postprocess_split (local.get $m)
       (local.get $sr) (i32.add (local.get $sr) (i32.const 32768)))
+  )
+
+  ;; ============================================================
+  ;; Inverse real FFT on the radix-4 split core (Experiment 60)
+  ;; ============================================================
+
+  ;; Split-format irfft pre-processing: reads the Hermitian spectrum X[0..M]
+  ;; interleaved at offset 0 and writes the M-point sequence Z to split
+  ;; planes dst_re/dst_im with the 1/M normalization folded in:
+  ;;   G = (X[k] + conj(X[M-k]))/2         H = conj(W_N^k)*(X[k] - conj(X[M-k]))/2
+  ;;   Z[k] = (G + i*H)/M                  Z[M-k] = (conj(G) + i*conj(H))/M
+  ;; The vector loop runs k = 1, 5, ..., M/2-3 like the forward post-process:
+  ;; forward blocks cover Z[1..M/2], mirrored blocks Z[M/2..M-1] (Z[M/2]
+  ;; written twice with the same value). dst must not be buffer A - the loop
+  ;; reads X from the A region. The only read/write overlap is X[M] at
+  ;; N=16384, whose bytes coincide with dst_re[0]; it is read in the scalar
+  ;; prologue before Z[0] is stored.
+  (func $irfft_preprocess_split (param $m i32) (param $dst_re i32) (param $dst_im i32)
+    (local $k i32)       ;; element index, steps by 4
+    (local $kb i32)      ;; k * 4 (plane byte offset)
+    (local $kend i32)
+    (local $mrb i32)     ;; (m-k-3) * 4 (mirrored plane byte offset)
+    (local $x0 f32) (local $xm f32)
+    (local $sc f32)
+    (local $scale v128)
+    (local $v0 v128) (local $v1 v128)
+    (local $ar v128) (local $ai v128)
+    (local $br v128) (local $bi v128)
+    (local $gr v128) (local $gi v128)
+    (local $ur v128) (local $ui v128)
+    (local $hr v128) (local $hi v128)
+    (local $wr v128) (local $wi v128)
+    (local $zr v128) (local $zi v128)
+
+    ;; 0.5/M: the /2 from the G/H halving plus the 1/M inverse normalization
+    (local.set $sc (f32.div (f32.const 0.5) (f32.convert_i32_u (local.get $m))))
+    (local.set $scale (f32x4.splat (local.get $sc)))
+
+    ;; DC/Nyquist prologue (imaginary parts are 0 for a valid real spectrum):
+    ;; Z[0] = ((X0 + XM) + i*(X0 - XM)) * 0.5/M
+    (local.set $x0 (f32.load (i32.const 0)))
+    (local.set $xm (f32.load (i32.shl (local.get $m) (i32.const 3))))
+    (f32.store (local.get $dst_re)
+      (f32.mul (f32.add (local.get $x0) (local.get $xm)) (local.get $sc)))
+    (f32.store (local.get $dst_im)
+      (f32.mul (f32.sub (local.get $x0) (local.get $xm)) (local.get $sc)))
+
+    (local.set $kend (i32.sub (i32.shr_u (local.get $m) (i32.const 1)) (i32.const 3)))
+    (local.set $k (i32.const 1))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.gt_u (local.get $k) (local.get $kend)))
+
+        (local.set $kb (i32.shl (local.get $k) (i32.const 2)))
+        (local.set $mrb (i32.shl (i32.sub (i32.sub (local.get $m) (local.get $k)) (i32.const 3))
+                                 (i32.const 2)))
+
+        ;; X[k..k+3] interleaved at byte 8k, deinterleaved on load
+        (local.set $v0 (v128.load (i32.shl (local.get $kb) (i32.const 1))))
+        (local.set $v1 (v128.load (i32.add (i32.shl (local.get $kb) (i32.const 1)) (i32.const 16))))
+        (local.set $ar (i8x16.shuffle 0 1 2 3 8 9 10 11 16 17 18 19 24 25 26 27
+          (local.get $v0) (local.get $v1)))
+        (local.set $ai (i8x16.shuffle 4 5 6 7 12 13 14 15 20 21 22 23 28 29 30 31
+          (local.get $v0) (local.get $v1)))
+
+        ;; X[M-k-3..M-k] interleaved at byte 8(M-k-3), deinterleave + lane-reverse
+        (local.set $v0 (v128.load (i32.shl (local.get $mrb) (i32.const 1))))
+        (local.set $v1 (v128.load (i32.add (i32.shl (local.get $mrb) (i32.const 1)) (i32.const 16))))
+        (local.set $br (i8x16.shuffle 24 25 26 27 16 17 18 19 8 9 10 11 0 1 2 3
+          (local.get $v0) (local.get $v1)))
+        (local.set $bi (i8x16.shuffle 28 29 30 31 20 21 22 23 12 13 14 15 4 5 6 7
+          (local.get $v0) (local.get $v1)))
+
+        ;; 4 consecutive twiddles W_N^(k..k+3), contiguous split loads
+        (local.set $wr (v128.load (i32.add (global.get $RFFT_TW_RE) (local.get $kb))))
+        (local.set $wi (v128.load (i32.add (global.get $RFFT_TW_IM) (local.get $kb))))
+
+        ;; 2G = X[k] + conj(X[M-k]), 2W^kH = X[k] - conj(X[M-k])
+        (local.set $gr (f32x4.add (local.get $ar) (local.get $br)))
+        (local.set $gi (f32x4.sub (local.get $ai) (local.get $bi)))
+        (local.set $ur (f32x4.sub (local.get $ar) (local.get $br)))
+        (local.set $ui (f32x4.add (local.get $ai) (local.get $bi)))
+
+        ;; 2H = conj(W) * (2W^kH) (split cmul, no shuffles)
+        (local.set $hr (f32x4.add (f32x4.mul (local.get $wr) (local.get $ur))
+                                  (f32x4.mul (local.get $wi) (local.get $ui))))
+        (local.set $hi (f32x4.sub (f32x4.mul (local.get $wr) (local.get $ui))
+                                  (f32x4.mul (local.get $wi) (local.get $ur))))
+
+        ;; Z[k..k+3] = (2G + i*2H) * 0.5/M
+        (local.set $zr (f32x4.mul (local.get $scale) (f32x4.sub (local.get $gr) (local.get $hi))))
+        (local.set $zi (f32x4.mul (local.get $scale) (f32x4.add (local.get $gi) (local.get $hr))))
+        (v128.store (i32.add (local.get $dst_re) (local.get $kb)) (local.get $zr))
+        (v128.store (i32.add (local.get $dst_im) (local.get $kb)) (local.get $zi))
+
+        ;; Z[M-k-3..M-k] = (conj(2G) + i*conj(2H)) * 0.5/M, lane-reversed
+        (local.set $zr (f32x4.mul (local.get $scale) (f32x4.add (local.get $gr) (local.get $hi))))
+        (local.set $zi (f32x4.mul (local.get $scale) (f32x4.sub (local.get $hr) (local.get $gi))))
+        (v128.store (i32.add (local.get $dst_re) (local.get $mrb))
+          (i8x16.shuffle 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3
+            (local.get $zr) (local.get $zr)))
+        (v128.store (i32.add (local.get $dst_im) (local.get $mrb))
+          (i8x16.shuffle 12 13 14 15 8 9 10 11 4 5 6 7 0 1 2 3
+            (local.get $zi) (local.get $zi)))
+
+        (local.set $k (i32.add (local.get $k) (i32.const 4)))
+        (br $loop)
+      )
+    )
+  )
+
+  ;; Final inverse s=1 radix-4 stage fused with the reinterleave: identical
+  ;; loads/transpose/butterfly to $stage_r4_s1 with inv=1, but each output
+  ;; quarter is interleaved (re,im) on store, streaming the time-domain
+  ;; signal directly to offset 0 - interleaved z IS the packed real output
+  ;; (z[j] = x[2j] + i*x[2j+1]). Replaces a whole reinterleave pass.
+  ;; Requires l >= 4 (i.e. n >= 16).
+  (func $stage_r4_s1_inv_fused
+    (param $src_re i32) (param $src_im i32)
+    (param $l i32) (param $tw i32) (param $n i32)
+
+    (local $j i32)
+    (local $n4b i32)
+    (local $lb i32)
+    (local $p i32)
+    (local $q i32)
+
+    (local $v0 v128) (local $v1 v128) (local $v2 v128) (local $v3 v128)
+    (local $p0 v128) (local $p1 v128) (local $p2 v128) (local $p3 v128)
+    (local $w1r v128) (local $w1i v128)
+    (local $w2r v128) (local $w2i v128)
+    (local $w3r v128) (local $w3i v128)
+    (local $ar v128) (local $ai v128)
+    (local $br v128) (local $bi v128)
+    (local $cr v128) (local $ci v128)
+    (local $dr v128) (local $di v128)
+    (local $wcr v128) (local $wci v128)
+    (local $wbr v128) (local $wbi v128)
+    (local $wdr v128) (local $wdi v128)
+    (local $t0r v128) (local $t0i v128)
+    (local $t1r v128) (local $t1i v128)
+    (local $t2r v128) (local $t2i v128)
+    (local $t3r v128) (local $t3i v128)
+    (local $xr v128) (local $xi v128)
+
+    (local.set $n4b (local.get $n))
+    (local.set $lb (i32.shl (local.get $l) (i32.const 2)))
+
+    (local.set $j (i32.const 0))
+    (block $done
+      (loop $loop
+        (br_if $done (i32.ge_u (local.get $j) (local.get $l)))
+
+        ;; ---- real plane: load 16 consecutive floats, transpose 4x4 ----
+        (local.set $p (i32.add (local.get $src_re) (i32.shl (local.get $j) (i32.const 4))))
+        (local.set $v0 (v128.load (local.get $p)))
+        (local.set $v1 (v128.load (i32.add (local.get $p) (i32.const 16))))
+        (local.set $v2 (v128.load (i32.add (local.get $p) (i32.const 32))))
+        (local.set $v3 (v128.load (i32.add (local.get $p) (i32.const 48))))
+
+        (local.set $p0 (i8x16.shuffle 0 1 2 3 16 17 18 19 8 9 10 11 24 25 26 27
+                                      (local.get $v0) (local.get $v1)))
+        (local.set $p2 (i8x16.shuffle 4 5 6 7 20 21 22 23 12 13 14 15 28 29 30 31
+                                      (local.get $v0) (local.get $v1)))
+        (local.set $p1 (i8x16.shuffle 0 1 2 3 16 17 18 19 8 9 10 11 24 25 26 27
+                                      (local.get $v2) (local.get $v3)))
+        (local.set $p3 (i8x16.shuffle 4 5 6 7 20 21 22 23 12 13 14 15 28 29 30 31
+                                      (local.get $v2) (local.get $v3)))
+
+        (local.set $ar (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                      (local.get $p0) (local.get $p1)))
+        (local.set $cr (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+                                      (local.get $p0) (local.get $p1)))
+        (local.set $br (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                      (local.get $p2) (local.get $p3)))
+        (local.set $dr (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+                                      (local.get $p2) (local.get $p3)))
+
+        ;; ---- imag plane ----
+        (local.set $p (i32.add (local.get $src_im) (i32.shl (local.get $j) (i32.const 4))))
+        (local.set $v0 (v128.load (local.get $p)))
+        (local.set $v1 (v128.load (i32.add (local.get $p) (i32.const 16))))
+        (local.set $v2 (v128.load (i32.add (local.get $p) (i32.const 32))))
+        (local.set $v3 (v128.load (i32.add (local.get $p) (i32.const 48))))
+
+        (local.set $p0 (i8x16.shuffle 0 1 2 3 16 17 18 19 8 9 10 11 24 25 26 27
+                                      (local.get $v0) (local.get $v1)))
+        (local.set $p2 (i8x16.shuffle 4 5 6 7 20 21 22 23 12 13 14 15 28 29 30 31
+                                      (local.get $v0) (local.get $v1)))
+        (local.set $p1 (i8x16.shuffle 0 1 2 3 16 17 18 19 8 9 10 11 24 25 26 27
+                                      (local.get $v2) (local.get $v3)))
+        (local.set $p3 (i8x16.shuffle 4 5 6 7 20 21 22 23 12 13 14 15 28 29 30 31
+                                      (local.get $v2) (local.get $v3)))
+
+        (local.set $ai (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                      (local.get $p0) (local.get $p1)))
+        (local.set $ci (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+                                      (local.get $p0) (local.get $p1)))
+        (local.set $bi (i8x16.shuffle 0 1 2 3 4 5 6 7 16 17 18 19 20 21 22 23
+                                      (local.get $p2) (local.get $p3)))
+        (local.set $di (i8x16.shuffle 8 9 10 11 12 13 14 15 24 25 26 27 28 29 30 31
+                                      (local.get $p2) (local.get $p3)))
+
+        ;; ---- 4 consecutive twiddle triples ----
+        (local.set $p (i32.add (local.get $tw) (i32.shl (local.get $j) (i32.const 2))))
+        (local.set $w1r (v128.load (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (local.get $lb)))
+        (local.set $w1i (v128.load (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (local.get $lb)))
+        (local.set $w2r (v128.load (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (local.get $lb)))
+        (local.set $w2i (v128.load (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (local.get $lb)))
+        (local.set $w3r (v128.load (local.get $p)))
+        (local.set $p (i32.add (local.get $p) (local.get $lb)))
+        (local.set $w3i (v128.load (local.get $p)))
+
+        ;; ---- same butterfly math as the generic stage ----
+        (local.set $wcr (f32x4.sub (f32x4.mul (local.get $w2r) (local.get $cr))
+                                   (f32x4.mul (local.get $w2i) (local.get $ci))))
+        (local.set $wci (f32x4.add (f32x4.mul (local.get $w2r) (local.get $ci))
+                                   (f32x4.mul (local.get $w2i) (local.get $cr))))
+        (local.set $wbr (f32x4.sub (f32x4.mul (local.get $w1r) (local.get $br))
+                                   (f32x4.mul (local.get $w1i) (local.get $bi))))
+        (local.set $wbi (f32x4.add (f32x4.mul (local.get $w1r) (local.get $bi))
+                                   (f32x4.mul (local.get $w1i) (local.get $br))))
+        (local.set $wdr (f32x4.sub (f32x4.mul (local.get $w3r) (local.get $dr))
+                                   (f32x4.mul (local.get $w3i) (local.get $di))))
+        (local.set $wdi (f32x4.add (f32x4.mul (local.get $w3r) (local.get $di))
+                                   (f32x4.mul (local.get $w3i) (local.get $dr))))
+
+        (local.set $t0r (f32x4.add (local.get $ar) (local.get $wcr)))
+        (local.set $t0i (f32x4.add (local.get $ai) (local.get $wci)))
+        (local.set $t1r (f32x4.sub (local.get $ar) (local.get $wcr)))
+        (local.set $t1i (f32x4.sub (local.get $ai) (local.get $wci)))
+        (local.set $t2r (f32x4.add (local.get $wbr) (local.get $wdr)))
+        (local.set $t2i (f32x4.add (local.get $wbi) (local.get $wdi)))
+        (local.set $t3r (f32x4.sub (local.get $wbr) (local.get $wdr)))
+        (local.set $t3i (f32x4.sub (local.get $wbi) (local.get $wdi)))
+
+        ;; outputs q = j..j+3 in each quarter block, interleaved at byte 2*q
+        (local.set $q (i32.shl (local.get $j) (i32.const 2)))
+
+        ;; quarter 0: t0 + t2
+        (local.set $xr (f32x4.add (local.get $t0r) (local.get $t2r)))
+        (local.set $xi (f32x4.add (local.get $t0i) (local.get $t2i)))
+        (local.set $p (i32.shl (local.get $q) (i32.const 1)))
+        (v128.store (local.get $p)
+          (i8x16.shuffle 0 1 2 3 16 17 18 19 4 5 6 7 20 21 22 23
+            (local.get $xr) (local.get $xi)))
+        (v128.store (i32.add (local.get $p) (i32.const 16))
+          (i8x16.shuffle 8 9 10 11 24 25 26 27 12 13 14 15 28 29 30 31
+            (local.get $xr) (local.get $xi)))
+
+        ;; quarter 1 (inverse rotation): t1 + i*t3 = (t1r - t3i, t1i + t3r)
+        (local.set $xr (f32x4.sub (local.get $t1r) (local.get $t3i)))
+        (local.set $xi (f32x4.add (local.get $t1i) (local.get $t3r)))
+        (local.set $p (i32.shl (i32.add (local.get $q) (local.get $n4b)) (i32.const 1)))
+        (v128.store (local.get $p)
+          (i8x16.shuffle 0 1 2 3 16 17 18 19 4 5 6 7 20 21 22 23
+            (local.get $xr) (local.get $xi)))
+        (v128.store (i32.add (local.get $p) (i32.const 16))
+          (i8x16.shuffle 8 9 10 11 24 25 26 27 12 13 14 15 28 29 30 31
+            (local.get $xr) (local.get $xi)))
+
+        ;; quarter 2: t0 - t2
+        (local.set $xr (f32x4.sub (local.get $t0r) (local.get $t2r)))
+        (local.set $xi (f32x4.sub (local.get $t0i) (local.get $t2i)))
+        (local.set $p (i32.shl (i32.add (local.get $q) (i32.shl (local.get $n4b) (i32.const 1)))
+                               (i32.const 1)))
+        (v128.store (local.get $p)
+          (i8x16.shuffle 0 1 2 3 16 17 18 19 4 5 6 7 20 21 22 23
+            (local.get $xr) (local.get $xi)))
+        (v128.store (i32.add (local.get $p) (i32.const 16))
+          (i8x16.shuffle 8 9 10 11 24 25 26 27 12 13 14 15 28 29 30 31
+            (local.get $xr) (local.get $xi)))
+
+        ;; quarter 3 (inverse rotation): t1 - i*t3 = (t1r + t3i, t1i - t3r)
+        (local.set $xr (f32x4.add (local.get $t1r) (local.get $t3i)))
+        (local.set $xi (f32x4.sub (local.get $t1i) (local.get $t3r)))
+        (local.set $p (i32.shl (i32.add (local.get $q) (i32.mul (local.get $n4b) (i32.const 3)))
+                               (i32.const 1)))
+        (v128.store (local.get $p)
+          (i8x16.shuffle 0 1 2 3 16 17 18 19 4 5 6 7 20 21 22 23
+            (local.get $xr) (local.get $xi)))
+        (v128.store (i32.add (local.get $p) (i32.const 16))
+          (i8x16.shuffle 8 9 10 11 24 25 26 27 12 13 14 15 28 29 30 31
+            (local.get $xr) (local.get $xi)))
+
+        (local.set $j (i32.add (local.get $j) (i32.const 4)))
+        (br $loop)
+      )
+    )
+  )
+
+  ;; Inverse real FFT: n/2+1 interleaved complex f32 (Hermitian spectrum) at
+  ;; offset 0 -> n real f32 at offset 0, fully normalized so that
+  ;; irfft_split(rfft_split(x)) = x. Requires n >= 32. Call
+  ;; precompute_rfft_twiddles_split(n) first.
+  ;;
+  ;; Structure (Experiment 60, mirror of rfft_split): one pre-process pass
+  ;; converts X to the scaled M = n/2 point spectrum Z in split planes at B;
+  ;; the inverse radix-4 pipeline ping-pongs B<->C, never touching A (which
+  ;; the pre-process reads); the final s=1 stage is fused with the
+  ;; reinterleave and streams the real signal over A. Total memory passes
+  ;; match the forward transform exactly.
+  (func (export "irfft_split") (param $n i32)
+    (local $m i32)
+    (local $s i32)
+    (local $l i32)
+    (local $tw i32)
+    (local $sr i32) (local $si i32)
+    (local $dr i32) (local $di i32)
+    (local $tmp i32)
+
+    (local.set $m (i32.shr_u (local.get $n) (i32.const 1)))
+
+    ;; Pre-process: interleaved X in A -> scaled split Z in B
+    (call $irfft_preprocess_split (local.get $m)
+      (global.get $REAL_B_OFFSET) (global.get $IMAG_B_OFFSET))
+
+    (local.set $sr (global.get $REAL_B_OFFSET))
+    (local.set $si (global.get $IMAG_B_OFFSET))
+    (local.set $dr (global.get $REAL_C_OFFSET))
+    (local.set $di (global.get $IMAG_C_OFFSET))
+    (local.set $tw (global.get $STAGE_TW_INV))
+
+    (if (i32.and (i32.ctz (local.get $m)) (i32.const 1))
+      (then
+        ;; odd log2(m): twiddle-free radix-2 stage first (B -> C)
+        (call $stage_r2_lead (local.get $sr) (local.get $si)
+                             (local.get $dr) (local.get $di) (local.get $m))
+        (local.set $tmp (local.get $sr)) (local.set $sr (local.get $dr)) (local.set $dr (local.get $tmp))
+        (local.set $tmp (local.get $si)) (local.set $si (local.get $di)) (local.set $di (local.get $tmp))
+        (local.set $s (i32.shr_u (local.get $m) (i32.const 3)))
+        (local.set $l (i32.const 2)))
+      (else
+        (local.set $s (i32.shr_u (local.get $m) (i32.const 2)))
+        (local.set $l (i32.const 1))))
+
+    ;; Generic inverse stages, ping-ponging B<->C, until s = 1 remains
+    (block $done
+      (loop $stages
+        (br_if $done (i32.lt_u (local.get $s) (i32.const 4)))
+        (call $stage_r4_generic (local.get $sr) (local.get $si)
+                                (local.get $dr) (local.get $di)
+                                (local.get $s) (local.get $l)
+                                (local.get $tw) (local.get $m) (i32.const 1))
+        (local.set $tmp (local.get $sr)) (local.set $sr (local.get $dr)) (local.set $dr (local.get $tmp))
+        (local.set $tmp (local.get $si)) (local.set $si (local.get $di)) (local.set $di (local.get $tmp))
+        (local.set $tw (i32.add (local.get $tw) (i32.mul (local.get $l) (i32.const 24))))
+        (local.set $l (i32.shl (local.get $l) (i32.const 2)))
+        (local.set $s (i32.shr_u (local.get $s) (i32.const 2)))
+        (br $stages)
+      )
+    )
+
+    ;; Fused final stage: split planes -> interleaved real signal at offset 0
+    (call $stage_r4_s1_inv_fused (local.get $sr) (local.get $si)
+      (local.get $l) (local.get $tw) (local.get $m))
   )
 
   (func $fft_split (export "fft_split") (param $n i32)

@@ -74,6 +74,7 @@ async function runBenchmarks() {
   console.log("");
 
   const wasmExports = await loadWasm("fft_real_f32_dual");
+  const splitExports = await loadWasm("fft_split_native_f32");
   const pffft = await PFFFT();
 
   const summary = [];
@@ -108,7 +109,29 @@ async function runBenchmarks() {
     );
     results.push(wasmResult);
 
-    // 2. fftw-js (f32)
+    // 2. f32 split-core IRFFT (Experiment 60)
+    const splitResult = runBenchmark(
+      "wat-fft split (f32)",
+      () => {
+        const memory = splitExports.memory;
+        // Spectrum: N/2+1 complex values = N+2 floats
+        const data = new Float32Array(memory.buffer, 0, size + 2);
+        splitExports.precompute_rfft_twiddles_split(size);
+        // Produce a real spectrum by running the forward RFFT once
+        new Float32Array(memory.buffer, 0, size).set(input);
+        splitExports.rfft_split(size);
+        const spectrum = new Float32Array(size + 2);
+        spectrum.set(data);
+        return { data, spectrum };
+      },
+      (ctx) => {
+        ctx.data.set(ctx.spectrum);
+        splitExports.irfft_split(size);
+      },
+    );
+    results.push(splitResult);
+
+    // 3. fftw-js (f32)
     const fftwResult = runBenchmark(
       "fftw-js (f32)",
       () => {
@@ -125,7 +148,7 @@ async function runBenchmarks() {
     );
     results.push(fftwResult);
 
-    // 3. pffft-wasm SIMD (f32) - unscaled backward transform
+    // 4. pffft-wasm SIMD (f32) - unscaled backward transform
     const pffftResult = runBenchmark(
       "pffft-wasm SIMD (f32)",
       () => {
@@ -154,9 +177,9 @@ async function runBenchmarks() {
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
 
-    // Calculate speedup
-    const vsFftw = wasmResult.opsPerSec / fftwResult.opsPerSec;
-    const vsPffft = wasmResult.opsPerSec / pffftResult.opsPerSec;
+    // Calculate speedup (best wat-fft implementation: the split core)
+    const vsFftw = splitResult.opsPerSec / fftwResult.opsPerSec;
+    const vsPffft = splitResult.opsPerSec / pffftResult.opsPerSec;
 
     // Print results
     console.log("");
@@ -179,7 +202,7 @@ async function runBenchmarks() {
 
     summary.push({
       size,
-      wasm: wasmResult.opsPerSec,
+      wasm: splitResult.opsPerSec,
       fftw: fftwResult.opsPerSec,
       pffft: pffftResult.opsPerSec,
       vsFftw: `${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`,

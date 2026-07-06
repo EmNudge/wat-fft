@@ -89,9 +89,9 @@ xychart-beta
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm SIMD** · 🟣 **kissfft-js**
 
-**wat-fft f32 wins at N≤256 and beats fftw-js at every size by +53% to +193%.** The forward real FFT (`rfft_split` in the split-format module, Experiment 59) runs on the radix-4 split core with a fused deinterleaving first stage and no copy-back passes; it roughly doubled throughput at N≥128 and now sits within 1-5% of pffft-wasm SIMD at N=512-4096 (fusing the post-process into the final stage is the identified next step). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_split_native_f32.wasm`, `rfft_split`) for maximum single-precision speed; `fft_real_f32_dual.wasm` remains for N<32 and inverse transforms.
+**wat-fft f32 wins at N≤256 and beats fftw-js at every size by +53% to +193%.** The forward real FFT (`rfft_split` in the split-format module, Experiment 59) runs on the radix-4 split core with a fused deinterleaving first stage and no copy-back passes; it roughly doubled throughput at N≥128 and now sits within 1-5% of pffft-wasm SIMD at N=512-4096 (fusing the post-process into the final stage is the identified next step). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_split_native_f32.wasm`, `rfft_split`/`irfft_split`) for maximum single-precision speed; `fft_real_f32_dual.wasm` remains for N<32.
 
-The inverse real FFT (`irfft`, `fft_real_f32_dual.wasm`) is a native inverse transform with no conjugate/scale pass and matches its module's forward throughput. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
+The inverse real FFT (`irfft_split`, Experiment 60) mirrors the forward design — a fused SIMD pre-process with the 1/N normalization folded in and a final butterfly stage fused with the reinterleave. It beats fftw-js at every size (+39% to +115%) and pffft-wasm SIMD at N≤128, trailing it by only 3-17% at N≥256 (pffft's backward transform skips normalization entirely). See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
 
 ## Installation
 
@@ -217,15 +217,15 @@ npm run bench      # Run benchmarks
 
 **Recommended modules:**
 
-| Module                       | Use Case                   | Precision | Inverse      |
-| ---------------------------- | -------------------------- | --------- | ------------ |
-| `fft_combined.wasm`          | Complex FFT (any size)     | f64       | `ifft`       |
-| `fft_real_combined.wasm`     | Real FFT (any size)        | f64       | -            |
-| `fft_stockham_f32_dual.wasm` | Complex FFT (interleaved)  | f32       | `ifft`       |
-| `fft_split_native_f32.wasm`  | Complex FFT (split format) | f32       | `ifft_split` |
-| `fft_real_f32_dual.wasm`     | Real FFT (fastest)         | f32       | `irfft`      |
+| Module                       | Use Case                     | Precision | Inverse                     |
+| ---------------------------- | ---------------------------- | --------- | --------------------------- |
+| `fft_combined.wasm`          | Complex FFT (any size)       | f64       | `ifft`                      |
+| `fft_real_combined.wasm`     | Real FFT (any size)          | f64       | -                           |
+| `fft_stockham_f32_dual.wasm` | Complex FFT (interleaved)    | f32       | `ifft`                      |
+| `fft_split_native_f32.wasm`  | Complex + real FFT (fastest) | f32       | `ifft_split`, `irfft_split` |
+| `fft_real_f32_dual.wasm`     | Real FFT (N<32)              | f32       | `irfft`                     |
 
-**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays. Its radix-4 core (Experiment 58) computes 4 complex numbers per SIMD operation with zero shuffles in the main stages, making it **the fastest complex FFT module at N≥32** — faster than both the interleaved module and pffft-wasm SIMD. Its `ifft_split` is a native inverse (conjugated stage tables + one 1/N scale pass). The same module hosts the fastest **real FFT** (`rfft_split` + `precompute_rfft_twiddles_split`, N≥32, Experiment 59): packed real input at offset 0 in, N/2+1 interleaved complex bins out at offset 0.
+**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays. Its radix-4 core (Experiment 58) computes 4 complex numbers per SIMD operation with zero shuffles in the main stages, making it **the fastest complex FFT module at N≥32** — faster than both the interleaved module and pffft-wasm SIMD. Its `ifft_split` is a native inverse (conjugated stage tables + one 1/N scale pass). The same module hosts the fastest **real FFT in both directions** (N≥32, `precompute_rfft_twiddles_split` once): `rfft_split` (Experiment 59) takes packed real input at offset 0 and writes N/2+1 interleaved complex bins to offset 0; `irfft_split` (Experiment 60) takes those bins and writes the fully-normalized real signal back to offset 0.
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 
