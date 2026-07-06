@@ -58,13 +58,13 @@ Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft
 
 | Size   | wat-fft (f32)        | pffft-wasm SIMD (f32) | Result   |
 | ------ | -------------------- | --------------------- | -------- |
-| N=64   | **19,200,000 ops/s** | 14,900,000 ops/s      | **+29%** |
-| N=128  | 8,050,000 ops/s      | 10,500,000 ops/s      | -23%     |
-| N=256  | 4,160,000 ops/s      | 7,130,000 ops/s       | -42%     |
-| N=512  | 2,010,000 ops/s      | 3,810,000 ops/s       | -47%     |
-| N=1024 | 968,000 ops/s        | 2,040,000 ops/s       | -52%     |
-| N=2048 | 461,000 ops/s        | 941,000 ops/s         | -51%     |
-| N=4096 | 221,000 ops/s        | 474,000 ops/s         | -53%     |
+| N=64   | **19,100,000 ops/s** | 14,200,000 ops/s      | **+35%** |
+| N=128  | **13,900,000 ops/s** | 10,600,000 ops/s      | **+31%** |
+| N=256  | **7,940,000 ops/s**  | 7,180,000 ops/s       | **+10%** |
+| N=512  | 3,810,000 ops/s      | 3,850,000 ops/s       | -1%      |
+| N=1024 | 1,950,000 ops/s      | 2,070,000 ops/s       | -5%      |
+| N=2048 | 914,000 ops/s        | 946,000 ops/s         | -3%      |
+| N=4096 | 452,000 ops/s        | 475,000 ops/s         | -5%      |
 
 ```mermaid
 ---
@@ -81,7 +81,7 @@ xychart-beta
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 20
     line [9.00, 5.04, 2.11, 1.28, 0.456, 0.262, 0.099]
-    line [19.19, 8.05, 4.16, 2.01, 0.968, 0.461, 0.221]
+    line [19.11, 13.86, 7.94, 3.81, 1.95, 0.914, 0.452]
     line [12.47, 7.77, 2.67, 1.59, 0.824, 0.407, 0.197]
     line [14.93, 10.51, 7.13, 3.81, 2.04, 0.941, 0.474]
     line [4.96, 3.09, 1.28, 0.732, 0.293, 0.163, 0.066]
@@ -89,9 +89,9 @@ xychart-beta
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm SIMD** · 🟣 **kissfft-js**
 
-**wat-fft f32 wins at N=64 and beats fftw-js at every size** (forward +4% to +54%, inverse +3% to +56%). pffft-wasm's SIMD build leads at N≥128 — its natively-vectorized real transform is the strongest competitor and the target of current work (Experiment 58). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 wins at N≤256 and beats fftw-js at every size by +53% to +193%.** The forward real FFT (`rfft_split` in the split-format module, Experiment 59) runs on the radix-4 split core with a fused deinterleaving first stage and no copy-back passes; it roughly doubled throughput at N≥128 and now sits within 1-5% of pffft-wasm SIMD at N=512-4096 (fusing the post-process into the final stage is the identified next step). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_split_native_f32.wasm`, `rfft_split`) for maximum single-precision speed; `fft_real_f32_dual.wasm` remains for N<32 and inverse transforms.
 
-The inverse real FFT (`irfft`) is a native inverse transform with no conjugate/scale pass and matches forward throughput. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
+The inverse real FFT (`irfft`, `fft_real_f32_dual.wasm`) is a native inverse transform with no conjugate/scale pass and matches its module's forward throughput. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
 
 ## Installation
 
@@ -225,7 +225,7 @@ npm run bench      # Run benchmarks
 | `fft_split_native_f32.wasm`  | Complex FFT (split format) | f32       | `ifft_split` |
 | `fft_real_f32_dual.wasm`     | Real FFT (fastest)         | f32       | `irfft`      |
 
-**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays. Its radix-4 core (Experiment 58) computes 4 complex numbers per SIMD operation with zero shuffles in the main stages, making it **the fastest complex FFT module at N≥32** — faster than both the interleaved module and pffft-wasm SIMD. Its `ifft_split` is a native inverse (conjugated stage tables + one 1/N scale pass).
+**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays. Its radix-4 core (Experiment 58) computes 4 complex numbers per SIMD operation with zero shuffles in the main stages, making it **the fastest complex FFT module at N≥32** — faster than both the interleaved module and pffft-wasm SIMD. Its `ifft_split` is a native inverse (conjugated stage tables + one 1/N scale pass). The same module hosts the fastest **real FFT** (`rfft_split` + `precompute_rfft_twiddles_split`, N≥32, Experiment 59): packed real input at offset 0 in, N/2+1 interleaved complex bins out at offset 0.
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 

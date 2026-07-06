@@ -6,6 +6,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import FFT from "fft.js";
+import { referenceRealDFT } from "./dft-reference.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -145,6 +146,94 @@ async function runTests() {
       passed++;
     } else {
       console.log(`  N=${n.toString().padStart(4)}: max error = ${maxError.toExponential(2)} ✗`);
+      failed++;
+    }
+  }
+
+  console.log("\nReal FFT (rfft_split) vs reference DFT:");
+  const rfftSizes = [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384];
+  const rfftInputs = {
+    impulse: (n) => {
+      const x = new Float32Array(n);
+      x[0] = 1;
+      return x;
+    },
+    "shifted impulse": (n) => {
+      const x = new Float32Array(n);
+      x[3] = 1;
+      return x;
+    },
+    sinusoid: (n) => {
+      const x = new Float32Array(n);
+      for (let i = 0; i < n; i++) x[i] = Math.sin((2 * Math.PI * 5 * i) / n) + 0.5;
+      return x;
+    },
+    random: (n) => {
+      const x = new Float32Array(n);
+      for (let i = 0; i < n; i++) x[i] = Math.random() * 2 - 1;
+      return x;
+    },
+  };
+  for (const n of rfftSizes) {
+    let worst = 0;
+    let ok = true;
+    for (const [, makeInput] of Object.entries(rfftInputs)) {
+      const x = makeInput(n);
+      const expected = referenceRealDFT(new Float64Array(x));
+
+      wasm.precompute_rfft_twiddles_split(n);
+      new Float32Array(wasm.memory.buffer, 0, n).set(x);
+      wasm.rfft_split(n);
+
+      const out = new Float32Array(wasm.memory.buffer, 0, n + 2);
+      // Scale-relative tolerance: f32 rounding grows with sqrt(N) and input energy
+      let scale = 1e-6;
+      for (let k = 0; k <= n / 2; k++) {
+        scale = Math.max(scale, Math.abs(expected.real[k]), Math.abs(expected.imag[k]));
+      }
+      for (let k = 0; k <= n / 2; k++) {
+        const err =
+          Math.max(
+            Math.abs(out[2 * k] - expected.real[k]),
+            Math.abs(out[2 * k + 1] - expected.imag[k]),
+          ) / scale;
+        worst = Math.max(worst, err);
+        if (err > 1e-4) ok = false;
+      }
+    }
+    if (ok) {
+      console.log(`  N=${n.toString().padStart(5)}: max rel error = ${worst.toExponential(2)} ✓`);
+      passed++;
+    } else {
+      console.log(`  N=${n.toString().padStart(5)}: max rel error = ${worst.toExponential(2)} ✗`);
+      failed++;
+    }
+  }
+
+  console.log("\nReal FFT (rfft_split) vs fft_real_f32_dual rfft:");
+  const dualWasmPath = path.join(__dirname, "..", "dist", "fft_real_f32_dual.wasm");
+  const dualModule = await WebAssembly.compile(fs.readFileSync(dualWasmPath));
+  const dual = (await WebAssembly.instantiate(dualModule, {})).exports;
+  for (const n of [64, 256, 1024, 4096]) {
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) x[i] = Math.random() * 2 - 1;
+
+    wasm.precompute_rfft_twiddles_split(n);
+    new Float32Array(wasm.memory.buffer, 0, n).set(x);
+    wasm.rfft_split(n);
+    const splitOut = new Float32Array(wasm.memory.buffer, 0, n + 2).slice();
+
+    dual.precompute_rfft_twiddles(n);
+    new Float32Array(dual.memory.buffer, 0, n).set(x);
+    dual.rfft(n);
+    const dualOut = new Float32Array(dual.memory.buffer, 0, n + 2).slice();
+
+    const { match, maxError } = compareArrays(splitOut, dualOut, 1e-2);
+    if (match) {
+      console.log(`  N=${n.toString().padStart(5)}: max diff = ${maxError.toExponential(2)} ✓`);
+      passed++;
+    } else {
+      console.log(`  N=${n.toString().padStart(5)}: max diff = ${maxError.toExponential(2)} ✗`);
       failed++;
     }
   }
