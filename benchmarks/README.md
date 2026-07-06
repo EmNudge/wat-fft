@@ -4,14 +4,15 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 
 ## Quick Reference
 
-| Command                 | Benchmark               | Competitors                                    |
-| ----------------------- | ----------------------- | ---------------------------------------------- |
-| `npm run bench`         | Complex FFT (f64)       | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
-| `npm run bench:rfft`    | Real FFT (f64)          | fftw-js, kissfft-js, webfft, pffft-wasm        |
-| `npm run bench:f32`     | Complex FFT (f32)       | fft.js                                         |
-| `npm run bench:rfft32`  | Real FFT (f32)          | fftw-js                                        |
-| `npm run bench:irfft32` | Inverse Real FFT (f32)  | fftw-js                                        |
-| `npm run bench:browser` | Browser FFT (all types) | fft.js, fft-js, kissfft-js, webfft             |
+| Command                 | Benchmark                 | Competitors                                    |
+| ----------------------- | ------------------------- | ---------------------------------------------- |
+| `npm run bench`         | Complex FFT (f64)         | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| `npm run bench:rfft`    | Real FFT (f64)            | fftw-js, kissfft-js, webfft, pffft-wasm        |
+| `npm run bench:f32`     | Complex FFT (f32)         | fft.js                                         |
+| `npm run bench:ifft32`  | Inverse Complex FFT (f32) | fft.js, pffft-wasm                             |
+| `npm run bench:rfft32`  | Real FFT (f32)            | fftw-js                                        |
+| `npm run bench:irfft32` | Inverse Real FFT (f32)    | fftw-js                                        |
+| `npm run bench:browser` | Browser FFT (all types)   | fft.js, fft-js, kissfft-js, webfft             |
 
 ## Benchmark Files
 
@@ -22,6 +23,7 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 | `fft.bench.js`            | Main complex FFT benchmark - compares all wat-fft variants against JS libraries |
 | `rfft.bench.js`           | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
 | `fft_f32_dual.bench.js`   | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
+| `ifft_f32_dual.bench.js`  | f32 inverse complex FFT - native inverse vs fft.js and pffft-wasm backward      |
 | `rfft_f32_dual.bench.js`  | f32 dual-complex rfft - compares against fftw-js (both f32)                     |
 | `irfft_f32_dual.bench.js` | f32 inverse rfft - compares against fftw-js inverse (both f32)                  |
 
@@ -45,6 +47,7 @@ npm run build
 npm run bench        # Complex FFT
 npm run bench:rfft   # Real FFT (f64)
 npm run bench:f32    # Complex FFT (f32)
+npm run bench:ifft32 # Inverse Complex FFT (f32)
 npm run bench:rfft32 # Real FFT (f32)
 npm run bench:irfft32 # Inverse Real FFT (f32)
 ```

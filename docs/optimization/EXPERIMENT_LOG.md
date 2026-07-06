@@ -1702,3 +1702,38 @@ So "codelets lost on M5" (Experiment 53) was never about codelets per se; it was
 **Future direction (data, not a commitment)**: the real module's N=64 path now runs its n2=32 core on the loop at 30.0M ops/s. The complex module's radix-4 style at n=16 does 67.4M; a radix-4-style n=32 codelet (4-4-2 stages) could plausibly beat 30M and add another chunk at N=64 - now a win-extending experiment rather than a gap-closing one.
 
 **Lesson**: When an A/B flips on new hardware, check whether the losing side is one DESIGN of the approach or the approach itself before generalizing. One probe (Experiment 53) said "codelets lose on M5"; the sibling module's different codelet design wins by +47% on the same hardware.
+
+## Experiment 55: Native Inverse FFT for the Complex f32 Module (2026-07-06)
+
+**Goal**: Port Experiment 52's native-inverse approach to `fft_stockham_f32_dual.wat`. Its `ifft` still used the conjugation identity `IFFT(Z) = (1/N) * conj(FFT(conj(Z)))`, paying TWO extra full-buffer passes (`$conjugate_buffer` before, `$scale_and_conjugate` after) that the forward path doesn't have.
+
+**Benchmark first** (Experiment 49's lesson): the complex ifft path had no benchmark. Added `benchmarks/ifft_f32_dual.bench.js` (`npm run bench:ifft32`) comparing against pffft-wasm backward (unscaled) and fft.js `inverseTransform`. Baseline confirmed the structural overhead: ifft ran 12-16% slower than forward fft at every size (e.g. N=1024: 536K vs 606K).
+
+**Changes** (`modules/fft_stockham_f32_dual.wat`):
+
+- `$SIGN_MASK_INV` global `[1,-1,1,-1]`: the dual-complex multiply computes `b*w` as `b*wr + swap(b)*wi*sign`, so the flipped mask negates `wi` = conjugated twiddles from the SAME table at zero inner-loop cost (Experiment 52's key insight, ported unchanged)
+- `$fft_general(n, sign, scale)`: `$sign` selects direction; `$scale` (1.0 forward, 1/N inverse) is folded into the final-stage (r=1) butterfly stores - the 1/N normalization costs 2 extra `f32x4.mul` per dual butterfly in ONE stage instead of a full pass
+- New `$ifft_8_dit` and `$ifft_16` codelets: mirrors of the forward codelets with conjugated hardcoded twiddles (`-j` rotations become `+j` via mask flip; generic multiplies negate the wi constant) and 1/N folded into the final stores. Validated against a reference inverse DFT (max err < 9e-8) in addition to roundtrip tests
+- `ifft` dispatch mirrors `fft` dispatch: n=4/8/16 codelets, else `$fft_general` with `$SIGN_MASK_INV` and a 1/n splat
+- Deleted `$conjugate_buffer`, `$scale_and_conjugate`, and the now-unused `$CONJ_MASK`
+
+Unlike the real module (Experiment 52), no start-buffer parity trick is needed: input arrives at offset 0, so odd-stage sizes keep the same `$copy_buffer` as the forward path - inverse and forward are now structurally identical.
+
+**Results** (Apple M5 Pro, two runs each, best of two, wat-fft ifft ops/s):
+
+| Size   | Before | After  | Change   | Forward fft (same day) |
+| ------ | ------ | ------ | -------- | ---------------------- |
+| N=64   | 9.13M  | 11.14M | **+22%** | 11.06M                 |
+| N=128  | 4.56M  | 5.29M  | **+16%** | 5.24M                  |
+| N=256  | 2.42M  | 2.77M  | **+14%** | 2.78M                  |
+| N=512  | 1.06M  | 1.23M  | **+16%** | 1.22M                  |
+| N=1024 | 536K   | 615K   | **+15%** | 610K                   |
+| N=2048 | 239K   | 271K   | **+13%** | 270K                   |
+| N=4096 | 116K   | 133K   | **+15%** | 134K                   |
+
+**Result**: SUCCESS - +13-22% at every size, and ifft now matches forward fft throughput exactly (the entire structural overhead is gone). vs pffft-wasm's unscaled backward transform: +36% to +85%. Forward fft re-benchmarked: no regression at any size (the `$scale=1.0` multiply in the last stage is free within noise). All 27 core tests and the full extended suite pass; roundtrip error unchanged (~1e-6).
+
+**Lessons**:
+
+- The Experiment 52 recipe (sign-mask flip + fold 1/N into an existing pass) ported to a second module with zero surprises - a validated structural optimization on one module is a low-risk, high-confidence win on its siblings. Check sibling modules whenever a structural pass-elimination lands.
+- Folding a scale into the final Stockham stage (rather than a preprocess, which the complex module doesn't have) works equally well: a parameterized multiply in one stage is noise, a separate full-buffer pass is 13-16%.
