@@ -1576,6 +1576,7 @@
     (local $l i32)
     (local $tw i32)
     (local $pr i32)      ;; ping-pong partner (A or C), real plane
+    (local $pi i32)      ;; partner imag plane
     (local $sr i32)
 
     (local.set $m (i32.shr_u (local.get $n) (i32.const 1)))
@@ -1605,13 +1606,17 @@
     ;; Partner so the last stage never writes to A: an even remainder
     ;; returns to B on its own; an odd remainder must end in C.
     (if (i32.and (local.get $rem) (i32.const 1))
-      (then (local.set $pr (global.get $REAL_C_OFFSET)))
-      (else (local.set $pr (global.get $REAL_A_OFFSET))))
+      (then
+        (local.set $pr (global.get $REAL_C_OFFSET))
+        (local.set $pi (global.get $IMAG_C_OFFSET)))
+      (else
+        (local.set $pr (global.get $REAL_A_OFFSET))
+        (local.set $pi (global.get $IMAG_A_OFFSET))))
 
     (local.set $sr (call $fft_r4_pipeline (local.get $m) (i32.const 0)
       (local.get $s) (local.get $l) (local.get $tw)
       (global.get $REAL_B_OFFSET) (global.get $IMAG_B_OFFSET)
-      (local.get $pr) (i32.add (local.get $pr) (i32.const 32768))))
+      (local.get $pr) (local.get $pi)))
 
     (call $rfft_postprocess_split (local.get $m)
       (local.get $sr) (i32.add (local.get $sr) (i32.const 32768)))
