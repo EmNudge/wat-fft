@@ -127,7 +127,9 @@ The last gap (N=64, both directions) closed in Experiment 53: the fully-unrolled
 
 Open opportunities (wins, not gaps):
 
-- **Complex f32 module small-N dispatch**: `fft_stockham_f32_dual.wat` still uses its own small-N codelets; the Experiment 53 codelet-vs-loop probe may find similar free wins there.
+- ~~**Complex f32 module small-N dispatch**~~: probed in Experiment 54 - its radix-4 single-lane codelets WIN on M5 (+34-47% vs the loop); no change needed. The Experiment 53 loss was specific to the radix-2 dual-complex DIT codelet design.
+- **Radix-4-style n=32 codelet for the real module**: the complex module's radix-4 n=16 codelet does 67M ops/s where the real module's n2=32 core (now on the loop) does 30M; a 4-4-2-stage codelet could extend the N=64 win further (Experiment 54 data).
+- **Native inverse for the complex f32 `ifft`**: still uses the conjugation identity with two extra full passes; Experiment 52's flipped-sign-mask approach ports directly (needs an ifft benchmark first - Experiment 49's lesson).
 - **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions; re-run the codelet-vs-loop probes when hardware changes.
 
 Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).

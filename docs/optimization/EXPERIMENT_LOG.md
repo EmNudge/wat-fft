@@ -4,62 +4,63 @@ Detailed record of all optimization experiments.
 
 ## Quick Reference
 
-| #   | Experiment                  | Result           | Key Finding                                                           |
-| --- | --------------------------- | ---------------- | --------------------------------------------------------------------- |
-| 1   | Dual-Complex f32 SIMD       | FAILURE -15-20%  | Branch overhead, twiddle replication hurt JIT                         |
-| 2   | N=8 Codelet                 | FAILURE          | Stockham permutation semantics complex                                |
-| 3   | Radix-4 Stockham SIMD       | SUCCESS +51%     | Fewer stages + inlined SIMD crucial                                   |
-| 4   | N=16 Codelet                | SUCCESS +54%     | Unrolled with inline twiddles                                         |
-| 5   | Real FFT + Radix-4          | SUCCESS          | Tests pass, faster rfft                                               |
-| 6   | Codelet Generator           | PARTIAL          | Correct but 320+ locals cause spills                                  |
-| 7   | Inline SIMD cmul            | NO CHANGE        | V8 already inlines small functions                                    |
-| 8   | Fused rfft Codelets         | SUCCESS +123%    | N=8, N=32 fused codelets                                              |
-| 9   | Hierarchical FFT            | SUCCESS +30pp    | DIF composition, optimal at N=1024                                    |
-| 10  | Depth-First DIF             | FAILURE -55%     | Call overhead > cache benefit                                         |
-| 11  | SIMD Post-Processing        | SUCCESS +2-8pp   | v128 ops in rfft post-process                                         |
-| 12  | Relaxed SIMD FMA            | SUCCESS +1-5%    | Modest gains, V8 optimizes well                                       |
-| 13  | f32 Dual-Complex rfft       | SUCCESS +73%     | Combined with dual-complex FFT                                        |
-| 14  | f32x4 SIMD Post-Process     | SUCCESS +13pp    | Process 2 pairs per iteration                                         |
-| 15  | Fused FFT-64 Codelet        | SUCCESS +8%      | Eliminated 6 function calls                                           |
-| 16  | f32 Small-N Codelets        | SUCCESS +50pp    | Fixed W_8^3 sign bug                                                  |
-| 16b | f32 FFT-64 Codelet          | SUCCESS +45pp    | N=128 now +30% vs fftw-js                                             |
-| 17  | Bit-Reversal Permutation    | FAILURE          | Hierarchical DIF != standard bitrev                                   |
-| 18  | DIT Natural Order Codelets  | SUCCESS +4%      | Loads bit-reversed, outputs natural                                   |
-| 19  | SIMD Threshold N=64         | SUCCESS +8pp     | Lowered threshold from 128 to 64                                      |
-| 20  | Dual-Complex r < 2          | SUCCESS +5-12pp  | Process r=2 stages with dual-complex SIMD                             |
-| 21  | Dual-Group r=1 Stage        | SUCCESS +11-20pp | Process 2 groups at once, massive improvement                         |
-| 22  | Dispatch Order Optimization | INCONCLUSIVE     | Gap at N=64/128 within benchmark variance                             |
-| 23  | Unrolled RFFT-64 Post-Proc  | SUCCESS +3pp     | Inline twiddles, no loops, N=64 gap → -1.5%                           |
-| 24  | Derived Conjugate Twiddles  | INCONCLUSIVE     | XOR derivation vs v128.const, within variance                         |
-| 25  | Unrolled RFFT-128 Post-Proc | SUCCESS +2-5pp   | Inline twiddles, N=128 now consistently +2-6%                         |
-| 26  | Performance Analysis Final  | COMPLETE         | Beats fftw-js at all sizes, N=64 within noise                         |
-| 27  | Dead Code Removal           | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64                            |
-| 28  | Dead Parameterized Codelets | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at                          |
-| 29  | IFFT Implementation         | SUCCESS          | Full inverse FFT for all modules, 27/27 tests                         |
-| 30  | r=2 Stage Dual-Group        | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage                                 |
-| 31  | f32 Complex FFT Dual-Group  | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module                         |
-| 32  | f64 Complex FFT Dual-Group  | SUCCESS +7-10%   | Dual-group r=1/r=2 for f64 Stockham                                   |
-| 33  | f64 RFFT Dual-Group         | FAILURE -10-12%  | Optimization harmful for smaller internal FFT                         |
-| 34  | f32 Complex DIT Codelets    | PARTIAL          | N=8 DIT helps, N=16 DIT slower than Stockham                          |
-| 35  | Loop Unrolling r>=4         | MIXED            | +2-5% at N>=512, -2% at N=64, reverted                                |
-| 36  | Split Real/Imag Format      | RESEARCH         | pffft uses 4 complex/SIMD vs our 2, explains gap                      |
-| 37  | Split Format Implementation | FAILURE -65-75%  | Conversion overhead negates SIMD gains                                |
-| 38  | f32 Complex FFT Benchmark   | SUCCESS          | True f32 vs f32 comparison: 85-91% of pffft                           |
-| 39  | Native Split-Format FFT     | FAILURE 46-58%   | Same twiddle per group negates split format gain                      |
-| 40  | Multi-Twiddle Split Stages  | SUCCESS 81-95%   | Deinterleave for 4 different twiddles per SIMD                        |
-| 41  | Buffer Copy Unrolling       | INCONCLUSIVE     | Within variance, V8 handles simple loops well                         |
-| 42  | Performance Analysis        | COMPLETE         | Optimization complete; beats all competitors                          |
-| 43  | SIMD Split-Format IFFT      | SUCCESS          | 4x throughput for IFFT conjugation phases                             |
-| 44  | f32 N=16 Radix-4 Codelet    | SUCCESS +18%     | Radix-4 codelet closes gap with f64                                   |
-| 45  | Performance Gap Analysis    | COMPLETE         | Analysis only; optimization complete                                  |
-| 46  | Dead Code Cleanup           | SUCCESS          | Removed unused fft_split_f32.wat (536 lines)                          |
-| 47  | M5 Pro Re-Baseline          | COMPLETE         | New hardware: N=64 RFFT now loses to fftw-js                          |
-| 48  | Eliminate copy_buffer       | SUCCESS +4.5-6%  | Postprocess reads ping-pong buffer directly                           |
-| 49  | IFFT copy_buffer + bench    | SUCCESS +3-5%    | First IRFFT bench revealed losses at every size                       |
-| 50  | SIMD IRFFT preprocess       | SUCCESS +18-24%  | Fused conjugate deleted a pass and a special case                     |
-| 51  | Unrolled IRFFT preprocess   | PARTIAL +3%      | Unrolling pays off only where the time is                             |
-| 52  | Native inverse FFT          | SUCCESS +5-8%    | Flipped sign mask = conjugated twiddles for free                      |
-| 53  | Loop beats n=16/32 codelets | SUCCESS +30-32%  | On M5, Stockham loop crushes DIT codelets; N=64 flips to +22% vs fftw |
+| #   | Experiment                   | Result           | Key Finding                                                           |
+| --- | ---------------------------- | ---------------- | --------------------------------------------------------------------- |
+| 1   | Dual-Complex f32 SIMD        | FAILURE -15-20%  | Branch overhead, twiddle replication hurt JIT                         |
+| 2   | N=8 Codelet                  | FAILURE          | Stockham permutation semantics complex                                |
+| 3   | Radix-4 Stockham SIMD        | SUCCESS +51%     | Fewer stages + inlined SIMD crucial                                   |
+| 4   | N=16 Codelet                 | SUCCESS +54%     | Unrolled with inline twiddles                                         |
+| 5   | Real FFT + Radix-4           | SUCCESS          | Tests pass, faster rfft                                               |
+| 6   | Codelet Generator            | PARTIAL          | Correct but 320+ locals cause spills                                  |
+| 7   | Inline SIMD cmul             | NO CHANGE        | V8 already inlines small functions                                    |
+| 8   | Fused rfft Codelets          | SUCCESS +123%    | N=8, N=32 fused codelets                                              |
+| 9   | Hierarchical FFT             | SUCCESS +30pp    | DIF composition, optimal at N=1024                                    |
+| 10  | Depth-First DIF              | FAILURE -55%     | Call overhead > cache benefit                                         |
+| 11  | SIMD Post-Processing         | SUCCESS +2-8pp   | v128 ops in rfft post-process                                         |
+| 12  | Relaxed SIMD FMA             | SUCCESS +1-5%    | Modest gains, V8 optimizes well                                       |
+| 13  | f32 Dual-Complex rfft        | SUCCESS +73%     | Combined with dual-complex FFT                                        |
+| 14  | f32x4 SIMD Post-Process      | SUCCESS +13pp    | Process 2 pairs per iteration                                         |
+| 15  | Fused FFT-64 Codelet         | SUCCESS +8%      | Eliminated 6 function calls                                           |
+| 16  | f32 Small-N Codelets         | SUCCESS +50pp    | Fixed W_8^3 sign bug                                                  |
+| 16b | f32 FFT-64 Codelet           | SUCCESS +45pp    | N=128 now +30% vs fftw-js                                             |
+| 17  | Bit-Reversal Permutation     | FAILURE          | Hierarchical DIF != standard bitrev                                   |
+| 18  | DIT Natural Order Codelets   | SUCCESS +4%      | Loads bit-reversed, outputs natural                                   |
+| 19  | SIMD Threshold N=64          | SUCCESS +8pp     | Lowered threshold from 128 to 64                                      |
+| 20  | Dual-Complex r < 2           | SUCCESS +5-12pp  | Process r=2 stages with dual-complex SIMD                             |
+| 21  | Dual-Group r=1 Stage         | SUCCESS +11-20pp | Process 2 groups at once, massive improvement                         |
+| 22  | Dispatch Order Optimization  | INCONCLUSIVE     | Gap at N=64/128 within benchmark variance                             |
+| 23  | Unrolled RFFT-64 Post-Proc   | SUCCESS +3pp     | Inline twiddles, no loops, N=64 gap → -1.5%                           |
+| 24  | Derived Conjugate Twiddles   | INCONCLUSIVE     | XOR derivation vs v128.const, within variance                         |
+| 25  | Unrolled RFFT-128 Post-Proc  | SUCCESS +2-5pp   | Inline twiddles, N=128 now consistently +2-6%                         |
+| 26  | Performance Analysis Final   | COMPLETE         | Beats fftw-js at all sizes, N=64 within noise                         |
+| 27  | Dead Code Removal            | SUCCESS +6-10pp  | 43% smaller source, better I-cache at N=64                            |
+| 28  | Dead Parameterized Codelets  | SUCCESS          | -218 lines, cleanup of $fft_16_at/$fft_32_at                          |
+| 29  | IFFT Implementation          | SUCCESS          | Full inverse FFT for all modules, 27/27 tests                         |
+| 30  | r=2 Stage Dual-Group         | SUCCESS +3-6pp   | Process 2 groups at once in r=2 stage                                 |
+| 31  | f32 Complex FFT Dual-Group   | SUCCESS +30-40%  | Port RFFT optimizations to complex FFT module                         |
+| 32  | f64 Complex FFT Dual-Group   | SUCCESS +7-10%   | Dual-group r=1/r=2 for f64 Stockham                                   |
+| 33  | f64 RFFT Dual-Group          | FAILURE -10-12%  | Optimization harmful for smaller internal FFT                         |
+| 34  | f32 Complex DIT Codelets     | PARTIAL          | N=8 DIT helps, N=16 DIT slower than Stockham                          |
+| 35  | Loop Unrolling r>=4          | MIXED            | +2-5% at N>=512, -2% at N=64, reverted                                |
+| 36  | Split Real/Imag Format       | RESEARCH         | pffft uses 4 complex/SIMD vs our 2, explains gap                      |
+| 37  | Split Format Implementation  | FAILURE -65-75%  | Conversion overhead negates SIMD gains                                |
+| 38  | f32 Complex FFT Benchmark    | SUCCESS          | True f32 vs f32 comparison: 85-91% of pffft                           |
+| 39  | Native Split-Format FFT      | FAILURE 46-58%   | Same twiddle per group negates split format gain                      |
+| 40  | Multi-Twiddle Split Stages   | SUCCESS 81-95%   | Deinterleave for 4 different twiddles per SIMD                        |
+| 41  | Buffer Copy Unrolling        | INCONCLUSIVE     | Within variance, V8 handles simple loops well                         |
+| 42  | Performance Analysis         | COMPLETE         | Optimization complete; beats all competitors                          |
+| 43  | SIMD Split-Format IFFT       | SUCCESS          | 4x throughput for IFFT conjugation phases                             |
+| 44  | f32 N=16 Radix-4 Codelet     | SUCCESS +18%     | Radix-4 codelet closes gap with f64                                   |
+| 45  | Performance Gap Analysis     | COMPLETE         | Analysis only; optimization complete                                  |
+| 46  | Dead Code Cleanup            | SUCCESS          | Removed unused fft_split_f32.wat (536 lines)                          |
+| 47  | M5 Pro Re-Baseline           | COMPLETE         | New hardware: N=64 RFFT now loses to fftw-js                          |
+| 48  | Eliminate copy_buffer        | SUCCESS +4.5-6%  | Postprocess reads ping-pong buffer directly                           |
+| 49  | IFFT copy_buffer + bench     | SUCCESS +3-5%    | First IRFFT bench revealed losses at every size                       |
+| 50  | SIMD IRFFT preprocess        | SUCCESS +18-24%  | Fused conjugate deleted a pass and a special case                     |
+| 51  | Unrolled IRFFT preprocess    | PARTIAL +3%      | Unrolling pays off only where the time is                             |
+| 52  | Native inverse FFT           | SUCCESS +5-8%    | Flipped sign mask = conjugated twiddles for free                      |
+| 53  | Loop beats n=16/32 codelets  | SUCCESS +30-32%  | On M5, Stockham loop crushes DIT codelets; N=64 flips to +22% vs fftw |
+| 54  | Complex-module codelet probe | NO CHANGE        | Radix-4 single-lane codelets still win on M5; keep them               |
 
 ---
 
@@ -1675,3 +1676,29 @@ All other sizes unchanged within noise (N=16 keeps its n=8 codelet). All 27 test
 - Deterministic landing parity (Experiment 52's insight) is what made this switch free: the N=64 pre/post-processing codelets simply hardcode the other buffer instead of paying a copy pass.
 
 **Follow-up**: `fft_stockham_f32_dual.wat` (complex FFT) still dispatches small sizes to its own codelets (radix-4 N=16 from Experiment 44, etc.). It dominates its competitors so there is no gap to close, but the same codelet-vs-loop probe may find free wins there.
+
+## Experiment 54: Complex-Module Codelet-vs-Loop Probe (2026-07-06)
+
+**Goal**: Answer Experiment 53's follow-up - do the complex f32 module's small-N codelets (`fft_stockham_f32_dual.wat`) also lose to the Stockham loop on M5?
+
+**Method**: Same core-isolation A/B as Experiment 53 (scratch module exporting each core; production-realistic, i.e. `$fft_general`'s internal copy-back at odd stage counts is included). Correctness cross-checked first (f32 roundoff-level differences only).
+
+**Results** (Apple M5 Pro, best of 5 runs):
+
+| Core | Codelet     | `$fft_general` | Winner           |
+| ---- | ----------- | -------------- | ---------------- |
+| n=16 | 67.4M ops/s | 45.8M ops/s    | codelet **+47%** |
+| n=8  | 96.8M ops/s | 72.1M ops/s    | codelet **+34%** |
+
+**Result**: NO CHANGE - the complex module's codelets win decisively on M5. Dispatch stays as-is.
+
+**Analysis**: This is the opposite of the Experiment 53 finding, and it isolates WHY the real module's codelets lost. The two modules use different codelet designs:
+
+- Real module (deleted): radix-2 dual-complex DIT - 16 v128 registers live across 5 stages, ~6 shuffles per dual butterfly. 23.3M ops/s at n=16.
+- Complex module (kept): radix-4 single-complex-per-lane (Experiment 44) - fewer stages, minimal shuffling, small live set. **67.4M ops/s at n=16 - 2.9x faster for the same transform.**
+
+So "codelets lost on M5" (Experiment 53) was never about codelets per se; it was about that codelet DESIGN. Radix-4 single-lane codelets remain excellent on M5.
+
+**Future direction (data, not a commitment)**: the real module's N=64 path now runs its n2=32 core on the loop at 30.0M ops/s. The complex module's radix-4 style at n=16 does 67.4M; a radix-4-style n=32 codelet (4-4-2 stages) could plausibly beat 30M and add another chunk at N=64 - now a win-extending experiment rather than a gap-closing one.
+
+**Lesson**: When an A/B flips on new hardware, check whether the losing side is one DESIGN of the approach or the approach itself before generalizing. One probe (Experiment 53) said "codelets lose on M5"; the sibling module's different codelet design wins by +47% on the same hardware.
