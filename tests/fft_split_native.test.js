@@ -210,6 +210,62 @@ async function runTests() {
     }
   }
 
+  console.log("\nInverse real FFT (irfft_split) vs reference DFT:");
+  for (const n of rfftSizes) {
+    let worst = 0;
+    let ok = true;
+    for (const [, makeInput] of Object.entries(rfftInputs)) {
+      const x = makeInput(n);
+      const expected = referenceRealDFT(new Float64Array(x));
+
+      // Feed the exact f64 spectrum to irfft_split; it should reproduce x
+      wasm.precompute_rfft_twiddles_split(n);
+      const spec = new Float32Array(wasm.memory.buffer, 0, n + 2);
+      for (let k = 0; k <= n / 2; k++) {
+        spec[2 * k] = expected.real[k];
+        spec[2 * k + 1] = expected.imag[k];
+      }
+      wasm.irfft_split(n);
+
+      const out = new Float32Array(wasm.memory.buffer, 0, n);
+      let scale = 1e-6;
+      for (let i = 0; i < n; i++) scale = Math.max(scale, Math.abs(x[i]));
+      for (let i = 0; i < n; i++) {
+        const err = Math.abs(out[i] - x[i]) / scale;
+        worst = Math.max(worst, err);
+        if (err > 1e-4) ok = false;
+      }
+    }
+    if (ok) {
+      console.log(`  N=${n.toString().padStart(5)}: max rel error = ${worst.toExponential(2)} ✓`);
+      passed++;
+    } else {
+      console.log(`  N=${n.toString().padStart(5)}: max rel error = ${worst.toExponential(2)} ✗`);
+      failed++;
+    }
+  }
+
+  console.log("\nReal roundtrip rfft_split -> irfft_split:");
+  for (const n of rfftSizes) {
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) x[i] = Math.random() * 2 - 1;
+
+    wasm.precompute_rfft_twiddles_split(n);
+    new Float32Array(wasm.memory.buffer, 0, n).set(x);
+    wasm.rfft_split(n);
+    wasm.irfft_split(n);
+
+    const out = new Float32Array(wasm.memory.buffer, 0, n);
+    const { match, maxError } = compareArrays(out, x, 1e-4);
+    if (match) {
+      console.log(`  N=${n.toString().padStart(5)}: max error = ${maxError.toExponential(2)} ✓`);
+      passed++;
+    } else {
+      console.log(`  N=${n.toString().padStart(5)}: max error = ${maxError.toExponential(2)} ✗`);
+      failed++;
+    }
+  }
+
   console.log("\nReal FFT (rfft_split) vs fft_real_f32_dual rfft:");
   const dualWasmPath = path.join(__dirname, "..", "dist", "fft_real_f32_dual.wasm");
   const dualModule = await WebAssembly.compile(fs.readFileSync(dualWasmPath));
