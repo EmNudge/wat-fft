@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 45 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 49 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -107,10 +107,11 @@ Measured on Apple M5 Pro, Node v24.14.1 (Experiments 47-48, 2026-07-05). Earlier
 
 ## Remaining Gap Analysis
 
-On Apple M5 Pro (Experiment 47), one gap re-opened:
+On Apple M5 Pro (Experiments 47-49), two gaps are open:
 
+- **IRFFT (all sizes)**: fftw-js `inverse` is faster at every size (-1% to -28%), discovered when the inverse path got its first benchmark (Experiment 49, `npm run bench:irfft32`). The inverse pre-processing is scalar and the conjugate-based IFFT does extra full-buffer passes; the forward path had years of optimization the inverse never received. **This is now the largest known gap.**
 - **N=64 RFFT**: fftw-js is consistently ~5-7% faster (outside noise). Profiling shows 67% of time in `$fft_32_dit` (68 locals, register-spill territory) — the prior "tied" result was hardware-specific. Re-investigation on M5 is open work; Experiments 22-25/44 findings were from older hardware.
-- **N≥128**: Consistently faster (+4% to +54%)
+- **Forward RFFT N≥128**: Consistently faster (+4% to +54%)
 
 Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).
 

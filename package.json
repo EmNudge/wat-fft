@@ -77,6 +77,7 @@
     "bench:rfft": "node benchmarks/rfft.bench.js",
     "bench:f32": "node benchmarks/fft_f32_dual.bench.js",
     "bench:rfft32": "node benchmarks/rfft_f32_dual.bench.js",
+    "bench:irfft32": "node benchmarks/irfft_f32_dual.bench.js",
     "bench:browser": "vitest bench --run",
     "bench:browser:ci": "vitest bench --run --outputJson=benchmark-results.json",
     "bench:check": "node scripts/check-benchmarks.js",
