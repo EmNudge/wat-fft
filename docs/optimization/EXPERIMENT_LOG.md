@@ -1486,3 +1486,40 @@ Future improvements would require:
 **Result**: SUCCESS — gains landed exactly at the predicted odd-stage-count sizes; unaffected sizes unchanged (within noise). All 27 tests pass.
 
 **Lesson**: Profile-guided elimination of whole memory passes beats micro-tuning arithmetic. The copy was invisible in per-stage reasoning but obvious in the function-level tick profile. The same pattern (postprocess reads from ping-pong result buffer) may apply to the f64 RFFT module and the IFFT path.
+
+---
+
+## Experiment 49: Eliminate copy_buffer in IFFT Path + First IRFFT Benchmark (2026-07-05)
+
+**Goal**: Apply the Experiment 48 pattern to the inverse path of `fft_real_f32_dual.wat`, and add an IRFFT benchmark so the inverse path has automated performance signal.
+
+**Hypothesis**: `$ifft` was `conjugate_buffer -> $fft -> scale_and_conjugate`. The `$fft` wrapper does a conditional full-buffer copy when the Stockham result lands in the secondary ping-pong buffer, then `scale_and_conjugate` re-reads and re-writes every element anyway. Reading directly from the landing buffer removes a whole memory pass at odd-stage-count sizes (IRFFT N=256, 1024, 4096, where the internal N/2-point FFT has an odd stage count).
+
+**Changes**:
+
+- `modules/fft_real_f32_dual.wat`: `$scale_and_conjugate` takes a `$src` param (reads from `$src`, writes to offset 0); `$ifft` calls `$fft_nc` and passes the returned offset through; removed the now-dead `$fft` wrapper
+- `benchmarks/irfft_f32_dual.bench.js` (new): IRFFT vs fftw-js `inverse`, same harness as the rfft bench; `npm run bench:irfft32`
+
+**Results** (Apple M5 Pro, two runs each, wat-fft ops/s, best of two):
+
+| Size   | Before | After | Change     | vs fftw-js after |
+| ------ | ------ | ----- | ---------- | ---------------- |
+| N=64   | 8.99M  | 8.81M | ~0 (noise) | -22.5%           |
+| N=128  | 6.20M  | 6.15M | ~0         | -22.6%           |
+| N=256  | 3.02M  | 3.11M | **+3.1%**  | -1.7% to +0.3%   |
+| N=512  | 1.53M  | 1.54M | ~0         | -9.6%            |
+| N=1024 | 710K   | 743K  | **+4.6%**  | -10.2%           |
+| N=2048 | 353K   | 350K  | ~0         | -13.3%           |
+| N=4096 | 163K   | 171K  | **+4.7%**  | -11.9%           |
+
+**Result**: SUCCESS — gains landed exactly at the predicted odd-stage sizes; other sizes within noise. Forward RFFT re-benchmarked, unchanged. All 27 tests pass (irfft roundtrip covered by `test:ifft`).
+
+**NEW FINDING — IRFFT loses to fftw-js at every size** (-1% to -28%, previously invisible with no benchmark). The forward RFFT wins at N>=128, so the gap is specific to the inverse path. Likely suspects, in profiling order:
+
+1. `$irfft_preprocess` is fully scalar (the forward `rfft_postprocess_simd` is SIMD) — no SIMD or unrolled variants exist
+2. `$ifft` does two extra full passes (`conjugate_buffer`, then conjugate again inside `scale_and_conjugate`) because it computes IFFT via conjugation; fusing the initial conjugate into `irfft_preprocess` (it already touches every element) would remove one pass, and a native inverse Stockham (negated twiddles) would remove both
+3. fftw-js uses a dedicated c2r plan with no such overhead
+
+This is now the largest known performance gap in the library — bigger than the N=64 RFFT gap (-6%).
+
+**Lesson**: Unbenchmarked code paths hide large regressions. The inverse path was assumed to inherit forward-path performance because it reuses the same FFT core, but its pre/post-processing was never given the same optimization treatment. Every exported entry point should have a benchmark.

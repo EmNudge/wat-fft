@@ -3011,12 +3011,6 @@
     (call $fft_general (local.get $n))
   )
 
-  (func $fft (param $n i32)
-    ;; FFT with the result guaranteed at offset 0.
-    (if (i32.ne (call $fft_nc (local.get $n)) (i32.const 0))
-      (then (call $copy_buffer (local.get $n))))
-  )
-
   ;; ============================================================================
   ;; RFFT Twiddle Precomputation
   ;; ============================================================================
@@ -3223,8 +3217,11 @@
   ;; ============================================================================
   ;; Scale and Conjugate Buffer (multiply by 1/N and conjugate)
   ;; ============================================================================
+  ;; Reads from $src (0 or SECONDARY_OFFSET, wherever the FFT result landed),
+  ;; writes to offset 0. Avoids a separate copy pass when the Stockham stage
+  ;; count is odd (Experiment 49, same pattern as Experiment 48).
 
-  (func $scale_and_conjugate (param $n i32)
+  (func $scale_and_conjugate (param $n i32) (param $src i32)
     (local $i i32)
     (local $bytes i32)
     (local $inv_n v128)
@@ -3237,7 +3234,9 @@
     (block $done
       (loop $loop
         (br_if $done (i32.ge_u (local.get $i) (local.get $bytes)))
-        (local.set $v (v128.xor (v128.load (local.get $i)) (global.get $CONJ_MASK_F32)))
+        (local.set $v (v128.xor
+          (v128.load (i32.add (local.get $src) (local.get $i)))
+          (global.get $CONJ_MASK_F32)))
         (v128.store (local.get $i) (f32x4.mul (local.get $v) (local.get $inv_n)))
         (local.set $i (i32.add (local.get $i) (i32.const 16)))
         (br $loop)
@@ -3252,9 +3251,10 @@
   ;; IFFT(X) = (1/N) * conj(FFT(conj(X)))
 
   (func $ifft (param $n i32)
+    ;; scale_and_conjugate reads directly from wherever the FFT result landed,
+    ;; so no copy-back pass is needed (Experiment 49).
     (call $conjugate_buffer (local.get $n))
-    (call $fft (local.get $n))
-    (call $scale_and_conjugate (local.get $n))
+    (call $scale_and_conjugate (local.get $n) (call $fft_nc (local.get $n)))
   )
 
 
