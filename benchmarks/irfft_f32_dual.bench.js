@@ -8,6 +8,10 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
+import PFFFT from "@echogarden/pffft-wasm/simd";
+
+const PFFFT_REAL = 0;
+const PFFFT_BACKWARD = 1;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -70,6 +74,7 @@ async function runBenchmarks() {
   console.log("");
 
   const wasmExports = await loadWasm("fft_real_f32_dual");
+  const pffft = await PFFFT();
 
   const summary = [];
 
@@ -120,11 +125,38 @@ async function runBenchmarks() {
     );
     results.push(fftwResult);
 
+    // 3. pffft-wasm SIMD (f32) - unscaled backward transform
+    const pffftResult = runBenchmark(
+      "pffft-wasm SIMD (f32)",
+      () => {
+        const setup = pffft._pffft_new_setup(size, PFFFT_REAL);
+        const inputPtr = pffft._pffft_aligned_malloc(size * 4);
+        const outputPtr = pffft._pffft_aligned_malloc(size * 4);
+        // Produce a real spectrum by running the forward transform once
+        new Float32Array(pffft.HEAPF32.buffer, inputPtr, size).set(input);
+        pffft._pffft_transform_ordered(setup, inputPtr, outputPtr, 0, 0);
+        const spectrum = new Float32Array(size);
+        spectrum.set(new Float32Array(pffft.HEAPF32.buffer, outputPtr, size));
+        return { setup, inputPtr, outputPtr, spectrum };
+      },
+      (ctx) => {
+        new Float32Array(pffft.HEAPF32.buffer, ctx.inputPtr, size).set(ctx.spectrum);
+        pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_BACKWARD);
+      },
+      (ctx) => {
+        pffft._pffft_aligned_free(ctx.inputPtr);
+        pffft._pffft_aligned_free(ctx.outputPtr);
+        pffft._pffft_destroy_setup(ctx.setup);
+      },
+    );
+    results.push(pffftResult);
+
     // Sort by performance
     results.sort((a, b) => b.opsPerSec - a.opsPerSec);
 
     // Calculate speedup
     const vsFftw = wasmResult.opsPerSec / fftwResult.opsPerSec;
+    const vsPffft = wasmResult.opsPerSec / pffftResult.opsPerSec;
 
     // Print results
     console.log("");
@@ -140,13 +172,18 @@ async function runBenchmarks() {
     }
     console.log("");
     console.log(`wat-fft vs fftw-js: ${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`);
+    console.log(
+      `wat-fft vs pffft-simd: ${vsPffft >= 1 ? "+" : ""}${((vsPffft - 1) * 100).toFixed(1)}%`,
+    );
     console.log("");
 
     summary.push({
       size,
       wasm: wasmResult.opsPerSec,
       fftw: fftwResult.opsPerSec,
+      pffft: pffftResult.opsPerSec,
       vsFftw: `${vsFftw >= 1 ? "+" : ""}${((vsFftw - 1) * 100).toFixed(1)}%`,
+      vsPffft: `${vsPffft >= 1 ? "+" : ""}${((vsPffft - 1) * 100).toFixed(1)}%`,
     });
   }
 
@@ -155,11 +192,11 @@ async function runBenchmarks() {
   console.log("Summary");
   console.log("=".repeat(70));
   console.log("");
-  console.log("Size     wat-fft      fftw-js      vs fftw-js");
-  console.log("-".repeat(50));
-  for (const { size, wasm, fftw, vsFftw } of summary) {
+  console.log("Size     wat-fft      fftw-js    pffft-simd   vs fftw-js  vs pffft-simd");
+  console.log("-".repeat(75));
+  for (const { size, wasm, fftw, pffft: pf, vsFftw, vsPffft } of summary) {
     console.log(
-      `N=${String(size).padEnd(5)} ${formatNumber(wasm).padStart(10)}  ${formatNumber(fftw).padStart(10)}     ${vsFftw.padStart(8)}`,
+      `N=${String(size).padEnd(5)} ${formatNumber(wasm).padStart(10)}  ${formatNumber(fftw).padStart(10)}  ${formatNumber(pf).padStart(10)}     ${vsFftw.padStart(8)}     ${vsPffft.padStart(8)}`,
     );
   }
   console.log("");

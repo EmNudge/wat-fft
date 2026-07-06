@@ -16,7 +16,7 @@ import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-import PFFFT from "@echogarden/pffft-wasm";
+import PFFFT from "@echogarden/pffft-wasm/simd";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -271,13 +271,16 @@ async function runBenchmarks() {
         const inputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
         const outputPtr = pffft._pffft_aligned_malloc(size * 2 * 4);
         const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
+        const inputBuffer = new Float32Array(size * 2);
         for (let i = 0; i < size; i++) {
-          inputView[i * 2] = input.real[i];
-          inputView[i * 2 + 1] = input.imag[i];
+          inputBuffer[i * 2] = input.real[i];
+          inputBuffer[i * 2 + 1] = input.imag[i];
         }
-        return { setup, inputPtr, outputPtr, inputView };
+        return { setup, inputPtr, outputPtr, inputView, inputBuffer };
       },
       (ctx) => {
+        // Stage input per iteration, same as every other context
+        ctx.inputView.set(ctx.inputBuffer);
         pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_FORWARD);
       },
       (ctx) => {

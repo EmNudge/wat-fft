@@ -4,13 +4,13 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-06): **wat-fft beats ALL competitors at ALL sizes in ALL benchmarked transforms** — complex FFT, real FFT, and both inverse transforms (Experiment 53 closed the last gap at N=64; Experiment 55 made the complex `ifft` a native inverse matching forward throughput; Experiment 56's packed dual-16 radix-4 n=32 codelet pushed real N=64 to +54% in both directions).
+**Current Status** (Apple M5 Pro, 2026-07-06, post-Experiments 57-58): **wat-fft is the fastest complex FFT at every size** (Experiment 58's radix-4 split-format core beats pffft-wasm SIMD by 1-34% at N≥32; the interleaved module wins N=16 by +29%). Real FFT beats fftw-js everywhere and pffft SIMD at N=64, but **pffft SIMD still leads the real FFT at N≥128 (up to 2.1x)** — rebuilding the real FFT on the radix-4 split core is the top priority. Note: Experiments 1-56 accidentally raced pffft's non-SIMD build (see Experiment 57).
 
-| Target     | Complex FFT (f64) | Complex FFT (f32)             | Real FFT (f32)              |
-| ---------- | ----------------- | ----------------------------- | --------------------------- |
-| fft.js     | **+37-90%**       | **+110-230%**                 | N/A                         |
-| fftw-js    | N/A               | N/A                           | **+4-57%** (beats at all N) |
-| pffft-wasm | N/A               | **+21-102%** (beats at all N) | N/A                         |
+| Target          | Complex FFT (f64) | Complex FFT (f32)           | Real FFT (f32)                          |
+| --------------- | ----------------- | --------------------------- | --------------------------------------- |
+| fft.js          | **+37-90%**       | **+101-458%** (split core)  | N/A                                     |
+| fftw-js         | N/A               | N/A                         | **+4-56%** (beats at all N)             |
+| pffft-wasm SIMD | N/A               | **+1-34%** (beats at all N) | **+29%** at N=64; -23% to -53% at N≥128 |
 
 ---
 
@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 56 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 58 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -78,63 +78,73 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | N=1024 | 369K        | 114K   | **+223%** |
 | N=4096 | 81K         | 23.9K  | **+239%** |
 
-**vs pffft-wasm (f32 vs f32):**
+**vs pffft-wasm SIMD (f32 vs f32, 2026-07-06, Experiment 58 radix-4 split core):**
 
-| Size   | wat-fft f32 | pffft-wasm | Speedup  |
-| ------ | ----------- | ---------- | -------- |
-| N=64   | 6.0M        | 4.6M       | **+30%** |
-| N=256  | 1.67M       | 1.0M       | **+67%** |
-| N=1024 | 365K        | 206K       | **+77%** |
-| N=4096 | 81K         | 42K        | **+93%** |
+| Size   | wat-fft f32 split | wat-fft f32 (interleaved) | pffft-wasm SIMD | best vs pffft |
+| ------ | ----------------- | ------------------------- | --------------- | ------------- |
+| N=16   | 27.4M             | 35.6M                     | 27.7M           | **+29%**      |
+| N=32   | 19.8M             | 17.5M                     | 18.8M           | **+6%**       |
+| N=64   | 13.8M             | 11.2M                     | 13.6M           | **+1%**       |
+| N=128  | 8.91M             | 5.45M                     | 7.39M           | **+21%**      |
+| N=256  | 4.86M             | 2.82M                     | 3.95M           | **+23%**      |
+| N=512  | 2.15M             | 1.24M                     | 1.83M           | **+18%**      |
+| N=1024 | 1.05M             | 620K                      | 913K            | **+15%**      |
+| N=2048 | 538K              | 273K                      | 404K            | **+33%**      |
+| N=4096 | 251K              | 133K                      | 188K            | **+34%**      |
 
-_Note: wat-fft f32 interleaved format now significantly outperforms pffft-wasm. The split-format module (Experiment 40) achieves similar performance to interleaved, providing format flexibility without sacrificing speed._
+_Note: older tables in this file compared against pffft's non-SIMD build. The split module's radix-4 core (Experiment 58) replaced the Experiment 39/40 radix-2 design and is now the fastest at N≥32._
 
-### Real FFT f32 vs fftw-js
+### Real FFT f32 vs fftw-js and pffft-wasm SIMD
 
-Measured on Apple M5 Pro, Node v24.14.1 (Experiments 53/56, 2026-07-06): the n2=32 core uses the packed dual-16 radix-4 codelet, n2=16 uses the Stockham loop.
+Measured on Apple M5 Pro, Node v24.14.1 (re-baselined 2026-07-06, Experiment 57): the n2=32 core uses the packed dual-16 radix-4 codelet, n2=16 uses the Stockham loop.
 
-| Size   | wat-fft f32 | fftw-js | Result   |
-| ------ | ----------- | ------- | -------- |
-| N=64   | 19.7M       | 12.9M   | **+54%** |
-| N=128  | 8.2M        | 7.8M    | **+5%**  |
-| N=256  | 4.2M        | 2.7M    | **+55%** |
-| N=512  | 2.0M        | 1.6M    | **+25%** |
-| N=1024 | 972K        | 833K    | **+17%** |
-| N=2048 | 464K        | 409K    | **+14%** |
-| N=4096 | 221K        | 192K    | **+15%** |
+| Size   | wat-fft f32 | fftw-js | pffft SIMD | vs fftw  | vs pffft SIMD |
+| ------ | ----------- | ------- | ---------- | -------- | ------------- |
+| N=64   | 19.2M       | 12.5M   | 14.9M      | **+54%** | **+29%**      |
+| N=128  | 8.1M        | 7.8M    | 10.5M      | **+4%**  | -23%          |
+| N=256  | 4.2M        | 2.7M    | 7.1M       | **+56%** | -42%          |
+| N=512  | 2.0M        | 1.6M    | 3.8M       | **+26%** | -47%          |
+| N=1024 | 968K        | 824K    | 2.04M      | **+17%** | -52%          |
+| N=2048 | 461K        | 407K    | 941K       | **+13%** | -51%          |
+| N=4096 | 221K        | 192K    | 474K       | **+15%** | -53%          |
 
-### Inverse Real FFT f32 vs fftw-js
+### Inverse Real FFT f32 vs fftw-js and pffft-wasm SIMD
 
-Measured on Apple M5 Pro (Experiments 52-53/56, 2026-07-06): native inverse FFT (conjugated twiddles via flipped sign mask, 1/N folded into preprocess, no extra passes) with the n2=32 core on the inverse packed dual-16 radix-4 codelet.
+Measured on Apple M5 Pro (re-baselined 2026-07-06): native inverse FFT (conjugated twiddles via flipped sign mask, 1/N folded into preprocess, no extra passes). pffft's backward transform is unscaled (slightly less work).
 
-| Size   | wat-fft f32 | fftw-js | Result   |
-| ------ | ----------- | ------- | -------- |
-| N=64   | 19.5M       | 12.6M   | **+54%** |
-| N=128  | 8.4M        | 8.1M    | **+4%**  |
-| N=256  | 4.2M        | 3.3M    | **+29%** |
-| N=512  | 2.1M        | 1.8M    | **+17%** |
-| N=1024 | 989K        | 880K    | **+13%** |
-| N=2048 | 467K        | 419K    | **+11%** |
-| N=4096 | 225K        | 198K    | **+14%** |
+| Size   | wat-fft f32 | fftw-js | pffft SIMD | vs fftw  | vs pffft SIMD |
+| ------ | ----------- | ------- | ---------- | -------- | ------------- |
+| N=64   | 19.4M       | 12.5M   | 15.0M      | **+56%** | **+30%**      |
+| N=128  | 8.4M        | 8.1M    | 10.5M      | **+3%**  | -20%          |
+| N=256  | 4.3M        | 3.3M    | 7.2M       | **+30%** | -41%          |
+| N=512  | 2.1M        | 1.8M    | 3.8M       | **+17%** | -46%          |
+| N=1024 | 994K        | 879K    | 2.04M      | **+13%** | -51%          |
+| N=2048 | 474K        | 421K    | 940K       | **+13%** | -50%          |
+| N=4096 | 226K        | 197K    | 474K       | **+15%** | -52%          |
 
 ---
 
 ## Remaining Gap Analysis
 
-On Apple M5 Pro (Experiments 47-56), **no gaps remain**: wat-fft beats fftw-js at every benchmarked size in both directions (forward +4% to +57%, inverse +4% to +54%).
+**The gap is pffft-wasm's SIMD build** (Experiment 57 revealed all earlier benchmarks raced the non-SIMD build). Against pffft SIMD on Apple M5 Pro: complex FFT trails by 8-33% at N≥32, real FFT trails by 23-53% at N≥128 (both directions). wat-fft still beats fftw-js at every real-FFT size and every JS library everywhere.
 
-The last gap (N=64, both directions) closed in Experiment 53: the fully-unrolled `fft_32_dit`/`ifft_32_dit` DIT codelets turned out to be 66-97% SLOWER than the plain Stockham loop on M5 (register pressure + shuffle cost), so n=16/32 now dispatch to the loop. N=64 jumped +31-32% in one change.
+**Why pffft SIMD wins**: 4-wide f32 butterflies in a split-re/im internal format — complex multiplies are pure mul/add with zero lane shuffles at 100% lane utilization, and its radix-4/5 decomposition takes roughly half the memory passes of a radix-2 Stockham.
 
-Open opportunities (wins, not gaps):
+**The path (Experiment 58)**: a radix-4 split-format Stockham core (fused radix-2 stage pairs, shuffle-free generic stage, 4-different-twiddle final stage). ~~Isolated probe~~ → **DONE: integrated into `fft_split_native_f32.wat`** — complex FFT now beats pffft SIMD at every size (+1-34% at N≥32; interleaved wins N=16). Remaining work:
+
+1. ~~Productionize the radix-4 split core in `fft_split_native_f32.wat`~~ DONE (native inverse included; see Experiment 58 integration notes)
+2. Give the interleaved module the same core by folding deinterleave/reinterleave shuffles into the first/last stages (pffft does exactly this in ordered mode)
+3. **Rebuild the real FFT on the new core** — the only remaining loss (real N≥128, up to 2.1x); pffft's real FFT is faster than its own half-size complex FFT, so a natively-vectorized real path is the end state
+4. Reclaim the copy-back pass on odd-stage sizes (32/64/512/1024/8192 lose ~10-20% to it)
+
+Open opportunities (smaller wins):
 
 - ~~**Complex f32 module small-N dispatch**~~: probed in Experiment 54 - its radix-4 single-lane codelets WIN on M5 (+34-47% vs the loop); no change needed. The Experiment 53 loss was specific to the radix-2 dual-complex DIT codelet design.
 - ~~**Radix-4-style n=32 codelet for the real module**~~: DONE in Experiment 56 - a packed dual-16 radix-4 codelet (even/odd DIT halves ride in the previously wasted upper v128 lanes, zero deinterleave shuffles) beats the loop by +55-84% in isolation; real N=64 jumped +25% forward / +26% inverse.
 - **Packed n=32 codelet for the complex f32 module**: the Experiment 56 codelet design should port directly (write-to-0 variant + fused 1/N inverse); complex N=32 still runs on the loop. Untracked in competitor benches, so a small win.
 - **Memory-staged n=64 codelet**: the lane-packing trick is used up at n=32; an n=64 codelet needs staging through memory between stages. N=128 (weakest margin, +4%) is the size that would benefit.
 - ~~**Native inverse for the complex f32 `ifft`**~~: DONE in Experiment 55 - flipped-sign-mask port of Experiment 52 plus inverse n=8/16 codelets; ifft gained +13-22% and now matches forward fft throughput exactly (benchmark: `npm run bench:ifft32`).
-- **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions; re-run the codelet-vs-loop probes when hardware changes.
-
-Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).
+- **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions, and Experiment 57 reversed the competitive picture entirely; re-run probes when hardware changes and audit competitor builds (`exports` maps!) when adding libraries.
 
 ---
 

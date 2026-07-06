@@ -1,23 +1,28 @@
 # wat-fft
 
-A high-performance FFT implementation in WebAssembly Text format that **significantly outperforms popular JavaScript FFT libraries**.
+A high-performance FFT implementation in WebAssembly Text format that is **the fastest complex FFT at every size** — beating every JavaScript library by 2-5x and pffft-wasm's SIMD build at all sizes.
+
+> **Note on benchmark history**: results prior to 2026-07-06 compared against pffft-wasm's
+> non-SIMD build (the package's default export). All numbers below race the SIMD build —
+> see Experiments 57-58 in the [experiment log](docs/optimization/EXPERIMENT_LOG.md).
 
 ## Performance
 
 ### Complex FFT
 
-Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) (PFFFT with SIMD):
+Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) (PFFFT, SIMD build). The radix-4 split-format core (Experiment 58) is the fastest at N≥32; the interleaved dual-complex module wins at N=16.
 
-| Size   | wat-fft (f32)        | pffft-wasm (f32) | Speedup  |
-| ------ | -------------------- | ---------------- | -------- |
-| N=16   | **34,400,000 ops/s** | 23,300,000 ops/s | **+47%** |
-| N=64   | **10,500,000 ops/s** | 8,060,000 ops/s  | **+30%** |
-| N=128  | **5,220,000 ops/s**  | 3,410,000 ops/s  | **+53%** |
-| N=256  | **2,800,000 ops/s**  | 1,740,000 ops/s  | **+61%** |
-| N=512  | **1,220,000 ops/s**  | 695,000 ops/s    | **+76%** |
-| N=1024 | **614,000 ops/s**    | 348,000 ops/s    | **+76%** |
-| N=2048 | **270,000 ops/s**    | 148,000 ops/s    | **+82%** |
-| N=4096 | **132,000 ops/s**    | 73,000 ops/s     | **+81%** |
+| Size   | wat-fft (best)       | pffft-wasm SIMD (f32) | Result   |
+| ------ | -------------------- | --------------------- | -------- |
+| N=16   | **35,600,000 ops/s** | 27,700,000 ops/s      | **+29%** |
+| N=32   | **19,800,000 ops/s** | 18,800,000 ops/s      | **+6%**  |
+| N=64   | **13,800,000 ops/s** | 13,600,000 ops/s      | **+1%**  |
+| N=128  | **8,910,000 ops/s**  | 7,390,000 ops/s       | **+21%** |
+| N=256  | **4,860,000 ops/s**  | 3,950,000 ops/s       | **+23%** |
+| N=512  | **2,150,000 ops/s**  | 1,830,000 ops/s       | **+18%** |
+| N=1024 | **1,050,000 ops/s**  | 913,000 ops/s         | **+15%** |
+| N=2048 | **538,000 ops/s**    | 404,000 ops/s         | **+33%** |
+| N=4096 | **251,000 ops/s**    | 188,000 ops/s         | **+34%** |
 
 ```mermaid
 ---
@@ -27,38 +32,39 @@ config:
         height: 400
     themeVariables:
         xyChart:
-            plotColorPalette: "#4ade80, #60a5fa, #f59e0b, #a855f7, #f87171"
+            plotColorPalette: "#4ade80, #22d3ee, #60a5fa, #f59e0b, #a855f7, #f87171"
 ---
 xychart-beta
     title "Complex FFT Performance (Million ops/s)"
-    x-axis [N=16, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
+    x-axis [N=16, N=32, N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 36
-    line [34.04, 6.63, 2.82, 1.67, 0.579, 0.326, 0.118, 0.072]
-    line [34.42, 10.45, 5.22, 2.80, 1.22, 0.614, 0.270, 0.132]
-    line [23.34, 8.06, 3.41, 1.74, 0.695, 0.348, 0.148, 0.073]
-    line [21.80, 5.15, 2.04, 1.03, 0.419, 0.210, 0.088, 0.044]
-    line [10.36, 3.15, 1.27, 0.734, 0.293, 0.161, 0.066, 0.036]
+    line [35.11, 11.63, 6.80, 2.85, 1.69, 0.586, 0.330, 0.124, 0.073]
+    line [27.44, 19.81, 13.75, 8.91, 4.86, 2.15, 1.05, 0.538, 0.251]
+    line [35.65, 17.46, 11.17, 5.45, 2.82, 1.24, 0.620, 0.273, 0.133]
+    line [27.66, 18.75, 13.61, 7.39, 3.95, 1.83, 0.913, 0.404, 0.188]
+    line [22.52, 9.86, 5.30, 2.10, 1.06, 0.429, 0.216, 0.090, 0.045]
+    line [10.64, 5.17, 3.27, 1.30, 0.758, 0.299, 0.168, 0.067, 0.037]
 ```
 
-> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🟠 **pffft-wasm** · 🟣 **fft.js** · 🔴 **kissfft-js**
+> 🟢 **wat-fft f64** · 🩵 **wat-fft f32 split** · 🔵 **wat-fft f32** · 🟠 **pffft-wasm SIMD** · 🟣 **fft.js** · 🔴 **kissfft-js**
 
-**wat-fft f32 beats pffft-wasm by 30-82%** across all sizes. It's also **2-3x faster** than fft.js (the fastest pure JS). **Choose f64** (`fft_combined.wasm`) for double precision. **Choose f32** (`fft_stockham_f32_dual.wasm`) for maximum single-precision speed.
+**Choose f64** (`fft_combined.wasm`) for double precision. **Choose the split-format f32 module** (`fft_split_native_f32.wasm`) for maximum speed at N≥32 (separate re/im arrays). **Choose interleaved f32** (`fft_stockham_f32_dual.wasm`) for interleaved data or N=16.
 
-The f32 inverse (`ifft`) is a native inverse transform (conjugated twiddles, no extra conjugate/scale passes) and runs at the same speed as the forward FFT — 36-85% faster than pffft-wasm's unscaled backward transform.
+The f32 inverse (`ifft`) is a native inverse transform (conjugated twiddles, no extra conjugate/scale passes) and runs at the same speed as the forward FFT.
 
 ### Real FFT
 
-Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) and [fftw-js](https://www.npmjs.com/package/fftw-js):
+Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft-wasm) (SIMD build) and [fftw-js](https://www.npmjs.com/package/fftw-js):
 
-| Size   | wat-fft (f32)        | pffft-wasm (f32) | fftw-js (f32)    | vs best          |
-| ------ | -------------------- | ---------------- | ---------------- | ---------------- |
-| N=64   | **19,500,000 ops/s** | 12,500,000 ops/s | 12,300,000 ops/s | **+56%** (pffft) |
-| N=128  | **7,920,000 ops/s**  | 6,160,000 ops/s  | 7,600,000 ops/s  | **+4%** (fftw)   |
-| N=256  | **4,120,000 ops/s**  | 3,330,000 ops/s  | 2,600,000 ops/s  | **+24%** (pffft) |
-| N=512  | **1,960,000 ops/s**  | 1,440,000 ops/s  | 1,550,000 ops/s  | **+27%** (fftw)  |
-| N=1024 | **955,000 ops/s**    | 717,000 ops/s    | 807,000 ops/s    | **+18%** (fftw)  |
-| N=2048 | **459,000 ops/s**    | 301,000 ops/s    | 403,000 ops/s    | **+14%** (fftw)  |
-| N=4096 | **220,000 ops/s**    | 143,000 ops/s    | 190,000 ops/s    | **+16%** (fftw)  |
+| Size   | wat-fft (f32)        | pffft-wasm SIMD (f32) | Result   |
+| ------ | -------------------- | --------------------- | -------- |
+| N=64   | **19,200,000 ops/s** | 14,900,000 ops/s      | **+29%** |
+| N=128  | 8,050,000 ops/s      | 10,500,000 ops/s      | -23%     |
+| N=256  | 4,160,000 ops/s      | 7,130,000 ops/s       | -42%     |
+| N=512  | 2,010,000 ops/s      | 3,810,000 ops/s       | -47%     |
+| N=1024 | 968,000 ops/s        | 2,040,000 ops/s       | -52%     |
+| N=2048 | 461,000 ops/s        | 941,000 ops/s         | -51%     |
+| N=4096 | 221,000 ops/s        | 474,000 ops/s         | -53%     |
 
 ```mermaid
 ---
@@ -74,18 +80,18 @@ xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
     y-axis "Million ops/s" 0 --> 20
-    line [8.66, 5.01, 2.06, 1.26, 0.451, 0.257, 0.095]
-    line [19.48, 7.92, 4.12, 1.96, 0.955, 0.459, 0.220]
-    line [12.26, 7.60, 2.60, 1.55, 0.807, 0.403, 0.190]
-    line [12.54, 6.16, 3.33, 1.44, 0.717, 0.301, 0.143]
-    line [4.70, 2.81, 1.24, 0.707, 0.283, 0.156, 0.064]
+    line [9.00, 5.04, 2.11, 1.28, 0.456, 0.262, 0.099]
+    line [19.19, 8.05, 4.16, 2.01, 0.968, 0.461, 0.221]
+    line [12.47, 7.77, 2.67, 1.59, 0.824, 0.407, 0.197]
+    line [14.93, 10.51, 7.13, 3.81, 2.04, 0.941, 0.474]
+    line [4.96, 3.09, 1.28, 0.732, 0.293, 0.163, 0.066]
 ```
 
-> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm** · 🟣 **kissfft-js**
+> 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm SIMD** · 🟣 **kissfft-js**
 
-**wat-fft f32 beats every competitor at every size** (+4% to +56% vs the best of pffft-wasm/fftw-js). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
+**wat-fft f32 wins at N=64 and beats fftw-js at every size** (forward +4% to +54%, inverse +3% to +56%). pffft-wasm's SIMD build leads at N≥128 — its natively-vectorized real transform is the strongest competitor and the target of current work (Experiment 58). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_real_f32_dual.wasm`) for maximum single-precision speed.
 
-On Apple M5 Pro (Node v24), wat-fft beats fftw-js at **every** size in both directions: forward +4% to +57%, and the inverse real FFT (`irfft`, a native inverse transform with no conjugate/scale pass) +4% to +54%. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
+The inverse real FFT (`irfft`) is a native inverse transform with no conjugate/scale pass and matches forward throughput. See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
 
 ## Installation
 
@@ -219,7 +225,7 @@ npm run bench      # Run benchmarks
 | `fft_split_native_f32.wasm`  | Complex FFT (split format) | f32       | `ifft_split` |
 | `fft_real_f32_dual.wasm`     | Real FFT (fastest)         | f32       | `irfft`      |
 
-**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays, enabling 4 complex numbers per SIMD operation. Performance is similar to interleaved format - use when your data is already in split format to avoid conversion overhead.
+**Split-format** (`fft_split_native_f32.wasm`) stores real and imaginary parts in separate arrays. Its radix-4 core (Experiment 58) computes 4 complex numbers per SIMD operation with zero shuffles in the main stages, making it **the fastest complex FFT module at N≥32** — faster than both the interleaved module and pffft-wasm SIMD. Its `ifft_split` is a native inverse (conjugated stage tables + one 1/N scale pass).
 
 See [docs/IMPLEMENTATIONS.md](docs/IMPLEMENTATIONS.md) for detailed documentation of all modules, usage examples, and numerical accuracy information.
 

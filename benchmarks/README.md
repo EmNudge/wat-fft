@@ -10,9 +10,9 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 | `npm run bench:rfft`    | Real FFT (f64)            | fftw-js, kissfft-js, webfft, pffft-wasm        |
 | `npm run bench:f32`     | Complex FFT (f32)         | fft.js                                         |
 | `npm run bench:ifft32`  | Inverse Complex FFT (f32) | fft.js, pffft-wasm                             |
-| `npm run bench:rfft32`  | Real FFT (f32)            | fftw-js                                        |
-| `npm run bench:irfft32` | Inverse Real FFT (f32)    | fftw-js                                        |
-| `npm run bench:browser` | Browser FFT (all types)   | fft.js, fft-js, kissfft-js, webfft             |
+| `npm run bench:rfft32`  | Real FFT (f32)            | fftw-js, pffft-wasm (SIMD)                     |
+| `npm run bench:irfft32` | Inverse Real FFT (f32)    | fftw-js, pffft-wasm (SIMD)                     |
+| `npm run bench:browser` | Browser FFT (all types)   | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
 
 ## Benchmark Files
 
@@ -24,8 +24,8 @@ Tools for measuring FFT performance and comparing against competitor libraries.
 | `rfft.bench.js`           | Real FFT benchmark - compares f64 rfft against fftw-js and kissfft-js           |
 | `fft_f32_dual.bench.js`   | f32 dual-complex FFT - measures the +105% dual-complex optimization             |
 | `ifft_f32_dual.bench.js`  | f32 inverse complex FFT - native inverse vs fft.js and pffft-wasm backward      |
-| `rfft_f32_dual.bench.js`  | f32 dual-complex rfft - compares against fftw-js (both f32)                     |
-| `irfft_f32_dual.bench.js` | f32 inverse rfft - compares against fftw-js inverse (both f32)                  |
+| `rfft_f32_dual.bench.js`  | f32 dual-complex rfft - compares against fftw-js and pffft-wasm SIMD (all f32)  |
+| `irfft_f32_dual.bench.js` | f32 inverse rfft - compares against fftw-js and pffft-wasm SIMD inverses        |
 
 ### Browser Benchmarks (Vitest)
 
@@ -120,6 +120,17 @@ FFT Size: N=1024
 These notes were discovered through correctness testing (see `tests/third-party-correctness.test.js`):
 
 #### pffft-wasm
+
+**IMPORTANT - use the SIMD build**: `@echogarden/pffft-wasm` ships two builds, and the
+bare import resolves to the **non-SIMD** build:
+
+```json
+{ ".": "./dist/non-simd/pffft.js", "./simd": "./dist/simd/pffft.js" }
+```
+
+Always `import PFFFT from "@echogarden/pffft-wasm/simd"` - the SIMD build is 2-3x faster
+and is the honest competitor. Experiments 1-56 accidentally benchmarked the non-SIMD
+build (see Experiment 57).
 
 **IMPORTANT**: The PFFFT enum values are:
 
@@ -258,8 +269,10 @@ Browser benchmark files:
 | `browser/rfft.bench.ts` | Real FFT benchmarks                            |
 | `browser/fft-loader.ts` | WASM and competitor library loader             |
 
-Note: pffft-wasm is not included in browser benchmarks because its emscripten-compiled
-WASM requires special configuration to locate companion files in browsers.
+Note: pffft-wasm (SIMD build) is included via a custom `locateFile` hook in
+`browser/fft-loader.ts` that serves `dist/simd/pffft.wasm` through Vite. The Vitest
+server sends COOP/COEP headers so `performance.now()` gets 5µs resolution in Chromium
+(without cross-origin isolation it is clamped to 100µs, quantizing every sample).
 
 ### Interactive Playground
 

@@ -6,7 +6,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import FFT from "fft.js";
-import PFFFT from "@echogarden/pffft-wasm";
+import PFFFT from "@echogarden/pffft-wasm/simd";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -17,7 +17,7 @@ import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-import PFFFT from "@echogarden/pffft-wasm";
+import PFFFT from "@echogarden/pffft-wasm/simd";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -180,12 +180,11 @@ async function runBenchmarks() {
           const inputPtr = pffft._pffft_aligned_malloc(size * 4);
           const outputPtr = pffft._pffft_aligned_malloc(size * 4);
           const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size);
-          for (let i = 0; i < size; i++) {
-            inputView[i] = input.real32[i];
-          }
-          return { setup, inputPtr, outputPtr, inputView };
+          return { setup, inputPtr, outputPtr, inputView, inputBuffer: input.real32 };
         },
         (ctx) => {
+          // Stage input per iteration, same as every other context
+          ctx.inputView.set(ctx.inputBuffer);
           pffft._pffft_transform_ordered(ctx.setup, ctx.inputPtr, ctx.outputPtr, 0, PFFFT_FORWARD);
         },
         (ctx) => {

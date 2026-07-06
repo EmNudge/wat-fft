@@ -68,7 +68,7 @@ describe("Complex FFT Benchmarks", () => {
       });
 
       bench("wat-fft (f32 split)", () => {
-        watSplit.inputBuffer.set(input.interleaved32);
+        watSplit.inputBuffer.set(input.planar32);
         watSplit.run();
       });
 
