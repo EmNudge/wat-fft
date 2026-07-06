@@ -4,7 +4,7 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-06): **wat-fft beats ALL competitors at ALL sizes in ALL benchmarked transforms** — complex FFT, real FFT, and inverse real FFT (Experiment 53 closed the last gap, N=64).
+**Current Status** (Apple M5 Pro, 2026-07-06): **wat-fft beats ALL competitors at ALL sizes in ALL benchmarked transforms** — complex FFT, real FFT, and both inverse transforms (Experiment 53 closed the last gap at N=64; Experiment 55 made the complex `ifft` a native inverse matching forward throughput).
 
 | Target     | Complex FFT (f64) | Complex FFT (f32)             | Real FFT (f32)              |
 | ---------- | ----------------- | ----------------------------- | --------------------------- |
@@ -21,7 +21,7 @@ wat-fft has achieved significant performance gains through systematic optimizati
 | [FFTW_ANALYSIS.md](optimization/FFTW_ANALYSIS.md)                 | Why FFTW is fast: genfft codelets, operation fusion, cache-oblivious recursion |
 | [COMPLETED_PRIORITIES.md](optimization/COMPLETED_PRIORITIES.md)   | Implemented optimizations: Priorities A-J with results                         |
 | [FUTURE_PRIORITIES.md](optimization/FUTURE_PRIORITIES.md)         | Research completed but not implemented: split-radix, register scheduling       |
-| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 53 experiments with detailed results and lessons learned                   |
+| [EXPERIMENT_LOG.md](optimization/EXPERIMENT_LOG.md)               | All 55 experiments with detailed results and lessons learned                   |
 | [IMPLEMENTATION_PHASES.md](optimization/IMPLEMENTATION_PHASES.md) | Roadmap: testing infrastructure, codelet generation, SIMD deep optimization    |
 
 ---
@@ -129,7 +129,7 @@ Open opportunities (wins, not gaps):
 
 - ~~**Complex f32 module small-N dispatch**~~: probed in Experiment 54 - its radix-4 single-lane codelets WIN on M5 (+34-47% vs the loop); no change needed. The Experiment 53 loss was specific to the radix-2 dual-complex DIT codelet design.
 - **Radix-4-style n=32 codelet for the real module**: the complex module's radix-4 n=16 codelet does 67M ops/s where the real module's n2=32 core (now on the loop) does 30M; a 4-4-2-stage codelet could extend the N=64 win further (Experiment 54 data).
-- **Native inverse for the complex f32 `ifft`**: still uses the conjugation identity with two extra full passes; Experiment 52's flipped-sign-mask approach ports directly (needs an ifft benchmark first - Experiment 49's lesson).
+- ~~**Native inverse for the complex f32 `ifft`**~~: DONE in Experiment 55 - flipped-sign-mask port of Experiment 52 plus inverse n=8/16 codelets; ifft gained +13-22% and now matches forward fft throughput exactly (benchmark: `npm run bench:ifft32`).
 - **Periodic re-baselining**: two M5 findings (Experiments 47, 53) reversed old-hardware conclusions; re-run the codelet-vs-loop probes when hardware changes.
 
 Complex FFT has no gaps: beats all competitors at all sizes (+21% to +102% vs pffft-wasm on M5 Pro).
