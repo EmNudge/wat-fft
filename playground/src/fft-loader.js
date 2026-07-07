@@ -80,7 +80,14 @@ import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
-import PFFFT from "@echogarden/pffft-wasm";
+// SIMD glue to match the SIMD pffft.wasm we serve (the bare import
+// resolves to the non-SIMD build - see Experiment 57)
+import PFFFT from "@echogarden/pffft-wasm/simd";
+
+// Shared wat-fft surface registry: the single source of truth for which
+// wat implementations exist. The playground enumerates it like every
+// benchmark surface, so a new flagship module shows up here automatically.
+import { watEntriesFor } from "../../benchmarks/shared/wat-surfaces.mjs";
 
 // fftw-js needs to be loaded dynamically due to WASM initialization
 let fftwModule = null;
@@ -111,49 +118,45 @@ async function getPFFFT() {
   return pffftModule;
 }
 
-// wat-fft WASM modules
-const WASM_MODULES = {
-  combined: {
-    path: "/wasm/fft_combined.wasm",
-    name: "wat-fft f64",
-    desc: "auto dispatch",
-    isReal: false,
-    isF32: false,
-    fftFn: "fft",
-    precomputeFn: "precompute_twiddles",
-    isWatFft: true,
-  },
-  real_combined: {
-    path: "/wasm/fft_real_combined.wasm",
-    name: "wat-fft Real",
-    desc: "f64 real",
-    isReal: true,
-    isF32: false,
-    fftFn: "rfft",
-    precomputeFn: "precompute_rfft_twiddles",
-    isWatFft: true,
-  },
-  f32_dual: {
-    path: "/wasm/fft_stockham_f32_dual.wasm",
-    name: "wat-fft f32",
-    desc: "fastest",
-    isReal: false,
-    isF32: true,
-    fftFn: "fft",
-    precomputeFn: "precompute_twiddles",
-    isWatFft: true,
-  },
-  real_f32_dual: {
-    path: "/wasm/fft_real_f32_dual.wasm",
-    name: "wat-fft Real f32",
-    desc: "fast real",
-    isReal: true,
-    isF32: true,
-    fftFn: "rfft",
-    precomputeFn: "precompute_rfft_twiddles",
-    isWatFft: true,
-  },
+// wat-fft WASM modules, enumerated from the shared surface registry.
+// Stable playground ids (referenced by UI defaults) keyed by run:precision.
+const WAT_IDS = {
+  "fft:f64": "combined",
+  "rfft:f64": "real_combined",
+  "fft:f32": "f32_dual",
+  "rfft:f32": "real_f32_dual",
+  "fft_split:f32": "f32_split",
+  "rfft_split:f32": "real_f32_split",
 };
+
+const WAT_DESCS = {
+  combined: "f64 auto dispatch",
+  real_combined: "f64 real",
+  f32_dual: "f32 dual-complex",
+  real_f32_dual: "f32 real",
+  f32_split: "f32 split, fastest",
+  real_f32_split: "f32 real, fastest",
+};
+
+const WASM_MODULES = {};
+for (const surfaceId of ["complex-forward", "real-forward"]) {
+  for (const entry of watEntriesFor(surfaceId)) {
+    const id = WAT_IDS[`${entry.run}:${entry.precision}`] ?? entry.run;
+    WASM_MODULES[id] = {
+      path: `/wasm/${entry.module}`,
+      name: entry.name,
+      desc: WAT_DESCS[id] ?? entry.precision,
+      isReal: surfaceId === "real-forward",
+      isF32: entry.precision === "f32",
+      layout: entry.layout,
+      minSize: entry.minSize,
+      maxSize: entry.maxSize,
+      fftFn: entry.run,
+      precomputeFn: entry.precompute,
+      isWatFft: true,
+    };
+  }
+}
 
 // JavaScript/external FFT libraries
 const JS_MODULES = {
@@ -327,11 +330,63 @@ export function createFFTContext(module, size, skipValidation = false) {
 
 function createWasmFFTContext(module, size) {
   const { config, exports, memory } = module;
+
+  if (size < config.minSize || size > config.maxSize) {
+    throw new Error(
+      `${config.name} supports FFT sizes ${config.minSize}..${config.maxSize} (requested ${size})`,
+    );
+  }
+
   const ArrayType = config.isF32 ? Float32Array : Float64Array;
 
   // Precompute twiddle factors
   exports[config.precomputeFn](size);
 
+  if (config.layout === "complex-split") {
+    // Split-plane module behind the interleaved facade the playground
+    // expects: the deinterleave/interleave conversions are charged inside
+    // run()/getOutputBuffer(), which is the honest cost of feeding it
+    // interleaved app data (planar-native pipelines skip this).
+    const realOffset =
+      typeof exports.REAL_OFFSET === "number" ? exports.REAL_OFFSET : exports.REAL_OFFSET.value;
+    const imagOffset =
+      typeof exports.IMAG_OFFSET === "number" ? exports.IMAG_OFFSET : exports.IMAG_OFFSET.value;
+    const realData = new Float32Array(memory.buffer, realOffset, size);
+    const imagData = new Float32Array(memory.buffer, imagOffset, size);
+    const staging = new Float32Array(size * 2);
+    const output = new Float32Array(size * 2);
+
+    return {
+      module,
+      size,
+      inputSize: size * 2,
+      outputSize: size * 2,
+      ArrayType,
+      isReal: false,
+
+      getInputBuffer() {
+        return staging;
+      },
+
+      getOutputBuffer() {
+        for (let i = 0; i < size; i++) {
+          output[i * 2] = realData[i];
+          output[i * 2 + 1] = imagData[i];
+        }
+        return output;
+      },
+
+      run() {
+        for (let i = 0; i < size; i++) {
+          realData[i] = staging[i * 2];
+          imagData[i] = staging[i * 2 + 1];
+        }
+        exports[config.fftFn](size);
+      },
+    };
+  }
+
+  // Interleaved-complex and packed-real modules: data lives at offset 0
   const inputSize = config.isReal ? size : size * 2;
   const outputSize = config.isReal ? (size / 2 + 1) * 2 : size * 2;
 

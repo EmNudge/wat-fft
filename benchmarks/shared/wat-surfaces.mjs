@@ -223,6 +223,11 @@ export const BENCH_COVERAGE = [
   { file: "benchmarks/irfft_f32_dual.bench.js", surface: "real-inverse", precisions: ["f32"] },
   { file: "benchmarks/browser/fft.bench.ts", surface: "complex-forward" },
   { file: "benchmarks/browser/rfft.bench.ts", surface: "real-forward" },
+  // The playground app's live benchmark is a fourth surface: it drives its
+  // module list from this registry too (it shipped the pre-split modules
+  // for two generations before this was enforced)
+  { file: "playground/src/fft-loader.js", surface: "complex-forward" },
+  { file: "playground/src/fft-loader.js", surface: "real-forward" },
 ];
 
 /**

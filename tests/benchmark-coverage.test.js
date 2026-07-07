@@ -281,10 +281,13 @@ test("every covered bench file enumerates its declared surface", () => {
     assert.ok(fs.existsSync(fullPath), `BENCH_COVERAGE lists missing file ${file}`);
     const source = fs.readFileSync(fullPath, "utf-8");
 
-    const enumerator = file.endsWith(".ts") ? "createWatContexts(" : "createWatBenchContexts(";
+    // Registry enumeration evidence: the Node helper, the browser helper,
+    // or the raw registry accessor (used by the playground loader)
+    const enumerators = ["createWatBenchContexts(", "createWatContexts(", "watEntriesFor("];
     assert.ok(
-      source.includes(enumerator),
-      `${file} must build its wat-fft contexts with ${enumerator}...) from the shared registry`,
+      enumerators.some((e) => source.includes(e)),
+      `${file} must build its wat-fft contexts by enumerating the shared registry ` +
+        `(one of: ${enumerators.join(" ")})`,
     );
     assert.ok(
       source.includes(`"${surface}"`),
