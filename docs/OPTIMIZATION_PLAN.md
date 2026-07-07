@@ -4,7 +4,7 @@
 
 wat-fft has achieved significant performance gains through systematic optimization. This document provides an overview - see linked sub-documents for details.
 
-**Current Status** (Apple M5 Pro, 2026-07-06, post-Experiments 57-60): **wat-fft is the fastest complex FFT at every size** (Experiment 58's radix-4 split-format core beats pffft-wasm SIMD by 1-34% at N≥32; the interleaved module wins N=16 by +29%). Both real FFT directions were rebuilt on the same core: forward (`rfft_split`, Experiment 59) beats fftw-js by +53-193% everywhere and pffft SIMD at N≤256; inverse (`irfft_split`, Experiment 60) gained +43-83% at N≥128 and beats pffft SIMD at N≤128. The remaining real-FFT gaps vs pffft SIMD are 1-5% forward / 3-17% inverse at large N — fusing the pre/post-process into the adjacent butterfly stage is the identified fix for both. Note: Experiments 1-56 accidentally raced pffft's non-SIMD build (see Experiment 57).
+**Current Status** (Apple M5 Pro, 2026-07-06, post-Experiments 57-61): **wat-fft is the fastest complex FFT at every size** (Experiment 58's radix-4 split-format core beats pffft-wasm SIMD by 1-34% at N≥32; the interleaved module wins N=16 by +29%). Both real FFT directions were rebuilt on the same core: forward (`rfft_split`, Experiment 59) beats fftw-js by +53-193% everywhere and pffft SIMD at N≤256; inverse (`irfft_split`, Experiment 60) gained +43-83% at N≥128 and beats pffft SIMD at N≤128. Experiment 61 fused the forward post-process into the final butterfly stage where it pays — N=64 only, +15-20% (now +80-90% vs pffft SIMD there); at N≥128 both fusion designs lost to register spills and scattered access streams, so the remaining real-FFT gaps vs pffft SIMD (1-5% forward / 3-17% inverse at large N) stand, and simple pre/post-process fusion is now a measured dead end for them. Note: Experiments 1-56 accidentally raced pffft's non-SIMD build (see Experiment 57).
 
 | Target          | Complex FFT (f64) | Complex FFT (f32)           | Real FFT forward (f32)                    | Real FFT inverse (f32)                     |
 | --------------- | ----------------- | --------------------------- | ----------------------------------------- | ------------------------------------------ |
@@ -100,13 +100,15 @@ Measured on Apple M5 Pro, Node v24 (2026-07-06, Experiment 59): `rfft_split` on 
 
 | Size   | rfft_split | old rfft | fftw-js | pffft SIMD | vs fftw   | vs pffft SIMD |
 | ------ | ---------- | -------- | ------- | ---------- | --------- | ------------- |
-| N=64   | 19.1M      | 19.2M    | 12.5M   | 14.2M      | **+53%**  | **+35%**      |
+| N=64   | 32.5M ¹    | 19.2M    | 14.6M ¹ | 17.6M ¹    | **+122%** | **+85%**      |
 | N=128  | 13.9M      | 8.1M     | 7.9M    | 10.6M      | **+74%**  | **+31%**      |
 | N=256  | 7.9M       | 4.2M     | 2.7M    | 7.2M       | **+189%** | **+10%**      |
 | N=512  | 3.8M       | 2.0M     | 1.6M    | 3.85M      | **+130%** | -1%           |
 | N=1024 | 1.95M      | 977K     | 837K    | 2.07M      | **+132%** | -5%           |
 | N=2048 | 914K       | 464K     | 412K    | 946K       | **+121%** | -3.5%         |
 | N=4096 | 452K       | 223K     | 191K    | 475K       | **+134%** | -5%           |
+
+¹ N=64 re-measured 2026-07-06 with the statistical harness after Experiment 61 (fused s=1 stage + post-process at M=32); other rows are the Experiment 59 measurements.
 
 ### Inverse Real FFT f32 vs fftw-js and pffft-wasm SIMD
 
@@ -134,7 +136,7 @@ Measured on Apple M5 Pro (2026-07-06, Experiment 60): `irfft_split` on the radix
 
 1. ~~Productionize the radix-4 split core in `fft_split_native_f32.wat`~~ DONE (native inverse included; see Experiment 58 integration notes)
 2. Give the interleaved module the same core by folding deinterleave/reinterleave shuffles into the first/last stages (pffft does exactly this in ordered mode)
-3. ~~Rebuild the real FFT on the new core~~ **DONE both directions**: forward (Experiment 59, `rfft_split`) roughly doubled throughput at N≥128 via a fused deinterleaving first stage (radix-8 for odd log2(M)), parity-routed ping-pong across three buffers (zero copy-back), and a split-format SIMD post-process. Inverse (Experiment 60, `irfft_split`) mirrored it: fused SIMD pre-process with 1/N folded in, B↔C ping-pong, final s=1 stage fused with the reinterleave; +43-83% at N≥128. Remaining: **fuse the pre/post-process into the adjacent butterfly stage in both directions** (the last 1-5% forward / 3-17% inverse at large N is exactly this one pass — pffft fuses its real finalization the same way; pairing details sketched in Experiment 59)
+3. ~~Rebuild the real FFT on the new core~~ **DONE both directions**: forward (Experiment 59, `rfft_split`) roughly doubled throughput at N≥128 via a fused deinterleaving first stage (radix-8 for odd log2(M)), parity-routed ping-pong across three buffers (zero copy-back), and a split-format SIMD post-process. Inverse (Experiment 60, `irfft_split`) mirrored it: fused SIMD pre-process with 1/N folded in, B↔C ping-pong, final s=1 stage fused with the reinterleave; +43-83% at N≥128. ~~Fuse the post-process into the final butterfly stage~~ TRIED (Experiment 61): ships only at N=64 where it won +15-20% (single-pair loop, no carried registers); at N≥128 both a paired full fusion and a carry-free split fusion measured slower — the ~28 live v128 values spill, and the standalone post-process is a cheap streaming pass that's hard to beat. The last 1-5% forward / 3-17% inverse at large N needs a different idea (or is pffft's unscaled backward, on the inverse side); don't re-attempt naive fusion
 4. Reclaim the copy-back pass on odd-stage sizes of the complex API (32/64/512/1024/8192 lose ~10-20% to it; the rfft path already avoids it via parity routing)
 
 Open opportunities (smaller wins):

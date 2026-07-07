@@ -58,7 +58,7 @@ Benchmarked against [pffft-wasm](https://www.npmjs.com/package/@echogarden/pffft
 
 | Size   | wat-fft (f32)        | pffft-wasm SIMD (f32) | Result   |
 | ------ | -------------------- | --------------------- | -------- |
-| N=64   | **19,100,000 ops/s** | 14,200,000 ops/s      | **+35%** |
+| N=64   | **32,500,000 ops/s** | 17,600,000 ops/s      | **+85%** |
 | N=128  | **13,900,000 ops/s** | 10,600,000 ops/s      | **+31%** |
 | N=256  | **7,940,000 ops/s**  | 7,180,000 ops/s       | **+10%** |
 | N=512  | 3,810,000 ops/s      | 3,850,000 ops/s       | -1%      |
@@ -79,17 +79,17 @@ config:
 xychart-beta
     title "Real FFT Performance (Million ops/s)"
     x-axis [N=64, N=128, N=256, N=512, N=1024, N=2048, N=4096]
-    y-axis "Million ops/s" 0 --> 20
+    y-axis "Million ops/s" 0 --> 35
     line [9.00, 5.04, 2.11, 1.28, 0.456, 0.262, 0.099]
-    line [19.11, 13.86, 7.94, 3.81, 1.95, 0.914, 0.452]
-    line [12.47, 7.77, 2.67, 1.59, 0.824, 0.407, 0.197]
-    line [14.93, 10.51, 7.13, 3.81, 2.04, 0.941, 0.474]
+    line [32.47, 13.86, 7.94, 3.81, 1.95, 0.914, 0.452]
+    line [14.63, 7.77, 2.67, 1.59, 0.824, 0.407, 0.197]
+    line [17.60, 10.51, 7.13, 3.81, 2.04, 0.941, 0.474]
     line [4.96, 3.09, 1.28, 0.732, 0.293, 0.163, 0.066]
 ```
 
 > 🟢 **wat-fft f64** · 🔵 **wat-fft f32** · 🔴 **fftw-js** · 🟠 **pffft-wasm SIMD** · 🟣 **kissfft-js**
 
-**wat-fft f32 wins at N≤256 and beats fftw-js at every size by +53% to +193%.** The forward real FFT (`rfft_split` in the split-format module, Experiment 59) runs on the radix-4 split core with a fused deinterleaving first stage and no copy-back passes; it roughly doubled throughput at N≥128 and now sits within 1-5% of pffft-wasm SIMD at N=512-4096 (fusing the post-process into the final stage is the identified next step). **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_split_native_f32.wasm`, `rfft_split`/`irfft_split`) for maximum single-precision speed; `fft_real_f32_dual.wasm` remains for N<32.
+**wat-fft f32 wins at N≤256 and beats fftw-js at every size by +53% to +234%.** The forward real FFT (`rfft_split` in the split-format module, Experiments 59 + 61) runs on the radix-4 split core with a fused deinterleaving first stage and no copy-back passes; at N=64 the final butterfly stage is additionally fused with the Hermitian post-process so the intermediate spectrum never touches memory (+15-20%, Experiment 61). It sits within 1-5% of pffft-wasm SIMD at N=512-4096. **Choose f64** (`fft_real_combined.wasm`) for double precision. **Choose f32** (`fft_split_native_f32.wasm`, `rfft_split`/`irfft_split`) for maximum single-precision speed; `fft_real_f32_dual.wasm` remains for N<32.
 
 The inverse real FFT (`irfft_split`, Experiment 60) mirrors the forward design — a fused SIMD pre-process with the 1/N normalization folded in and a final butterfly stage fused with the reinterleave. It beats fftw-js at every size (+39% to +115%) and pffft-wasm SIMD at N≤128, trailing it by only 3-17% at N≥256 (pffft's backward transform skips normalization entirely). See [docs/OPTIMIZATION_PLAN.md](docs/OPTIMIZATION_PLAN.md) for current tables.
 
