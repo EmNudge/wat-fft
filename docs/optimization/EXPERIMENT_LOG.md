@@ -1958,3 +1958,33 @@ Total memory passes match the forward `rfft_split` exactly: pre/post-process + l
 - Interleave-on-store in an s=1 stage is cheaper than a standalone reinterleave pass but not free: the stage already burns 16 transpose shuffles per iteration, and adding 8 interleave shuffles makes it the shuffle-heaviest loop in the module. The residual -12 to -17% at N=1024/4096 vs pffft likely lives partly here and partly in pffft's unscaled backward.
 
 **Remaining**: fusing the forward post-process into the final s=1 stage (Experiment 61 candidate) is still open, and the same idea applies in reverse to the inverse pre-process + first stage.
+
+## Experiment 61: Fusing the rfft Post-Process into the Final s=1 Stage (2026-07-06)
+
+**Goal**: Delete the last standalone pass of `rfft_split` - the Experiment 59 sketch: run the final radix-4 s=1 stage so that Z never touches memory, applying the Hermitian G/H recombination to butterfly outputs while they are still in registers. This is the pass pffft fuses, and the presumed source of its remaining 1-5% lead at N>=512.
+
+**Design A - paired full fusion** (`$stage_r4_s1_rfft_fused`): run the s=1 iterations in pairs (jlo ascending, jhi = l-4-jlo descending) so all eight quarter outputs Z[jlo..], Z[l+jlo..], Z[2l+jlo..], Z[3l+jlo..] and the jhi counterparts sit in registers, then post-process the register pairs (Z[k], Z[M-k]) directly, streaming interleaved X over buffer A. The mirror windows are misaligned by one lane, resolved with a software pipeline: blocks whose borrowed lane comes from the previous pair (fwd Z[jlo..] / Z[l+jlo..]) run in-iteration; blocks whose lane comes from the next pair (fwd Z[jhi..] / Z[l+jhi..]) run one pair delayed and flush from carry registers after the loop. DC/Nyquist fall out of the k=0 lane naturally (mirror Z[M] = Z[0]); X[M/2] = conj(Z[M/2]) is captured from the first iteration's quarter-2 lane 0.
+
+**Design B - carry-free split fusion** (attempted after A regressed): run the high half of the s=1 stage normally (Z high written to memory), then a descending low-half loop that keeps each butterfly in registers, stores only quarters 2/3, and post-processes four bin blocks per iteration - fwd low blocks from registers, fwd high blocks and all mirrors from just-written memory. No cross-iteration register state at all; descending order guarantees the one-past mirror element is already stored.
+
+**Results** (Apple M5 Pro, Node v24, statistical harness, multiple run pairs with a same-thermal-window baseline):
+
+| Size   | baseline | A (full fusion) | B (split fusion) | final (A at N=64 only) |
+| ------ | -------- | --------------- | ---------------- | ---------------------- |
+| N=64   | 28.2M    | **+14.5%**      | **+15.1%**       | **+15-20%**            |
+| N=128  | ~15-16M  | -8.9%           | -8.5%            | noise                  |
+| N=256  | ~9M      | -6.9%           | -1.9%            | noise                  |
+| N=512  | 4.09M    | -3.9%           | -3.1%            | noise                  |
+| N=1024 | 2.00M    | -3.6%           | -0.5%            | noise                  |
+| N=2048 | 934K     | -9.7%           | -2.3%            | noise                  |
+| N=4096 | 456K     | -5.4%           | -3.0%            | noise                  |
+
+**Result**: PARTIAL - full fusion is a clear win only at N=64 (m=32), where the paired loop runs exactly once and the carried registers cost nothing; **N=64 rfft gained +15-20% (28.3M -> 32-34M ops/s, now +80-90% vs pffft SIMD)**. At m>=64 BOTH designs measured slower than the plain two-pass ending, so the shipped dispatch is: m=32 -> fused ending, everything else -> the untouched Experiment 59 flow. Design B was deleted; Design A ships for its one winning size.
+
+**Lessons**:
+
+- **The memory-pass model has a register-pressure boundary.** Design A holds ~28 v128 values live across the loop join (12 carries + 16 quarter outputs) on 32 architectural vector registers; the resulting spill/reload traffic is comparable to the ~256 bytes/pair of Z round-trip it eliminates. A saved pass only pays if the fused loop still fits the register file.
+- Design B's residual loss shows the pass wasn't free to replace even without spills: the standalone post-process is a cheap, prefetch-friendly streaming loop (2 sequential read streams, 2 write streams), while the fused variants juggle ~8 scattered access streams plus store-to-load forwarding hazards on partially overlapping vectors.
+- The one-lane mirror misalignment costs nothing extra in shuffles: building the mirror window from two registers is one `i8x16.shuffle`, the same count as the unfused load + lane-reverse.
+- N=64/128/256 rfft throughput swings up to +-8-12% between processes for IDENTICAL code (code layout/thermal) - two full baseline runs at N=128 read 16.4M while a later same-code run read 14.85M. Never judge a small-N delta without re-benching the pristine baseline in the same session; `bench:diff`'s CV thresholds correctly flagged most of these as noise.
+- Watch buffer routing when restructuring drivers: an intermediate version routed the middle stages B<->C instead of the parity-chosen B<->A, and small N paid ~5-10% because the post-process's X stores hit cold cache lines in A. The parity routing exists to keep A warm, not just to avoid overwrites.
