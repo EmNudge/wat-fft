@@ -247,9 +247,13 @@ npm test              # Run all tests
 npm run bench         # Run complex FFT benchmarks
 npm run bench:rfft    # Run real FFT benchmarks
 npm run bench:rfft32  # Run f32 real FFT benchmarks
+npm run bench:diff    # Compare benchmark runs vs saved baseline (noise-aware)
+npm run accuracy      # Numerical accuracy report for all modules
 npm run test:fft      # Run comprehensive FFT tests
 npm run test:rfft     # Run real FFT tests
 ```
+
+`npm run test:all` also runs the accuracy thresholds (`test:accuracy`) and per-bin validation for the f32 modules (`test:perbin-f32`).
 
 ## Development Tools
 

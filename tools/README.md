@@ -11,6 +11,7 @@ Tools for debugging Stockham and other FFT implementations.
 | `wasm_compare.js`                         | Compare WASM vs JS vs DFT                                                | `npm run debug:stockham -- multi`                 |
 | `butterfly_tester.js`                     | Test butterfly math                                                      | `npm run test:butterfly`                          |
 | `permutation_validator.js`                | Validate data flow                                                       | `npm run debug:perm -- 16`                        |
+| `accuracy_report.js`                      | Numerical error vs f64 reference DFT                                     | `npm run accuracy`                                |
 | `lint-wasm-dead-code.js`                  | Find dead code in WASM                                                   | `npm run lint:wasm`                               |
 | `generate-dit-codelet.js`                 | Generate DIT FFT codelet WAT                                             | `node tools/generate-dit-codelet.js`              |
 | `generate-irfft-preprocess-codelet.js`    | Generate unrolled IRFFT preprocess WAT (N=64/128)                        | `node tools/generate-irfft-preprocess-codelet.js` |
@@ -52,6 +53,17 @@ npm run debug:perm -- 16 validate   # Check all positions written once
 npm run debug:perm -- 16 table      # Input->output contribution
 npm run debug:perm -- 16 bitrev     # Compare to bit-reversal
 ```
+
+### Accuracy Report
+
+Measures max-rel and rms-rel error of every module × transform × size (16-4096) against the f64 reference DFT, with seeded inputs. The `quality` column is max-rel / (eps·√log₂N) — it should stay roughly flat with N, so a jump at one size points at a bad codelet or twiddle path.
+
+```bash
+npm run accuracy             # per-module error tables
+npm run accuracy -- --json   # also write benchmarks/results/accuracy.latest.json
+```
+
+Threshold assertions live in `tests/accuracy.test.js` (`npm run test:accuracy`, part of `test:all`), which calls the same `measureAccuracy()` function from this tool, so tool and test can never disagree.
 
 ### WASM Dead Code Linter
 

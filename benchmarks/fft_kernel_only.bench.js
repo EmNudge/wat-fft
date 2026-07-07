@@ -9,6 +9,13 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import PFFFT from "@echogarden/pffft-wasm/simd";
+import {
+  DEFAULT_CONFIG,
+  printResults,
+  runBenchmark,
+  saveResults,
+  seededRandom,
+} from "./lib/harness.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,44 +29,15 @@ async function loadWasm(name) {
   return instance.exports;
 }
 
-// Benchmark configuration
-const WARMUP_ITERATIONS = 100;
-const BENCHMARK_DURATION_MS = 2000;
 const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
-
-function formatNumber(num) {
-  if (num >= 1e6) return (num / 1e6).toFixed(2) + "M";
-  if (num >= 1e3) return (num / 1e3).toFixed(1) + "K";
-  return num.toFixed(0);
-}
-
-// Benchmark runner
-function runBenchmark(name, setupFn, benchFn) {
-  const ctx = setupFn();
-  for (let i = 0; i < WARMUP_ITERATIONS; i++) {
-    benchFn(ctx);
-  }
-
-  const startTime = performance.now();
-  let iterations = 0;
-
-  while (performance.now() - startTime < BENCHMARK_DURATION_MS) {
-    benchFn(ctx);
-    iterations++;
-  }
-
-  const elapsed = performance.now() - startTime;
-  const opsPerSec = (iterations / elapsed) * 1000;
-
-  return { name, iterations, elapsed, opsPerSec };
-}
 
 async function runBenchmarks() {
   console.log("=".repeat(75));
   console.log("FFT Kernel-Only Benchmark (excluding format conversion)");
   console.log("=".repeat(75));
-  console.log(`Duration: ${BENCHMARK_DURATION_MS}ms per test`);
-  console.log(`Warmup: ${WARMUP_ITERATIONS} iterations`);
+  console.log(
+    `Samples: ${DEFAULT_CONFIG.samples} x ${DEFAULT_CONFIG.sampleMs}ms per test (median reported)`,
+  );
   console.log("");
 
   const wasmSplit = await loadWasm("fft_split_native_f32");
@@ -72,6 +50,8 @@ async function runBenchmarks() {
   // Constants for split format memory layout (from fft_split_native_f32)
   const SPLIT_RE_OFFSET = 0; // REAL_A_OFFSET
   const SPLIT_IM_OFFSET = 0x8000; // IMAG_A_OFFSET (32768)
+
+  const sizeGroups = [];
 
   for (const n of SIZES) {
     console.log("-".repeat(75));
@@ -88,10 +68,11 @@ async function runBenchmarks() {
         const reBuffer = new Float32Array(memory.buffer, SPLIT_RE_OFFSET, n);
         const imBuffer = new Float32Array(memory.buffer, SPLIT_IM_OFFSET, n);
 
-        // Initialize split buffers
+        // Initialize split buffers (deterministic input)
+        const rand = seededRandom(n);
         for (let i = 0; i < n; i++) {
-          reBuffer[i] = Math.random() * 2 - 1;
-          imBuffer[i] = Math.random() * 2 - 1;
+          reBuffer[i] = rand();
+          imBuffer[i] = rand();
         }
 
         wasmSplit.precompute_twiddles_split(n);
@@ -112,9 +93,10 @@ async function runBenchmarks() {
         const inputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const outputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, n * 2);
-        // Initialize with random data
+        // Initialize with deterministic input
+        const rand = seededRandom(n);
         for (let i = 0; i < n * 2; i++) {
-          inputView[i] = Math.random() * 2 - 1;
+          inputView[i] = rand();
         }
         return { setup, inputPtr, outputPtr };
       },
@@ -133,8 +115,9 @@ async function runBenchmarks() {
         const inputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const outputPtr = pffft._pffft_aligned_malloc(n * 2 * 4);
         const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, n * 2);
+        const rand = seededRandom(n);
         for (let i = 0; i < n * 2; i++) {
-          inputView[i] = Math.random() * 2 - 1;
+          inputView[i] = rand();
         }
         return { setup, inputPtr, outputPtr };
       },
@@ -144,29 +127,16 @@ async function runBenchmarks() {
     );
     results.push(pffftOrderedResult);
 
-    // Sort by performance
-    results.sort((a, b) => b.opsPerSec - a.opsPerSec);
-
-    // Print results
-    console.log("");
-    console.log("Implementation              ops/sec      vs fastest");
-    console.log("-".repeat(55));
-    const fastest = results[0].opsPerSec;
-    for (const result of results) {
-      const vsFastest =
-        result.opsPerSec / fastest === 1
-          ? "(fastest)"
-          : `${((result.opsPerSec / fastest) * 100).toFixed(1)}%`;
-      console.log(
-        `${result.name.padEnd(26)} ${formatNumber(result.opsPerSec).padStart(10)}    ${vsFastest.padStart(10)}`,
-      );
-    }
+    printResults(results);
+    sizeGroups.push({ size: n, results });
     console.log("");
   }
 
   console.log("=".repeat(75));
   console.log("Benchmark complete!");
   console.log("=".repeat(75));
+
+  saveResults("fft-kernel-only", sizeGroups);
 }
 
 runBenchmarks().catch(console.error);
