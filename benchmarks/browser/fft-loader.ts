@@ -28,6 +28,11 @@ import PFFFT from "@echogarden/pffft-wasm/simd";
 // @ts-ignore - fftw-js is CommonJS but Vite can handle it
 import fftwJs from "fftw-js";
 
+// Shared wat-fft surface registry: the single source of truth for which
+// wat implementations must be benchmarked on each surface.
+// @ts-ignore - plain .mjs module without type declarations
+import { watEntriesFor } from "../shared/wat-surfaces.mjs";
+
 // Types
 export interface FFTContext {
   name: string;
@@ -39,44 +44,35 @@ export interface FFTContext {
   dispose?: () => void;
 }
 
-// WASM module cache
-const wasmCache = new Map<string, WebAssembly.Instance>();
+// dist wasm file name (as used in the surface registry) -> Vite URL
+const WAT_WASM_URLS: Record<string, string> = {
+  "fft_combined.wasm": fftCombinedUrl,
+  "fft_stockham_f32_dual.wasm": fftF32Url,
+  "fft_split_native_f32.wasm": fftSplitUrl,
+  "fft_real_combined.wasm": rfftCombinedUrl,
+  "fft_real_f32_dual.wasm": rfftF32Url,
+};
 
 /**
- * Load a WASM module by URL
+ * Fetch and compile a WASM module by URL (instantiation happens per
+ * benchmark context, synchronously, so every context gets its own memory
+ * and twiddle tables - a shared instance would let one size group's
+ * precompute clobber another's).
  */
-async function loadWasmByUrl(url: string): Promise<WebAssembly.Instance> {
-  if (wasmCache.has(url)) {
-    return wasmCache.get(url)!;
-  }
-
+async function compileWasmByUrl(url: string): Promise<WebAssembly.Module> {
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`Failed to load WASM: ${response.statusText}`);
   }
-
-  const buffer = await response.arrayBuffer();
-  const module = await WebAssembly.compile(buffer);
-  const instance = await WebAssembly.instantiate(module);
-
-  wasmCache.set(url, instance);
-  return instance;
+  return WebAssembly.compile(await response.arrayBuffer());
 }
 
-// Pre-load all WASM modules at module initialization time
-export const wasmModules = await Promise.all([
-  loadWasmByUrl(fftCombinedUrl),
-  loadWasmByUrl(fftF32Url),
-  loadWasmByUrl(fftSplitUrl),
-  loadWasmByUrl(rfftCombinedUrl),
-  loadWasmByUrl(rfftF32Url),
-]).then(([fftCombined, fftF32, fftSplit, rfftCombined, rfftF32]) => ({
-  fftCombined,
-  fftF32,
-  fftSplit,
-  rfftCombined,
-  rfftF32,
-}));
+// Pre-compile all wat-fft modules at module initialization time
+export const watModules: Record<string, WebAssembly.Module> = Object.fromEntries(
+  await Promise.all(
+    Object.entries(WAT_WASM_URLS).map(async ([file, url]) => [file, await compileWasmByUrl(url)]),
+  ),
+);
 
 // Initialize pffft-wasm with custom locateFile to work in browser
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -141,142 +137,125 @@ export function generateRealInput(n: number): {
 }
 
 // ============================================================================
-// wat-fft context creators (synchronous since WASM is pre-loaded)
+// wat-fft context creators, driven by the shared surface registry
 // ============================================================================
 
-/**
- * Create wat-fft f64 complex FFT context
- */
-export function createWatFftF64(size: number): FFTContext {
-  const exports = wasmModules.fftCombined.exports as {
-    memory: WebAssembly.Memory;
-    precompute_twiddles: (n: number) => void;
-    fft: (n: number) => void;
-  };
+interface WatSurfaceEntry {
+  name: string;
+  module: string;
+  precision: "f32" | "f64";
+  layout: "complex-interleaved" | "complex-split" | "real-packed" | "real-spectrum";
+  precompute: string;
+  run: string;
+  spectrumVia?: string;
+  flagship?: boolean;
+}
 
-  exports.precompute_twiddles(size);
-  const data = new Float64Array(exports.memory.buffer, 0, size * 2);
+export interface WatInput {
+  interleaved64?: Float64Array;
+  interleaved32?: Float32Array;
+  planar32?: Float32Array;
+  real64?: Float64Array;
+  real32?: Float32Array;
+}
 
-  return {
-    name: "wat-fft (f64)",
-    size,
-    isReal: false,
-    isF32: false,
-    inputBuffer: data,
-    run: () => exports.fft(size),
-  };
+function globalValue(g: number | WebAssembly.Global): number {
+  return typeof g === "number" ? g : (g.value as number);
 }
 
 /**
- * Create wat-fft f32 complex FFT context
+ * Build one FFTContext per registry entry of a surface that supports
+ * `size`. Each context owns a fresh module instance (own memory + twiddle
+ * tables) and stages its bound input inside run(), so every implementation
+ * is charged one input copy per iteration like the competitor contexts.
  */
-export function createWatFftF32(size: number): FFTContext {
-  const exports = wasmModules.fftF32.exports as {
-    memory: WebAssembly.Memory;
-    precompute_twiddles: (n: number) => void;
-    fft: (n: number) => void;
-  };
+export function createWatContexts(surfaceId: string, size: number, input: WatInput): FFTContext[] {
+  const entries = watEntriesFor(surfaceId, { size }) as WatSurfaceEntry[];
 
-  exports.precompute_twiddles(size);
-  const data = new Float32Array(exports.memory.buffer, 0, size * 2);
+  return entries.map((entry) => {
+    const module = watModules[entry.module];
+    if (!module) {
+      throw new Error(`No preloaded wasm for ${entry.module} (add it to WAT_WASM_URLS)`);
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const exports = new WebAssembly.Instance(module).exports as any;
+    exports[entry.precompute](size);
+    const FloatArray = entry.precision === "f32" ? Float32Array : Float64Array;
 
-  return {
-    name: "wat-fft (f32)",
-    size,
-    isReal: false,
-    isF32: true,
-    inputBuffer: data,
-    run: () => exports.fft(size),
-  };
-}
+    let inputBuffer: Float32Array | Float64Array;
+    let run: () => void;
 
-/**
- * Create wat-fft f32 split-format FFT context
- */
-export function createWatFftSplit(size: number): FFTContext {
-  const exports = wasmModules.fftSplit.exports as {
-    memory: WebAssembly.Memory;
-    REAL_OFFSET: WebAssembly.Global;
-    IMAG_OFFSET: WebAssembly.Global;
-    precompute_twiddles_split: (n: number) => void;
-    fft_split: (n: number) => void;
-  };
+    switch (entry.layout) {
+      case "complex-interleaved": {
+        const src = (entry.precision === "f32" ? input.interleaved32 : input.interleaved64)!;
+        const data = new FloatArray(exports.memory.buffer, 0, size * 2);
+        inputBuffer = data;
+        run = () => {
+          data.set(src);
+          exports[entry.run](size);
+        };
+        break;
+      }
+      case "complex-split": {
+        const re = input.planar32!.subarray(0, size);
+        const im = input.planar32!.subarray(size);
+        const realData = new Float32Array(
+          exports.memory.buffer,
+          globalValue(exports.REAL_OFFSET),
+          size,
+        );
+        const imagData = new Float32Array(
+          exports.memory.buffer,
+          globalValue(exports.IMAG_OFFSET),
+          size,
+        );
+        inputBuffer = realData;
+        run = () => {
+          realData.set(re);
+          imagData.set(im);
+          exports[entry.run](size);
+        };
+        break;
+      }
+      case "real-packed": {
+        const src = (entry.precision === "f32" ? input.real32 : input.real64)!;
+        const data = new FloatArray(exports.memory.buffer, 0, size);
+        inputBuffer = data;
+        run = () => {
+          data.set(src);
+          exports[entry.run](size);
+        };
+        break;
+      }
+      case "real-spectrum": {
+        // Hermitian spectrum input (N/2+1 interleaved bins), produced once
+        // by this instance's own forward transform.
+        const src = (entry.precision === "f32" ? input.real32 : input.real64)!;
+        new FloatArray(exports.memory.buffer, 0, size).set(src);
+        exports[entry.spectrumVia!](size);
+        const data = new FloatArray(exports.memory.buffer, 0, size + 2);
+        const spectrum = new FloatArray(size + 2);
+        spectrum.set(data);
+        inputBuffer = data;
+        run = () => {
+          data.set(spectrum);
+          exports[entry.run](size);
+        };
+        break;
+      }
+      default:
+        throw new Error(`Unknown layout for ${entry.name}`);
+    }
 
-  exports.precompute_twiddles_split(size);
-
-  const realOffset =
-    typeof exports.REAL_OFFSET === "number" ? exports.REAL_OFFSET : exports.REAL_OFFSET.value;
-  const imagOffset =
-    typeof exports.IMAG_OFFSET === "number" ? exports.IMAG_OFFSET : exports.IMAG_OFFSET.value;
-
-  const realData = new Float32Array(exports.memory.buffer, realOffset, size);
-  const imagData = new Float32Array(exports.memory.buffer, imagOffset, size);
-  // Split-layout staging buffer: re in [0, size), im in [size, 2*size).
-  // The split module targets data that is already in split format, so the
-  // benchmark charges it two block copies (same bytes as one interleaved copy),
-  // not a scalar deinterleave loop.
-  const inputBuffer = new Float32Array(size * 2);
-  const reSrc = inputBuffer.subarray(0, size);
-  const imSrc = inputBuffer.subarray(size);
-
-  return {
-    name: "wat-fft (f32 split)",
-    size,
-    isReal: false,
-    isF32: true,
-    inputBuffer,
-    run: () => {
-      realData.set(reSrc);
-      imagData.set(imSrc);
-      exports.fft_split(size);
-    },
-  };
-}
-
-/**
- * Create wat-fft f64 real FFT context
- */
-export function createWatRfftF64(size: number): FFTContext {
-  const exports = wasmModules.rfftCombined.exports as {
-    memory: WebAssembly.Memory;
-    precompute_rfft_twiddles: (n: number) => void;
-    rfft: (n: number) => void;
-  };
-
-  exports.precompute_rfft_twiddles(size);
-  const data = new Float64Array(exports.memory.buffer, 0, size);
-
-  return {
-    name: "wat-rfft (f64)",
-    size,
-    isReal: true,
-    isF32: false,
-    inputBuffer: data,
-    run: () => exports.rfft(size),
-  };
-}
-
-/**
- * Create wat-fft f32 real FFT context
- */
-export function createWatRfftF32(size: number): FFTContext {
-  const exports = wasmModules.rfftF32.exports as {
-    memory: WebAssembly.Memory;
-    precompute_rfft_twiddles: (n: number) => void;
-    rfft: (n: number) => void;
-  };
-
-  exports.precompute_rfft_twiddles(size);
-  const data = new Float32Array(exports.memory.buffer, 0, size);
-
-  return {
-    name: "wat-rfft (f32)",
-    size,
-    isReal: true,
-    isF32: true,
-    inputBuffer: data,
-    run: () => exports.rfft(size),
-  };
+    return {
+      name: entry.name,
+      size,
+      isReal: entry.layout.startsWith("real"),
+      isF32: entry.precision === "f32",
+      inputBuffer,
+      run,
+    };
+  });
 }
 
 // ============================================================================

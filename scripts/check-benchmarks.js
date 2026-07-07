@@ -13,6 +13,9 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+// Shared with the surface registry so benchmark names and CI
+// classification cannot diverge (enforced by tests/benchmark-coverage.test.js)
+import { isWatBenchName } from "../benchmarks/shared/wat-surfaces.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,9 +23,7 @@ const __dirname = path.dirname(__filename);
 const RESULTS_FILE = path.join(__dirname, "..", "benchmark-results.json");
 
 // Identify wat-fft implementations by name patterns
-function isWatFft(name) {
-  return name.startsWith("wat-fft") || name.startsWith("wat-rfft");
-}
+const isWatFft = isWatBenchName;
 
 function formatNumber(num) {
   return num.toLocaleString("en-US", { maximumFractionDigits: 0 });

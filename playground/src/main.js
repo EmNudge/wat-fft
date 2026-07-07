@@ -30,7 +30,7 @@ let lastSpectrogram = null;
 
 // Analyzer state
 let analyzerModule = null;
-let analyzerModuleId = "real_f32_dual";
+let analyzerModuleId = "real_f32_split";
 let analyzer = null;
 let analyzerStatsInterval = null;
 let currentMode = "spectrogram"; // "spectrogram", "analyzer", or "benchmark"
@@ -1010,8 +1010,16 @@ function populateBenchmarkImplementations() {
   container.innerHTML = "";
   const modules = getAvailableModules();
 
-  // Default checked: combined, real_combined, f32_dual, pffft (and pffft_real for variety)
-  const defaultChecked = ["combined", "real_combined", "f32_dual", "pffft", "pffft_real"];
+  // Default checked: the wat flagships (split f32), the f64 modules, and
+  // pffft (the strongest competitor) for both transform kinds
+  const defaultChecked = [
+    "combined",
+    "real_combined",
+    "f32_split",
+    "real_f32_split",
+    "pffft",
+    "pffft_real",
+  ];
 
   modules.forEach((mod) => {
     const label = document.createElement("label");
@@ -1140,30 +1148,73 @@ async function runBenchmark() {
       for (const size of sizes) {
         updateProgress(completedTests, totalTests, `${module.config.name} @ ${size}`);
 
+        // Skip sizes outside the module's supported range (previously the
+        // benchmark silently ran some modules beyond their wasm memory)
+        const { minSize, maxSize } = module.config;
+        if ((minSize && size < minSize) || (maxSize && size > maxSize)) {
+          completedTests++;
+          continue;
+        }
+
         // Create FFT context
         const fftContext = createFFTContext(module, size);
 
-        // Generate test data
+        // Generate test data. Every iteration re-stages this input inside
+        // the timed region (matching the Node/vitest benches): it charges
+        // one input copy to every implementation alike, and keeps in-place
+        // transforms (the wat real FFTs overwrite their input) from
+        // re-transforming their own output.
         const inputBuffer = fftContext.getInputBuffer();
-        for (let i = 0; i < inputBuffer.length; i++) {
-          inputBuffer[i] = Math.random() * 2 - 1;
+        const pristineInput = new fftContext.ArrayType(inputBuffer.length);
+        for (let i = 0; i < pristineInput.length; i++) {
+          pristineInput[i] = Math.random() * 2 - 1;
         }
+        // Some JS libraries hand out plain Arrays (no .set)
+        const stageInput = inputBuffer.set
+          ? () => inputBuffer.set(pristineInput)
+          : () => {
+              for (let i = 0; i < pristineInput.length; i++) {
+                inputBuffer[i] = pristineInput[i];
+              }
+            };
 
         // Warmup runs
         for (let i = 0; i < warmupRuns; i++) {
+          stageInput();
           fftContext.run();
         }
 
-        // Benchmark runs
-        const times = [];
-        for (let i = 0; i < iterations; i++) {
+        // Benchmark runs. A single FFT call is far below performance.now()
+        // resolution (5µs cross-origin-isolated, 100µs otherwise), so timing
+        // per call quantizes to garbage at small N. Instead, calibrate a
+        // batch size that takes >= 5ms per timed sample (same approach as
+        // the Node harness) and record per-op times per batch.
+        let batch = 1;
+        for (;;) {
           const start = performance.now();
-          fftContext.run();
-          const end = performance.now();
-          times.push(end - start);
+          for (let i = 0; i < batch; i++) {
+            stageInput();
+            fftContext.run();
+          }
+          const elapsed = performance.now() - start;
+          if (elapsed >= 5 || batch >= 1 << 22) break;
+          batch *= 2;
         }
 
-        // Calculate statistics
+        // `iterations` sets the total run budget; always take >= 5 samples
+        const sampleCount = Math.max(5, Math.round(iterations / batch));
+        const times = []; // per-op ms, one entry per batch sample
+        for (let s = 0; s < sampleCount; s++) {
+          const start = performance.now();
+          for (let i = 0; i < batch; i++) {
+            stageInput();
+            fftContext.run();
+          }
+          const end = performance.now();
+          times.push((end - start) / batch);
+        }
+
+        // Calculate statistics over per-op batch means
         times.sort((a, b) => a - b);
         const sum = times.reduce((a, b) => a + b, 0);
         const avg = sum / times.length;

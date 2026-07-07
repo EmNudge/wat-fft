@@ -2,17 +2,31 @@
 
 Tools for measuring FFT performance and comparing against competitor libraries.
 
+## The Surface Registry (read this before adding or superseding a module)
+
+**`shared/wat-surfaces.mjs` is the single source of truth for which wat-fft implementations get benchmarked.** Every bench file — Node and browser — builds its wat-fft contexts by enumerating the registry (`createWatBenchContexts` in `lib/wat-contexts.js` for Node, `createWatContexts` in `browser/fft-loader.ts` for the browser). Hand-rolled wat contexts in bench files are forbidden and rejected by `npm run test:bench-coverage` (part of `test:all`), which also:
+
+- correctness-checks every registry entry against a reference DFT at N=64 (a miswired export or layout fails a test, not a benchmark report),
+- fails if a `dist/*.wasm` module is neither registered nor explicitly excluded,
+- fails if a bench file stops enumerating its declared surface.
+
+**To add a new implementation or supersede a flagship: edit the registry only.** Add an entry (module file, exports, layout, size range, `flagship` flag) and every covered bench — `bench`, `bench:f32`, `bench:ifft32`, `bench:rfft`, `bench:rfft32`, `bench:irfft32`, and both browser benches — picks it up automatically.
+
+Why this exists: the browser real-FFT benchmark kept measuring the old dual-complex `rfft` for two module generations after `rfft_split` shipped, reporting 14-35% "losses" to pffft that the flagship had already closed. The Node `bench:f32` and `bench:ifft32` had the same gap.
+
 ## Quick Reference
 
-| Command                 | Benchmark                 | Competitors                                    |
-| ----------------------- | ------------------------- | ---------------------------------------------- |
-| `npm run bench`         | Complex FFT (f64)         | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
-| `npm run bench:rfft`    | Real FFT (f64)            | fftw-js, kissfft-js, webfft, pffft-wasm        |
-| `npm run bench:f32`     | Complex FFT (f32)         | fft.js                                         |
-| `npm run bench:ifft32`  | Inverse Complex FFT (f32) | fft.js, pffft-wasm                             |
-| `npm run bench:rfft32`  | Real FFT (f32)            | fftw-js, pffft-wasm (SIMD)                     |
-| `npm run bench:irfft32` | Inverse Real FFT (f32)    | fftw-js, pffft-wasm (SIMD)                     |
-| `npm run bench:browser` | Browser FFT (all types)   | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| Command                 | Benchmark                      | Competitors                                    |
+| ----------------------- | ------------------------------ | ---------------------------------------------- |
+| `npm run bench`         | Complex FFT (all wat variants) | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| `npm run bench:rfft`    | Real FFT (f64)                 | fftw-js, kissfft-js, webfft, pffft-wasm        |
+| `npm run bench:f32`     | Complex FFT (f32)              | fft.js, pffft-wasm                             |
+| `npm run bench:ifft32`  | Inverse Complex FFT (f32)      | fft.js, pffft-wasm                             |
+| `npm run bench:rfft32`  | Real FFT (f32)                 | fftw-js, pffft-wasm (SIMD)                     |
+| `npm run bench:irfft32` | Inverse Real FFT (f32)         | fftw-js, pffft-wasm (SIMD)                     |
+| `npm run bench:browser` | Browser FFT (all types)        | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+
+Every command benchmarks **all registry entries** for its surface/precision, so summaries and CI checks always include the flagship implementation.
 
 ## Benchmark Files
 
@@ -37,6 +51,14 @@ All Node bench files use the shared statistical harness `lib/harness.js` (see Co
 | `browser/fft.bench.ts`  | Complex FFT in browser - wat-fft vs fft.js, kissfft, etc. |
 | `browser/rfft.bench.ts` | Real FFT in browser - wat-rfft vs fft.js real             |
 | `browser/fft-loader.ts` | WASM loader and competitor library initialization         |
+
+### Shared Infrastructure
+
+| File                      | Purpose                                                                 |
+| ------------------------- | ----------------------------------------------------------------------- |
+| `shared/wat-surfaces.mjs` | Surface registry: which wat modules/exports every bench must measure    |
+| `lib/wat-contexts.js`     | Node-side registry-driven wat contexts (module loading, input staging)  |
+| `lib/harness.js`          | Statistical harness (warmup, calibrated samples, medians, JSON results) |
 
 ## Running Benchmarks
 

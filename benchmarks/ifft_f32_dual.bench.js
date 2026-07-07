@@ -5,42 +5,12 @@
  * fft.js include the 1/N normalization. pffft therefore does slightly less work.
  */
 
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import FFT from "fft.js";
 import PFFFT from "@echogarden/pffft-wasm/simd";
-import {
-  DEFAULT_CONFIG,
-  printResults,
-  runBenchmark,
-  saveResults,
-  seededRandom,
-} from "./lib/harness.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load WASM modules
-async function loadWasm(name) {
-  const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {});
-  return instance.exports;
-}
+import { DEFAULT_CONFIG, printResults, runBenchmark, saveResults } from "./lib/harness.js";
+import { createWatBenchContexts, generateComplexInputs } from "./lib/wat-contexts.js";
 
 const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
-
-// Generate deterministic f32 complex input (a spectrum to invert)
-function generateInputF32(n) {
-  const rand = seededRandom(n);
-  const input = new Float32Array(n * 2);
-  for (let i = 0; i < n * 2; i++) {
-    input[i] = rand();
-  }
-  return input;
-}
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
@@ -51,7 +21,6 @@ async function runBenchmarks() {
   );
   console.log("");
 
-  const wasm = await loadWasm("fft_stockham_f32_dual");
   const pffft = await PFFFT();
 
   // PFFFT enums: transform type { PFFFT_REAL=0, PFFFT_COMPLEX=1 },
@@ -66,24 +35,18 @@ async function runBenchmarks() {
     console.log(`IFFT Size: N=${n}`);
     console.log("-".repeat(70));
 
-    const inputF32 = generateInputF32(n);
+    const input = generateComplexInputs(n);
+    const inputF32 = input.interleaved32;
     const results = [];
 
-    // 1. wat-fft f32 IFFT
-    const wasmResult = runBenchmark(
-      "wat-fft (f32)",
-      () => {
-        const memory = wasm.memory;
-        const data = new Float32Array(memory.buffer, 0, n * 2);
-        wasm.precompute_twiddles(n);
-        return { data, inputBuffer: inputF32 };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        wasm.ifft(n);
-      },
-    );
-    results.push(wasmResult);
+    // wat-fft implementations: every f32 complex-inverse entry in the registry
+    const watContexts = await createWatBenchContexts("complex-inverse", n, {
+      precisions: ["f32"],
+      input,
+    });
+    for (const wat of watContexts) {
+      results.push(runBenchmark(wat.name, wat.setup, wat.bench));
+    }
 
     // 2. pffft-wasm (f32 WASM competitor, unscaled backward transform)
     const pffftResult = runBenchmark(
