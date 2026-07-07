@@ -4,9 +4,6 @@
  * Compares the f32 irfft against fftw-js (f32) inverse
  */
 
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
 import PFFFT from "@echogarden/pffft-wasm/simd";
 import {
@@ -15,33 +12,13 @@ import {
   printResults,
   runBenchmark,
   saveResults,
-  seededRandom,
 } from "./lib/harness.js";
+import { createWatBenchContexts, generateRealInputs } from "./lib/wat-contexts.js";
 
 const PFFFT_REAL = 0;
 const PFFFT_BACKWARD = 1;
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-async function loadWasm(name) {
-  const wasmPath = path.join(__dirname, "..", "dist", `${name}.wasm`);
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {});
-  return instance.exports;
-}
-
 const SIZES = [64, 128, 256, 512, 1024, 2048, 4096];
-
-function generateRealInput(n) {
-  const rand = seededRandom(n);
-  const data = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    data[i] = rand();
-  }
-  return data;
-}
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
@@ -52,8 +29,6 @@ async function runBenchmarks() {
   );
   console.log("");
 
-  const wasmExports = await loadWasm("fft_real_f32_dual");
-  const splitExports = await loadWasm("fft_split_native_f32");
   const pffft = await PFFFT();
 
   const summary = [];
@@ -64,59 +39,28 @@ async function runBenchmarks() {
     console.log(`Inverse Real FFT Size: N=${size}`);
     console.log("-".repeat(70));
 
-    const input = generateRealInput(size);
+    const input = generateRealInputs(size);
     const results = [];
 
-    // 1. f32 IRFFT
-    const wasmResult = runBenchmark(
-      "wat-fft (f32)",
-      () => {
-        const memory = wasmExports.memory;
-        // Spectrum: N/2+1 complex values = N+2 floats
-        const data = new Float32Array(memory.buffer, 0, size + 2);
-        wasmExports.precompute_rfft_twiddles(size);
-        // Produce a real spectrum by running the forward RFFT once
-        new Float32Array(memory.buffer, 0, size).set(input);
-        wasmExports.rfft(size);
-        const spectrum = new Float32Array(size + 2);
-        spectrum.set(data);
-        return { data, spectrum };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.spectrum);
-        wasmExports.irfft(size);
-      },
-    );
-    results.push(wasmResult);
-
-    // 2. f32 split-core IRFFT (Experiment 60)
-    const splitResult = runBenchmark(
-      "wat-fft split (f32)",
-      () => {
-        const memory = splitExports.memory;
-        // Spectrum: N/2+1 complex values = N+2 floats
-        const data = new Float32Array(memory.buffer, 0, size + 2);
-        splitExports.precompute_rfft_twiddles_split(size);
-        // Produce a real spectrum by running the forward RFFT once
-        new Float32Array(memory.buffer, 0, size).set(input);
-        splitExports.rfft_split(size);
-        const spectrum = new Float32Array(size + 2);
-        spectrum.set(data);
-        return { data, spectrum };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.spectrum);
-        splitExports.irfft_split(size);
-      },
-    );
-    results.push(splitResult);
+    // wat-fft implementations: every f32 real-inverse entry in the registry
+    // (each setup produces its spectrum input via the module's own forward)
+    const watContexts = await createWatBenchContexts("real-inverse", size, {
+      precisions: ["f32"],
+      input,
+    });
+    let splitResult;
+    for (const wat of watContexts) {
+      const result = runBenchmark(wat.name, wat.setup, wat.bench);
+      results.push(result);
+      if (wat.entry.flagship) splitResult = result;
+    }
 
     // 3. fftw-js (f32)
     const fftwResult = runBenchmark(
       "fftw-js (f32)",
       () => {
         const fft = new fftwJs.FFT(size);
-        const spectrum = fft.forward(input);
+        const spectrum = fft.forward(input.real32);
         return { fft, spectrum };
       },
       (ctx) => {
@@ -136,7 +80,7 @@ async function runBenchmarks() {
         const inputPtr = pffft._pffft_aligned_malloc(size * 4);
         const outputPtr = pffft._pffft_aligned_malloc(size * 4);
         // Produce a real spectrum by running the forward transform once
-        new Float32Array(pffft.HEAPF32.buffer, inputPtr, size).set(input);
+        new Float32Array(pffft.HEAPF32.buffer, inputPtr, size).set(input.real32);
         pffft._pffft_transform_ordered(setup, inputPtr, outputPtr, 0, 0);
         const spectrum = new Float32Array(size);
         spectrum.set(new Float32Array(pffft.HEAPF32.buffer, outputPtr, size));

@@ -11,50 +11,17 @@
  * while our implementation uses Float64 (double precision).
  */
 
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import fftwJs from "fftw-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
 import PFFFT from "@echogarden/pffft-wasm/simd";
-import {
-  DEFAULT_CONFIG,
-  printResults,
-  runBenchmark,
-  saveResults,
-  seededRandom,
-} from "./lib/harness.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load our Combined Real FFT WASM module (f64, auto-dispatch)
-async function loadCombinedRealWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_real_combined.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule, {});
-  return instance.exports;
-}
+import { DEFAULT_CONFIG, printResults, runBenchmark, saveResults } from "./lib/harness.js";
+import { createWatBenchContexts, generateRealInputs } from "./lib/wat-contexts.js";
 
 // Test sizes: include both radix-4 eligible (N/2 is power-of-4) and radix-2 sizes
 // Radix-4 eligible: N=8,32,128,512,2048 (N/2=4,16,64,256,1024)
 // Radix-2 only: N=16,64,256,1024,4096 (N/2=8,32,128,512,2048)
 const SIZES = [8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
-
-// Generate deterministic real input data
-function generateRealInput(n) {
-  const rand = seededRandom(n);
-  const real32 = new Float32Array(n);
-  const real64 = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    const val = rand();
-    real32[i] = val;
-    real64[i] = val;
-  }
-  return { real32, real64 };
-}
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
@@ -68,7 +35,6 @@ async function runBenchmarks() {
   console.log("      wat-fft uses Float64 (double precision)");
   console.log("");
 
-  const combinedRealWasmExports = await loadCombinedRealWasmFFT();
   const pffft = await PFFFT();
 
   const sizeGroups = [];
@@ -78,24 +44,20 @@ async function runBenchmarks() {
     console.log(`Real FFT Size: N=${size}`);
     console.log("-".repeat(70));
 
-    const input = generateRealInput(size);
+    const input = generateRealInputs(size);
     const results = [];
 
-    // 1. Our WASM Combined Real FFT (f64) - RECOMMENDED
-    const combinedResult = runBenchmark(
-      "wat-fft Combined (f64)",
-      () => {
-        const memory = combinedRealWasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size);
-        combinedRealWasmExports.precompute_rfft_twiddles(size);
-        return { data, inputBuffer: input.real64 };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        combinedRealWasmExports.rfft(size);
-      },
-    );
-    results.push(combinedResult);
+    // wat-fft implementations: every f64 real-forward entry in the registry
+    const watContexts = await createWatBenchContexts("real-forward", size, {
+      precisions: ["f64"],
+      input,
+    });
+    let combinedResult;
+    for (const wat of watContexts) {
+      const result = runBenchmark(wat.name, wat.setup, wat.bench);
+      results.push(result);
+      if (wat.entry.flagship) combinedResult = result;
+    }
 
     // 2. fftw-js (single precision)
     const fftwResult = runBenchmark(

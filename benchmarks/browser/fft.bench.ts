@@ -2,7 +2,10 @@
  * Browser-based FFT Performance Benchmarks using Vitest
  *
  * Compares wat-fft WASM implementations against popular JS libraries
- * in a real browser environment using Playwright.
+ * in a real browser environment using Playwright. wat-fft contexts are
+ * enumerated from the shared surface registry
+ * (benchmarks/shared/wat-surfaces.mjs), so every registered
+ * complex-forward implementation is always measured.
  *
  * Run with: npm run bench:browser
  */
@@ -10,9 +13,7 @@
 import { describe, bench, afterAll } from "vitest";
 import {
   generateComplexInput,
-  createWatFftF64,
-  createWatFftF32,
-  createWatFftSplit,
+  createWatContexts,
   createFftJs,
   createFftJsSimple,
   createKissFFT,
@@ -30,10 +31,12 @@ describe("Complex FFT Benchmarks", () => {
       // Generate input data
       const input = generateComplexInput(size);
 
-      // Create all contexts synchronously (WASM is pre-loaded)
-      const watF64 = createWatFftF64(size);
-      const watF32 = createWatFftF32(size);
-      const watSplit = createWatFftSplit(size);
+      // wat-fft implementations: every complex-forward registry entry that
+      // supports this size (each owns its instance; input staging is
+      // charged inside run())
+      const watContexts = createWatContexts("complex-forward", size, input);
+
+      // Competitor contexts (WASM is pre-loaded)
       const fftJs = createFftJs(size);
       const fftJsSimple = createFftJsSimple(size);
       const kissFFT = createKissFFT(size);
@@ -41,9 +44,7 @@ describe("Complex FFT Benchmarks", () => {
       const pffft = createPffftComplex(size); // null if size < 32
 
       const contexts: FFTContext[] = [
-        watF64,
-        watF32,
-        watSplit,
+        ...watContexts,
         fftJs,
         fftJsSimple,
         kissFFT,
@@ -57,20 +58,11 @@ describe("Complex FFT Benchmarks", () => {
         }
       });
 
-      bench("wat-fft (f64)", () => {
-        watF64.inputBuffer.set(input.interleaved64);
-        watF64.run();
-      });
-
-      bench("wat-fft (f32)", () => {
-        watF32.inputBuffer.set(input.interleaved32);
-        watF32.run();
-      });
-
-      bench("wat-fft (f32 split)", () => {
-        watSplit.inputBuffer.set(input.planar32);
-        watSplit.run();
-      });
+      for (const ctx of watContexts) {
+        bench(ctx.name, () => {
+          ctx.run();
+        });
+      }
 
       bench("fft.js", () => {
         fftJs.inputBuffer.set(input.interleaved64);

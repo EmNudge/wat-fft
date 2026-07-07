@@ -9,70 +9,16 @@
  * - pffft-wasm - PFFFT compiled to WASM with SIMD support
  */
 
-import fs from "fs";
-import path from "path";
-import { fileURLToPath } from "url";
 import FFT from "fft.js";
 import * as fftJs from "fft-js";
 import kissfft from "kissfft-js";
 import webfft from "webfft";
 import PFFFT from "@echogarden/pffft-wasm/simd";
-import {
-  DEFAULT_CONFIG,
-  printResults,
-  runBenchmark,
-  saveResults,
-  seededRandom,
-} from "./lib/harness.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Load Combined WASM FFT (auto-dispatch radix-2/4)
-async function loadWasmFFT() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_combined.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
-
-// Load f32 Dual-Complex WASM FFT (f32 SIMD optimized)
-async function loadWasmFFTf32() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_stockham_f32_dual.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
-
-// Load f32 Split-format WASM FFT (native split format, 4 complex per SIMD op)
-async function loadWasmFFTSplit() {
-  const wasmPath = path.join(__dirname, "..", "dist", "fft_split_native_f32.wasm");
-  const wasmBuffer = fs.readFileSync(wasmPath);
-  const wasmModule = await WebAssembly.compile(wasmBuffer);
-  const instance = await WebAssembly.instantiate(wasmModule);
-  return instance.exports;
-}
+import { DEFAULT_CONFIG, printResults, runBenchmark, saveResults } from "./lib/harness.js";
+import { createWatBenchContexts, generateComplexInputs } from "./lib/wat-contexts.js";
 
 // Include both power-of-4 (16, 64, 256, 1024, 4096) and non-power-of-4 (32, 128, 512, 2048)
 const SIZES = [16, 32, 64, 128, 256, 512, 1024, 2048, 4096];
-
-// Generate deterministic complex input data
-function generateComplexInput(n) {
-  const rand = seededRandom(n);
-  const real = new Float64Array(n);
-  const imag = new Float64Array(n);
-  const real32 = new Float32Array(n);
-  const imag32 = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    real[i] = rand();
-    imag[i] = rand();
-    real32[i] = real[i];
-    imag32[i] = imag[i];
-  }
-  return { real, imag, real32, imag32 };
-}
 
 async function runBenchmarks() {
   console.log("=".repeat(70));
@@ -83,9 +29,6 @@ async function runBenchmarks() {
   );
   console.log("");
 
-  const wasmExports = await loadWasmFFT();
-  const wasmExportsF32 = await loadWasmFFTf32();
-  const wasmExportsSplit = await loadWasmFFTSplit();
   const pffft = await PFFFT();
 
   const sizeGroups = [];
@@ -95,70 +38,15 @@ async function runBenchmarks() {
     console.log(`FFT Size: N=${size}`);
     console.log("-".repeat(70));
 
-    const input = generateComplexInput(size);
+    const input = generateComplexInputs(size);
     const results = [];
 
-    // wat-fft (auto-dispatch radix-2/4) - our main implementation
-    const wasmResult = runBenchmark(
-      "wat-fft (f64)",
-      () => {
-        const memory = wasmExports.memory;
-        const data = new Float64Array(memory.buffer, 0, size * 2);
-        wasmExports.precompute_twiddles(size);
-        const inputBuffer = new Float64Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        wasmExports.fft(ctx.size);
-      },
-    );
-    results.push(wasmResult);
-
-    // wat-fft f32 (dual-complex SIMD optimized)
-    const wasmF32Result = runBenchmark(
-      "wat-fft (f32)",
-      () => {
-        const memory = wasmExportsF32.memory;
-        const data = new Float32Array(memory.buffer, 0, size * 2);
-        wasmExportsF32.precompute_twiddles(size);
-        const inputBuffer = new Float32Array(size * 2);
-        for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real32[i];
-          inputBuffer[i * 2 + 1] = input.imag32[i];
-        }
-        return { data, inputBuffer, size };
-      },
-      (ctx) => {
-        ctx.data.set(ctx.inputBuffer);
-        wasmExportsF32.fft(ctx.size);
-      },
-    );
-    results.push(wasmF32Result);
-
-    // wat-fft f32 split-format (native split format, 4 complex per SIMD op)
-    const REAL_OFFSET = wasmExportsSplit.REAL_OFFSET;
-    const IMAG_OFFSET = wasmExportsSplit.IMAG_OFFSET;
-    const wasmSplitResult = runBenchmark(
-      "wat-fft (f32 split)",
-      () => {
-        const memory = wasmExportsSplit.memory;
-        const realData = new Float32Array(memory.buffer, REAL_OFFSET, size);
-        const imagData = new Float32Array(memory.buffer, IMAG_OFFSET, size);
-        wasmExportsSplit.precompute_twiddles_split(size);
-        return { realData, imagData, realInput: input.real32, imagInput: input.imag32, size };
-      },
-      (ctx) => {
-        ctx.realData.set(ctx.realInput);
-        ctx.imagData.set(ctx.imagInput);
-        wasmExportsSplit.fft_split(ctx.size);
-      },
-    );
-    results.push(wasmSplitResult);
+    // wat-fft implementations: every complex-forward entry in the registry
+    // (f64 combined, f32 dual-complex, f32 split - flagship)
+    const watContexts = await createWatBenchContexts("complex-forward", size, { input });
+    for (const wat of watContexts) {
+      results.push(runBenchmark(wat.name, wat.setup, wat.bench));
+    }
 
     // fft.js (indutny)
     const fftJsResult = runBenchmark(
@@ -168,8 +56,8 @@ async function runBenchmarks() {
         const out = fft.createComplexArray();
         const complexInput = fft.createComplexArray();
         for (let i = 0; i < size; i++) {
-          complexInput[i * 2] = input.real[i];
-          complexInput[i * 2 + 1] = input.imag[i];
+          complexInput[i * 2] = input.re64[i];
+          complexInput[i * 2 + 1] = input.im64[i];
         }
         return { fft, complexInput, out };
       },
@@ -185,7 +73,7 @@ async function runBenchmarks() {
       () => {
         const signal = [];
         for (let i = 0; i < size; i++) {
-          signal.push([input.real[i], input.imag[i]]);
+          signal.push([input.re64[i], input.im64[i]]);
         }
         return { signal };
       },
@@ -203,8 +91,8 @@ async function runBenchmarks() {
         // kissfft expects interleaved complex input
         const complexInput = new Float64Array(size * 2);
         for (let i = 0; i < size; i++) {
-          complexInput[i * 2] = input.real[i];
-          complexInput[i * 2 + 1] = input.imag[i];
+          complexInput[i * 2] = input.re64[i];
+          complexInput[i * 2 + 1] = input.im64[i];
         }
         return { fft, complexInput };
       },
@@ -225,8 +113,8 @@ async function runBenchmarks() {
         fft.setSubLibrary("kissWasm");
         const complexInput = new Float32Array(size * 2);
         for (let i = 0; i < size; i++) {
-          complexInput[i * 2] = input.real[i];
-          complexInput[i * 2 + 1] = input.imag[i];
+          complexInput[i * 2] = input.re64[i];
+          complexInput[i * 2 + 1] = input.im64[i];
         }
         return { fft, complexInput };
       },
@@ -252,8 +140,8 @@ async function runBenchmarks() {
         const inputView = new Float32Array(pffft.HEAPF32.buffer, inputPtr, size * 2);
         const inputBuffer = new Float32Array(size * 2);
         for (let i = 0; i < size; i++) {
-          inputBuffer[i * 2] = input.real[i];
-          inputBuffer[i * 2 + 1] = input.imag[i];
+          inputBuffer[i * 2] = input.re64[i];
+          inputBuffer[i * 2 + 1] = input.im64[i];
         }
         return { setup, inputPtr, outputPtr, inputView, inputBuffer };
       },

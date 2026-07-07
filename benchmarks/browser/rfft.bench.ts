@@ -2,6 +2,9 @@
  * Browser-based Real FFT Performance Benchmarks using Vitest
  *
  * Compares wat-fft real FFT implementations against competitors.
+ * wat-fft contexts are enumerated from the shared surface registry
+ * (benchmarks/shared/wat-surfaces.mjs), so every registered real-forward
+ * implementation - including the flagship rfft_split - is always measured.
  *
  * Run with: npm run bench:browser
  */
@@ -9,8 +12,7 @@
 import { describe, bench, afterAll } from "vitest";
 import {
   generateRealInput,
-  createWatRfftF64,
-  createWatRfftF32,
+  createWatContexts,
   createFftJsReal,
   createKissFFTReal,
   createWebFFTReal,
@@ -29,9 +31,12 @@ describe("Real FFT Benchmarks", () => {
       // Generate input data
       const input = generateRealInput(size);
 
-      // Create all contexts synchronously (WASM is pre-loaded)
-      const watF64 = createWatRfftF64(size);
-      const watF32 = createWatRfftF32(size);
+      // wat-fft implementations: every real-forward registry entry that
+      // supports this size (each owns its instance; input staging is
+      // charged inside run())
+      const watContexts = createWatContexts("real-forward", size, input);
+
+      // Competitor contexts (WASM is pre-loaded)
       const fftJsReal = createFftJsReal(size);
       const kissFFTReal = createKissFFTReal(size);
       const webFFTReal = createWebFFTReal(size);
@@ -39,8 +44,7 @@ describe("Real FFT Benchmarks", () => {
       const pffftReal = createPffftReal(size); // null if size < 32
 
       const contexts: FFTContext[] = [
-        watF64,
-        watF32,
+        ...watContexts,
         fftJsReal,
         kissFFTReal,
         webFFTReal,
@@ -54,15 +58,11 @@ describe("Real FFT Benchmarks", () => {
         }
       });
 
-      bench("wat-rfft (f64)", () => {
-        watF64.inputBuffer.set(input.real64);
-        watF64.run();
-      });
-
-      bench("wat-rfft (f32)", () => {
-        watF32.inputBuffer.set(input.real32);
-        watF32.run();
-      });
+      for (const ctx of watContexts) {
+        bench(ctx.name, () => {
+          ctx.run();
+        });
+      }
 
       bench("fft.js (real)", () => {
         fftJsReal.inputBuffer.set(input.real64);
