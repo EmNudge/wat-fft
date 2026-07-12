@@ -25,8 +25,11 @@ Why this exists: the browser real-FFT benchmark kept measuring the old dual-comp
 | `npm run bench:rfft32`  | Real FFT (f32)                 | fftw-js, pffft-wasm (SIMD)                     |
 | `npm run bench:irfft32` | Inverse Real FFT (f32)         | fftw-js, pffft-wasm (SIMD)                     |
 | `npm run bench:browser` | Browser FFT (all types)        | fft.js, fft-js, kissfft-js, webfft, pffft-wasm |
+| `npm run bench:gpu`     | GPU FFT (Deno + WebGPU)        | webgpu-fft — standalone, GPU-only, not in CI   |
 
 Every command benchmarks **all registry entries** for its surface/precision, so summaries and CI checks always include the flagship implementation.
+
+`bench:gpu` is the exception: it measures the GPU library `webgpu-fft` on its own (not a head-to-head with wat-fft) and is excluded from CI since runners have no GPU. See [GPU Benchmark](#gpu-benchmark-deno--webgpu) below.
 
 ## Benchmark Files
 
@@ -51,6 +54,23 @@ All Node bench files use the shared statistical harness `lib/harness.js` (see Co
 | `browser/fft.bench.ts`  | Complex FFT in browser - wat-fft vs fft.js, kissfft, etc. |
 | `browser/rfft.bench.ts` | Real FFT in browser - wat-rfft vs fft.js real             |
 | `browser/fft-loader.ts` | WASM loader and competitor library initialization         |
+
+### GPU Benchmark (Deno + WebGPU)
+
+| File                         | Purpose                                                               |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `deno/fft_gpu.bench.ts`      | GPU FFT single-call latency (`webgpu-fft`) under Deno's native WebGPU |
+| `deno/fft_gpu_throughput.ts` | Sustained GPU FFTs/sec vs concurrency (the GPU's favorable regime)    |
+| `deno/setup.ts`              | Clones + builds webgpu-fft into a gitignored vendor dir               |
+
+Run with `npm run bench:gpu`. This measures the GPU library **in isolation** —
+it is deliberately not compared against wat-fft (a WebGPU FFT is a different
+class: async, dominated by device round-trip latency). Two regimes are
+reported: single-call **latency** (~14 ms flat, the GPU's worst case) and
+sustained **throughput** with many transforms in flight (~420–470 FFTs/sec peak
+on an M5 Pro — the ceiling of a library that syncs on every call). It is
+**excluded from CI** (runners have no GPU) and requires Deno 2.x + a real GPU.
+See [`deno/README.md`](deno/README.md).
 
 ### Shared Infrastructure
 

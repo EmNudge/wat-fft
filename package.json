@@ -82,6 +82,7 @@
     "bench:ifft32": "node benchmarks/ifft_f32_dual.bench.js",
     "bench:rfft32": "node benchmarks/rfft_f32_dual.bench.js",
     "bench:irfft32": "node benchmarks/irfft_f32_dual.bench.js",
+    "bench:gpu": "deno run -A benchmarks/deno/setup.ts && deno bench -A --unstable-webgpu benchmarks/deno/fft_gpu.bench.ts && deno run -A --unstable-webgpu benchmarks/deno/fft_gpu_throughput.ts",
     "bench:browser": "vitest bench --run",
     "bench:browser:ci": "vitest bench --run --outputJson=benchmark-results.json",
     "bench:check": "node scripts/check-benchmarks.js",

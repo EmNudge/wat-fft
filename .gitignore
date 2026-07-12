@@ -9,3 +9,7 @@ playground/public/pffft.wasm
 # Generated benchmark results
 benchmark-results.json
 benchmarks/results/
+
+# Vendored webgpu-fft build for the GPU-only Deno benchmark (built by
+# benchmarks/deno/setup.ts — not committed)
+benchmarks/deno/vendor/
